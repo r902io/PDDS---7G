@@ -1,0 +1,11 @@
+services:
+  sisrap-backend:
+    build: .
+    container_name: sisrap-backend
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    mem_limit: 900m
+    cpus: 1.5
+    restart: unless-stopped
