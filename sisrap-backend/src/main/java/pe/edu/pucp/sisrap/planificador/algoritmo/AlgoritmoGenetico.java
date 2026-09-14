@@ -8,10 +8,9 @@ import java.util.List;
 import java.util.Random;
 import java.util.Set;
 
-import pe.edu.pucp.sisrap.dominio.Almacen;
 import pe.edu.pucp.sisrap.dominio.Pedido;
-import pe.edu.pucp.sisrap.dominio.Vehiculo;
 import pe.edu.pucp.sisrap.planificador.config.ParametrosAlgoritmo;
+import pe.edu.pucp.sisrap.planificador.construccion.ConstructorVoraz;
 import pe.edu.pucp.sisrap.planificador.modelo.ContextoPlanificacion;
 import pe.edu.pucp.sisrap.planificador.modelo.Individuo;
 import pe.edu.pucp.sisrap.planificador.modelo.Ruta;
@@ -41,7 +40,9 @@ public class AlgoritmoGenetico implements IAlgoritmoPlanificacion{
     public Solucion planificar(ContextoPlanificacion contexto) {
         poblacion = new ArrayList<>();
         for (int i = 0; i < parametros.tamanioPoblacion; i++) {
-            poblacion.add(new Individuo(construirSolucionAleatoria(contexto)));
+            boolean sesgoVoraz = (i % 2 == 0);
+            Solucion base = ConstructorVoraz.construir(contexto, random, sesgoVoraz);
+            poblacion.add(new Individuo(base));
         }
 
         return ejecutarEvolucion();
@@ -99,66 +100,6 @@ public class AlgoritmoGenetico implements IAlgoritmoPlanificacion{
         return poblacion.get(0).getCromosoma();
     }
 
-    // Construcción de solución inicial (greedy aleatorizado)
-    private Solucion construirSolucionAleatoria(ContextoPlanificacion contexto) {
-        Solucion solucion = new Solucion();
-
-        List<Ruta> rutas = new ArrayList<>();
-        for (Vehiculo v : contexto.getVehiculos()) {
-            Almacen origenMasCercano = almacenMasCercano(v, contexto.getAlmacenes());
-            rutas.add(new Ruta(v, origenMasCercano));
-        }
-        solucion.setRutas(rutas);
-
-        List<Pedido> pedidosMezclados = new ArrayList<>(contexto.getPedidos());
-        Collections.shuffle(pedidosMezclados, random);
-
-        List<Pedido> noAsignados = new ArrayList<>();
-        for (Pedido pedido : pedidosMezclados) {
-            Ruta rutaConEspacio = rutas.stream()
-                    .filter(r -> r.getVehiculo().isDisponible())
-                    .filter(r -> r.cargaTotal() + pedido.getCantidadQq()
-                            <= r.getVehiculo().getCapacidadPaquetes())
-                    .findAny()
-                    .orElse(null);
-
-            if (rutaConEspacio != null) {
-                rutaConEspacio.getSecuenciaPedidos().add(pedido);
-            } else {
-                noAsignados.add(pedido); // queda como violación V(S), el GA aprenderá a evitarlo
-            }
-        }
-
-        solucion.setPedidosNoAsignados(noAsignados);
-        for (Ruta r : rutas) r.recalcular();
-        return solucion;
-    }
-
-    private Almacen almacenMasCercano(Vehiculo v, List<Almacen> almacenes) {
-        // Todas las unidades parten del almacén central la primera vez;
-        // en operación real, aquí se consultaría la posición actual del vehículo.
-        if (v.getPosicionActual() == null) {
-            return almacenes.get(0); // fallback: almacén central por defecto
-        }
-
-        Almacen masCercano = null;
-        int menorDistancia = Integer.MAX_VALUE;
-
-        for (Almacen almacen : almacenes) {
-            if (!almacen.tieneStockDisponible()) {
-                continue; // no puede regresar a un almacén sin stock
-            }
-
-            int distancia = v.getPosicionActual().distanciaManhattan(almacen.getUbicacion());
-            if (distancia < menorDistancia) {
-                menorDistancia = distancia;
-                masCercano = almacen;
-            }
-        }
-
-        return (masCercano != null) ? masCercano : almacenes.get(0);
-    }
-
     // Operadores genéticos
     private void evaluarPoblacion() {
         for (Individuo ind : poblacion) {
@@ -180,8 +121,7 @@ public class AlgoritmoGenetico implements IAlgoritmoPlanificacion{
 
     /*
         Cruzamiento: para cada vehículo, hereda la secuencia de uno de los dos padres. 
-        Luego repara duplicados y
-        pedidos faltantes para mantener la solución consistente.
+        Luego repara duplicados y pedidos faltantes para mantener la solución consistente.
     */
     private Solucion cruzar(Solucion padre1, Solucion padre2) {
         Solucion hijo = new Solucion();
@@ -205,7 +145,7 @@ public class AlgoritmoGenetico implements IAlgoritmoPlanificacion{
         return todos;
     }
 
-    // Elimina pedidos duplicados entre rutas y reinserta los que quedaron sin asignar.
+    // Elimina pedidos duplicados entre rutas y reinserta los que quedaron sin asignar
     private void repararDuplicadosYFaltantes(Solucion solucion, List<Pedido> universoPedidos) {
         Set<Long> vistos = new HashSet<>();
         for (Ruta ruta : solucion.getRutas()) {
@@ -220,21 +160,11 @@ public class AlgoritmoGenetico implements IAlgoritmoPlanificacion{
             }
         }
 
-        List<Pedido> noAsignados = new ArrayList<>();
-        for (Pedido pedido : faltantes) {
-            Ruta rutaConEspacio = solucion.getRutas().stream()
-                    .filter(r -> r.getVehiculo().isDisponible())
-                    .filter(r -> r.cargaTotal() + pedido.getCantidadQq()
-                            <= r.getVehiculo().getCapacidadPaquetes())
-                    .findAny()
-                    .orElse(null);
+        List<Pedido> faltantesOrdenados = ConstructorVoraz.ordenarPedidos(faltantes, random, true);
 
-            if (rutaConEspacio != null) {
-                rutaConEspacio.getSecuenciaPedidos().add(pedido);
-            } else {
-                noAsignados.add(pedido);
-            }
-        }
+        List<Pedido> noAsignados = new ArrayList<>();
+        ConstructorVoraz.insertarPedidos(solucion.getRutas(), faltantesOrdenados, noAsignados);
+
         solucion.setPedidosNoAsignados(noAsignados);
         for (Ruta r : solucion.getRutas()) r.recalcular();
     }

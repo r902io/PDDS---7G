@@ -1,3 +1,4 @@
+
 DROP INDEX IF EXISTS idx_solucion_simulacion;
 DROP INDEX IF EXISTS idx_incidencia_activa;
 DROP INDEX IF EXISTS idx_vehiculo_estado;
@@ -28,9 +29,10 @@ DROP TABLE IF EXISTS via CASCADE;
 DROP TABLE IF EXISTS nodo CASCADE;
 DROP TABLE IF EXISTS ciudad CASCADE;
 
+DROP TABLE IF EXISTS parametros_semaforo CASCADE;
+
 DROP TYPE IF EXISTS tipo_algoritmo;
 DROP TYPE IF EXISTS tipo_escenario;
-DROP TYPE IF EXISTS color_semaforo;
 DROP TYPE IF EXISTS tipo_incidencia;
 DROP TYPE IF EXISTS tipo_averia;
 DROP TYPE IF EXISTS estado_vehiculo;
@@ -84,12 +86,6 @@ CREATE TYPE tipo_incidencia AS ENUM (
     'AVERIA'
 );
 
-CREATE TYPE color_semaforo AS ENUM (
-    'VERDE',
-    'AMBAR',
-    'ROJO'
-);
-
 CREATE TYPE tipo_escenario AS ENUM (
     'OPERACION_DIARIA',
     'SIMULACION_5D',
@@ -103,12 +99,12 @@ CREATE TYPE tipo_algoritmo AS ENUM (
 
 CREATE TABLE ciudad (
     id_ciudad      SERIAL PRIMARY KEY,
-    nombre         VARCHAR(50) NOT NULL DEFAULT 'PaqRap City',
+    nombre         VARCHAR(50) NOT NULL DEFAULT 'SISRAP City',
     ancho_km       INTEGER NOT NULL DEFAULT 70,
     alto_km        INTEGER NOT NULL DEFAULT 50
 );
 
-INSERT INTO ciudad (nombre, ancho_km, alto_km) VALUES ('PaqRap City', 70, 50);
+INSERT INTO ciudad (nombre, ancho_km, alto_km) VALUES ('SISRAP City', 70, 50);
 
 CREATE TABLE nodo (
     id_nodo        SERIAL PRIMARY KEY,
@@ -129,7 +125,6 @@ CREATE TABLE via (
     destino_y           INTEGER NOT NULL,
     distancia_km        NUMERIC(5,2) NOT NULL DEFAULT 1.00,
     transitable         BOOLEAN NOT NULL DEFAULT TRUE,
-    estado_trafico      color_semaforo NOT NULL DEFAULT 'VERDE',
     CONSTRAINT chk_via_adyacente CHECK (
         (ABS(origen_x - destino_x) = 1 AND origen_y = destino_y) OR
         (ABS(origen_y - destino_y) = 1 AND origen_x = destino_x)
@@ -306,6 +301,16 @@ CREATE TABLE metrica_resultado (
     fecha_calculo                   TIMESTAMP NOT NULL DEFAULT now()
 );
 
+CREATE TABLE parametros_semaforo (
+    id                      SMALLINT PRIMARY KEY DEFAULT 1,
+    umbral_verde_horas      NUMERIC(5,2) NOT NULL DEFAULT 18.0,
+    umbral_ambar_horas      NUMERIC(5,2) NOT NULL DEFAULT 4.0,
+    CONSTRAINT chk_una_sola_fila CHECK (id = 1),
+    CONSTRAINT chk_umbrales_validos CHECK (umbral_ambar_horas < umbral_verde_horas)
+);
+
+INSERT INTO parametros_semaforo (id, umbral_verde_horas, umbral_ambar_horas)
+VALUES (1, 18.0, 4.0);
 
 CREATE INDEX idx_vehiculo_estado ON vehiculo (estado);
 CREATE INDEX idx_incidencia_activa ON incidencia (activa);
