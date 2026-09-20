@@ -1,0 +1,29 @@
+EXPERIMENTO exp-20260920-125752
+Inicio: 2026-09-20T12:57:52.251674800  Fin: 2026-09-20T12:57:52.251674800  Duración: 00:00:00
+Entorno: Java 21.0.12.1, Windows 11, 16 procesadores
+
+PLAN
+  perfil de parámetros (BD): BASE
+  algoritmos: [GENETICO, RECOCIDO_SIMULADO]
+  tamaños: [25, 50, 100]  instancias por tamaño: 1
+  repeticiones: 30  semilla base: 42 (semillas 42 a 71)
+  pedidos desde: 2026-01-01  mantenimiento preventivo aplicado: true  calentamiento JVM: true
+  total de corridas: 180
+  variante BASE: (perfil tal cual)
+
+DATOS RECOPILADOS
+  pedidos leídos: 641 (del 2026-01-01T01:30 al 2026-01-31T23:35)
+  por prioridad: {PRIORIZADO_12H=91, PRIORIZADO_18H=89, PRIORIZADO_4H=102, PRIORIZADO_8H=114, REGULAR_36H=245}
+  bloqueos leídos: 669
+  días con mantenimiento preventivo: 37 (2026-09-01 a 2026-10-28)
+  archivos leídos (3):
+    datos\ventas.v20260909\ventas.202601.txt
+    datos\bloqueos\bloqueo.2601.txt
+    datos\mant.preventivo.09.10.txt
+
+ADVERTENCIAS Y LÍMITES DEL MODELO
+  - Modelo estático: una salida por vehículo desde el almacén central, pedidos indivisibles, sin recargas, turnos, averías ni replanificación.
+  - Los bloqueos se recopilan y se reportan por instancia, pero la distancia es Manhattan sin grafo de vías: NO afectan a los algoritmos.
+  - El mantenimiento preventivo sí se aplica: el vehículo listado ese día queda no disponible para la instancia planificada ese día.
+  - Cada instancia se planifica en el instante en que llegó su último pedido; los anteriores acumulan espera hasta ese momento.
+  - Los pedidos de los .txt no tienen id: se numeran 1..N según el orden de llegada leído.

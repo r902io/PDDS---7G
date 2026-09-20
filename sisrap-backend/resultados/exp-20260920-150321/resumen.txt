@@ -1,0 +1,24 @@
+RESUMEN exp-20260920-150321  (180 corridas)
+Corridas con verificación fallida: 0
+
+Variante BASE
+  Tamaño 25
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    GENETICO               22550.74        13.24      277.8      48.00       0.00       9060
+    RECOCIDO_SIMULADO      22578.64        23.44       29.0      48.27       0.00       4470
+    GENETICO vs RECOCIDO_SIMULADO: 30 pares, victorias 25-5 (empates 0), p=0.0000 -> GANA_GENETICO | a presupuesto igual: p=0.0001 -> GANA_GENETICO
+  Tamaño 50
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    GENETICO              106102.18       544.40      241.7      28.00       0.17       9060
+    RECOCIDO_SIMULADO     106485.73       120.23       49.4      28.00       0.00       4832
+    GENETICO vs RECOCIDO_SIMULADO: 30 pares, victorias 29-1 (empates 0), p=0.0000 -> GANA_GENETICO | a presupuesto igual: p=0.0002 -> GANA_GENETICO
+  Tamaño 100
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    GENETICO              410246.08      9391.83      930.3      12.93      19.63       9060
+    RECOCIDO_SIMULADO     550595.67      1836.41      155.4       6.33      16.70       4866
+    GENETICO vs RECOCIDO_SIMULADO: 30 pares, victorias 30-0 (empates 0), p=0.0000 -> GANA_GENETICO | a presupuesto igual: p=0.0000 -> GANA_GENETICO
+
+Ganadores por (variante, tamaño) según F, con Wilcoxon al 5%: {GANA_GENETICO=3}
+Ganadores a presupuesto igual de evaluaciones: {GANA_GENETICO=3}
+
+La comparación entre variantes que cambian objetivo.* no es válida sobre F.
