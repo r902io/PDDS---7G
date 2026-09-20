@@ -1,0 +1,14 @@
+RESUMEN exp-20260920-125707  (4 corridas)
+Corridas con verificación fallida: 0
+
+Variante BASE
+  Tamaño 25
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    GENETICO               22590.53         0.74      219.3      44.00       0.00       9060
+    RECOCIDO_SIMULADO      22586.42        12.41       32.5      48.00       0.00       4401
+    GENETICO vs RECOCIDO_SIMULADO: 2 pares, victorias 1-1 (empates 0), p=1.0000 -> MUESTRA_INSUFICIENTE | a presupuesto igual: p=1.0000 -> MUESTRA_INSUFICIENTE
+
+Ganadores por (variante, tamaño) según F, con Wilcoxon al 5%: {SIN_GANADOR=1}
+Ganadores a presupuesto igual de evaluaciones: {SIN_GANADOR=1}
+
+La comparación entre variantes que cambian objetivo.* no es válida sobre F.

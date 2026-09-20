@@ -1,0 +1,2 @@
+variante,tamanio,algoritmo_A,algoritmo_B,pares,media_F_A,media_F_B,victorias_A,victorias_B,empates,p_wilcoxon,veredicto,media_evaluaciones_A,media_evaluaciones_B,media_tiempo_ms_A,media_tiempo_ms_B,p_wilcoxon_presupuesto_igual,veredicto_presupuesto_igual
+BASE,25,GENETICO,RECOCIDO_SIMULADO,2,22590.53,22586.424167,1,1,0,1,MUESTRA_INSUFICIENTE,9060,4401,219.2584,32.45905,1,MUESTRA_INSUFICIENTE

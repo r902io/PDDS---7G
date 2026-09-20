@@ -1,0 +1,87 @@
+RESUMEN sa-etapa2  (3000 corridas)
+Corridas con verificación fallida: 0
+
+Variante BASE
+  Tamaño 25
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    RECOCIDO_SIMULADO      13861.81      4382.34       29.3      59.25       0.00       4287
+  Tamaño 50
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    RECOCIDO_SIMULADO      88087.88      9480.77       51.1      28.11       0.00       4866
+
+Variante SA_IT100
+  Tamaño 25
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    RECOCIDO_SIMULADO      13856.77      4377.97       67.8      59.28       0.00      10566
+  Tamaño 50
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    RECOCIDO_SIMULADO      87946.88      9473.33      124.2      28.08       0.00      12014
+
+Variante SA_IT200
+  Tamaño 25
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    RECOCIDO_SIMULADO      13852.48      4375.12      134.1      59.20       0.00      21030
+  Tamaño 50
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    RECOCIDO_SIMULADO      87890.81      9465.33      245.4      28.07       0.00      23928
+
+Variante SA_ENF090
+  Tamaño 25
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    RECOCIDO_SIMULADO      13874.23      4391.29       14.6      59.31       0.00       2150
+  Tamaño 50
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    RECOCIDO_SIMULADO      88172.32      9458.39       26.1      27.92       0.00       2431
+
+Variante SA_ENF098
+  Tamaño 25
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    RECOCIDO_SIMULADO      13856.41      4377.42       68.8      59.31       0.00      10698
+  Tamaño 50
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    RECOCIDO_SIMULADO      87949.26      9489.30      125.3      28.17       0.00      12168
+
+Variante SA_ACEP04
+  Tamaño 25
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    RECOCIDO_SIMULADO      13864.23      4382.48       23.4      59.33       0.00       3525
+  Tamaño 50
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    RECOCIDO_SIMULADO      88065.94      9467.22       44.9      28.05       0.00       4279
+
+Variante SA_ACEP08
+  Tamaño 25
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    RECOCIDO_SIMULADO      13864.11      4384.16       32.9      59.39       0.00       5053
+  Tamaño 50
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    RECOCIDO_SIMULADO      88078.20      9474.39       57.9      28.12       0.00       5588
+
+Variante SA_RECAL01
+  Tamaño 25
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    RECOCIDO_SIMULADO      13861.81      4382.34       27.9      59.25       0.00       4287
+  Tamaño 50
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    RECOCIDO_SIMULADO      88087.88      9480.77       50.9      28.11       0.00       4866
+
+Variante SA_RECAL05
+  Tamaño 25
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    RECOCIDO_SIMULADO      13861.81      4382.34       28.2      59.25       0.00       4287
+  Tamaño 50
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    RECOCIDO_SIMULADO      88087.88      9480.77       50.8      28.11       0.00       4866
+
+Variante SA_MOV3
+  Tamaño 25
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    RECOCIDO_SIMULADO      13908.46      4418.88       27.5      57.60       0.00       4582
+  Tamaño 50
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    RECOCIDO_SIMULADO      88139.79      9480.08       43.7      28.00       0.00       4643
+
+Ganadores por (variante, tamaño) según F, con Wilcoxon al 5%: {}
+Ganadores a presupuesto igual de evaluaciones: {}
+
+La comparación entre variantes que cambian objetivo.* no es válida sobre F.

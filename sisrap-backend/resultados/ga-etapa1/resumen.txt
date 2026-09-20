@@ -1,0 +1,103 @@
+RESUMEN ga-etapa1  (3600 corridas)
+Corridas con verificación fallida: 0
+
+Variante BASE
+  Tamaño 25
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    GENETICO               13865.40      4383.12      209.4      58.29       0.00       9060
+  Tamaño 50
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    GENETICO               86986.44      7336.64      245.8      28.07       0.37       9060
+
+Variante GA_POB30
+  Tamaño 25
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    GENETICO               13877.76      4390.48       78.4      58.11       0.00       4530
+  Tamaño 50
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    GENETICO               87158.13      7600.81      108.7      27.85       0.35       4530
+
+Variante GA_POB100
+  Tamaño 25
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    GENETICO               13858.31      4378.19      446.3      58.48       0.00      15100
+  Tamaño 50
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    GENETICO               86629.03      6775.04      451.3      28.12       0.46      15100
+
+Variante GA_GEN80
+  Tamaño 25
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    GENETICO               13865.56      4383.05      151.2      58.27       0.00       4860
+  Tamaño 50
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    GENETICO               87023.82      7359.38      181.1      27.91       0.37       4860
+
+Variante GA_GEN300
+  Tamaño 25
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    GENETICO               13862.97      4380.57      297.6      58.43       0.00      18060
+  Tamaño 50
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    GENETICO               86934.50      7308.41      353.0      28.09       0.37      18060
+
+Variante GA_MUT005
+  Tamaño 25
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    GENETICO               13861.21      4382.95      221.0      58.48       0.00       9060
+  Tamaño 50
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    GENETICO               86946.54      7404.12      236.6      28.17       0.37       9060
+
+Variante GA_MUT02
+  Tamaño 25
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    GENETICO               13852.22      4372.98      237.6      59.01       0.00       9060
+  Tamaño 50
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    GENETICO               86772.70      7220.13      259.5      28.36       0.38       9060
+
+Variante GA_CRUZ07
+  Tamaño 25
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    GENETICO               13875.49      4388.13      160.8      58.05       0.00       9060
+  Tamaño 50
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    GENETICO               86915.25      7250.18      209.9      27.96       0.39       9060
+
+Variante GA_ELIT3
+  Tamaño 25
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    GENETICO               13866.91      4381.83      212.3      58.37       0.00       9060
+  Tamaño 50
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    GENETICO               86517.07      6604.35      247.8      28.08       0.43       9060
+
+Variante GA_TORNEO4
+  Tamaño 25
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    GENETICO               13888.94      4402.82      130.4      57.89       0.00       9060
+  Tamaño 50
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    GENETICO               86982.60      7313.60      205.1      27.93       0.37       9060
+
+Variante GA_VORAZ02
+  Tamaño 25
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    GENETICO               13848.52      4372.33      499.6      58.99       0.00       9060
+  Tamaño 50
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    GENETICO               86053.87      6165.02      567.0      28.16       0.57       9060
+
+Variante GA_VORAZ08
+  Tamaño 25
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    GENETICO               13887.36      4399.02      137.4      57.95       0.00       9060
+  Tamaño 50
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    GENETICO               87441.12      8256.03      191.4      28.01       0.20       9060
+
+Ganadores por (variante, tamaño) según F, con Wilcoxon al 5%: {}
+Ganadores a presupuesto igual de evaluaciones: {}
+
+La comparación entre variantes que cambian objetivo.* no es válida sobre F.
