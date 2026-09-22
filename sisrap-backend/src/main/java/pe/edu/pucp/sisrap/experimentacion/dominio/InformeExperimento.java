@@ -1,6 +1,7 @@
 package pe.edu.pucp.sisrap.experimentacion.dominio;
 import java.util.List;
 import java.util.Map;
+
 import pe.edu.pucp.sisrap.planificador.dominio.modelo.PuntoConvergencia;
 public record InformeExperimento(String id,String modelo,String versionImplementacion,SolicitudExperimento solicitud,
         Instantanea instantanea,List<Corrida> corridas,List<Resumen> resumenes,List<String> advertencias) {
@@ -23,10 +24,17 @@ public record InformeExperimento(String id,String modelo,String versionImplement
         }
     }
     public record Asignacion(String vehiculo,String almacen,List<Long> pedidos) {}
+    /**
+     * Los campos de incidencia (pedidosAfectadosIncidencia, vehiculosEnAveriaIncidente, tiempoReplanificacionMs,
+     * replanificacionExitosa) solo se llenan para el escenario OPERACION_DIARIA con perfil ALTA o CRITICA
+     * (ver SimuladorIncidencias); en el resto quedan null.
+     */
     public record Corrida(String algoritmo,int tamanio,long semilla,double tiempoMs,double objetivo,double t,
         double r,int n,double v,boolean factible,double cumplimiento,Double cumplimientoPrioritarios,
         double costo,double distancia,double utilizacion,Double temperaturaInicial,
-        List<PuntoConvergencia> convergencia,List<Asignacion> rutas,List<Long> noAsignados) {}
+        List<PuntoConvergencia> convergencia,List<Asignacion> rutas,List<Long> noAsignados,
+        String escenarioOperativo,String perfilPresion,Integer pedidosAfectadosIncidencia,
+        Integer vehiculosEnAveriaIncidente,Double tiempoReplanificacionMs,Boolean replanificacionExitosa) {}
     public record Estadistica(double media,double mediana,Double desviacionMuestral,double mejor,double peor) {}
     public record Resumen(String algoritmo,int tamanio,Map<String,Estadistica> metricas) {}
 }

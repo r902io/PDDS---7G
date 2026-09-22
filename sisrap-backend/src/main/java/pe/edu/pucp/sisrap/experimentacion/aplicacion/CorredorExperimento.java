@@ -8,6 +8,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.Set;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
@@ -15,6 +16,7 @@ import java.util.function.Consumer;
 import pe.edu.pucp.sisrap.experimentacion.dominio.BaseOperativa;
 import pe.edu.pucp.sisrap.experimentacion.dominio.DatosArchivos;
 import pe.edu.pucp.sisrap.experimentacion.dominio.Escenario;
+import pe.edu.pucp.sisrap.experimentacion.dominio.EscenarioOperativo;
 import pe.edu.pucp.sisrap.experimentacion.dominio.PlanExperimento;
 import pe.edu.pucp.sisrap.experimentacion.dominio.ResultadoExperimento;
 import pe.edu.pucp.sisrap.experimentacion.dominio.ResultadoExperimento.CorridaRegistrada;
@@ -32,13 +34,16 @@ import pe.edu.pucp.sisrap.planificador.dominio.modelo.Solucion;
 import pe.edu.pucp.sisrap.planificador.dominio.objetivo.FuncionObjetivo;
 
 /**
- * Motor genérico del experimento: recorre la malla variantes x escenarios x repeticiones x algoritmos
- * y registra cada corrida. No sabe de archivos, BD ni formatos de salida.
+ * Motor genérico del experimento: recorre la malla variantes x escenarios operativos x perfiles de presión
+ * x instancias x repeticiones x algoritmos y registra cada corrida (informe "Diseño de Experimento",
+ * sección 3.4). No sabe de archivos, BD ni formatos de salida.
  * <p>
- * Reglas metodológicas: (1) misma semilla para todos los algoritmos en una repetición (comparación pareada),
- * (2) el orden de los algoritmos rota en cada repetición para no favorecer a ninguno con el calentamiento de la JVM,
- * (3) corridas secuenciales para que los tiempos sean comparables, (4) cada solución se verifica de forma
- * independiente antes de aceptarla.
+ * Reglas metodológicas: (1) misma semilla para todos los algoritmos en una repetición (comparación pareada,
+ * sección 3.2), (2) el orden de los algoritmos rota en cada repetición para no favorecer a ninguno con el
+ * calentamiento de la JVM, (3) corridas secuenciales para que los tiempos sean comparables, (4) cada
+ * solución se verifica de forma independiente antes de aceptarla, (5) en OPERACION_DIARIA con perfil ALTA
+ * o CRITICA se simula una incidencia y se mide la replanificación (informe de Selección de Algoritmos,
+ * sección 4.2).
  */
 public final class CorredorExperimento {
     private final Map<String, BiFunction<ParametrosAlgoritmo, FuncionObjetivo, IAlgoritmoPlanificacion>> fabricas = new LinkedHashMap<>();
@@ -106,7 +111,7 @@ public final class CorredorExperimento {
         advertencias.addAll(avisosDeVerificacion.stream().sorted().toList());
         return new ResultadoExperimento(plan, base, archivos, escenarios, List.copyOf(corridas),
                 AnalisisExperimento.resumir(corridas), AnalisisExperimento.comparar(corridas, plan.algoritmos()),
-                List.copyOf(advertencias), inicio, LocalDateTime.now());
+                AnalisisExperimento.puntosColapso(corridas), List.copyOf(advertencias), inicio, LocalDateTime.now());
     }
 
     private CorridaRegistrada ejecutarUna(String variante, String algoritmo, Configuracion cfg, Escenario escenario,
@@ -118,11 +123,37 @@ public final class CorredorExperimento {
         Solucion solucion = motor.planificar(contexto);
         double ms = (System.nanoTime() - inicio) / 1_000_000.0;
 
-        boolean verificada = verificar(solucion, contexto, cfg, variante + "/" + escenario.id() + "/" + algoritmo, avisos);
-        var corrida = MedicionCorridas.medir(algoritmo, escenario.tamanio(), semilla, ms, solucion, contexto, motor);
+        String etiqueta = variante + "/" + escenario.id() + "/" + algoritmo;
+        boolean verificada = verificar(solucion, contexto, cfg, etiqueta, avisos);
+        // Por defecto se miden las métricas contra el contexto de la planificación inicial. Si ocurre
+        // una incidencia, esta referencia se sustituye por el contexto con la flota ya afectada.
+        ContextoPlanificacion contextoMedicion = contexto;
+
+        Integer pedidosAfectados = null, vehiculosAveria = null;
+        Double tiempoReplanificacionMs = null;
+        Boolean replanificacionExitosa = null;
+        if (escenario.escenarioOperativo() == EscenarioOperativo.OPERACION_DIARIA && escenario.perfilPresion().simulaIncidencia()) {
+            // Semilla propia y determinista para la incidencia, distinta de la del algoritmo: la incidencia
+            // es la misma para GA y SA en una repetición (comparación pareada también sobre la replanificación).
+            var incidencia = SimuladorIncidencias.simular(solucion, contexto, escenario.perfilPresion(), new Random(semilla + 987654321L));
+            pedidosAfectados = incidencia.pedidosAfectados();
+            vehiculosAveria = incidencia.vehiculosEnAveria();
+            long inicioReplan = System.nanoTime();
+            Solucion replan = motor.replanificar(incidencia.solucionTrasIncidencia(), incidencia.contextoTrasIncidencia());
+            tiempoReplanificacionMs = (System.nanoTime() - inicioReplan) / 1_000_000.0;
+            boolean verificadaReplan = verificar(replan, incidencia.contextoTrasIncidencia(), cfg, etiqueta + "/replanificacion", avisos);
+            replanificacionExitosa = verificadaReplan && replan.isEsFactible() && replan.getPedidosNoAsignados().isEmpty();
+            solucion = replan;
+            contextoMedicion = incidencia.contextoTrasIncidencia();
+            verificada = verificada && verificadaReplan;
+        }
+
+        var corrida = MedicionCorridas.medir(algoritmo, escenario.tamanio(), semilla, ms, solucion, contextoMedicion, motor,
+                escenario.escenarioOperativo().name(), escenario.perfilPresion().name(),
+                pedidosAfectados, vehiculosAveria, tiempoReplanificacionMs, replanificacionExitosa);
         List<PuntoConvergencia> traza = corrida.convergencia();
         int evaluaciones = traza.isEmpty() ? 0 : traza.get(traza.size() - 1).evaluaciones();
-        return new CorridaRegistrada(variante, escenario.id(), escenario.instancia(), repeticion, evaluaciones, verificada, corrida);
+        return new CorridaRegistrada(variante, escenario.id(), escenario.nivel(), repeticion, evaluaciones, verificada, corrida);
     }
 
     /**

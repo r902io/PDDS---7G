@@ -1,0 +1,37 @@
+EXPERIMENTO validacion-datos
+Inicio: 2026-09-22T00:57:03.249119400  Fin: 2026-09-22T00:57:03.249119400  Duración: 00:00:00
+Entorno: Java 21.0.12.1, Windows 11, 16 procesadores
+
+PLAN (informe "Diseño de Experimento", sección 3.4)
+  perfil de parámetros (BD): BASE
+  algoritmos: [GENETICO, RECOCIDO_SIMULADO]
+  escenarios operativos: [OPERACION_DIARIA, SIMULACION_CINCO_DIAS, COLAPSO_LOGISTICO]
+  perfiles de presión: [NORMAL, ALTA, CRITICA]
+  tamaño base diario: 25  niveles/instancias por combinación: 1
+  repeticiones: 30  semilla base: 42 (semillas 42 a 71)
+  pedidos desde: 2026-09-01  mantenimiento preventivo aplicado: true  calentamiento JVM: true
+  total de corridas: 540
+  variante BASE: (perfil tal cual)
+
+DATOS RECOPILADOS
+  pedidos leídos: 5000 (del 2026-09-01T00:26 al 2026-09-29T23:50)
+  por prioridad: {PRIORIZADO_12H=738, PRIORIZADO_18H=727, PRIORIZADO_4H=693, PRIORIZADO_8H=775, REGULAR_36H=2067}
+  bloqueos leídos: 558
+  días con mantenimiento preventivo: 38 (2026-09-01 a 2026-10-29)
+  archivos leídos (3):
+    datos\ventas.v20260909\ventas.202609.txt
+    datos\bloqueos\bloqueo.2609.txt
+    datos\mant.preventivo.09.10.txt
+
+SUPUESTO DE INCIDENCIAS (OPERACION_DIARIA, perfiles ALTA/CRITICA)
+  El modelo del planificador es estático (sin reloj de simulación dentro de una corrida). Los
+  "pedidos aún no atendidos" al momento de la incidencia se aproximan como un subconjunto
+  aleatorio de los pedidos ya asignados en la solución inicial (ver SimuladorIncidencias),
+  en la proporción y con las averías de vehículo que define el perfil de presión.
+
+ADVERTENCIAS Y LÍMITES DEL MODELO
+  - Modelo semi-estático: una salida por vehículo desde el almacén central, pedidos indivisibles, sin recargas ni turnos. Si el escenario tiene bloqueos activos, se replanifica una vez (planificación inicial sin el bloqueo -> replanificar() con el bloqueo activo); no hay averías de vehículo en curso ni una simulación continua de varios eventos.
+  - Bloqueos Q7: +2km por tramo cuyo rectángulo Manhattan toque un nodo bloqueado; entregar en nodo bloqueado suma V.
+  - El mantenimiento preventivo sí se aplica: el vehículo listado ese día queda no disponible para la instancia planificada ese día.
+  - Cada instancia se planifica en el instante en que llegó su último pedido; los anteriores acumulan espera hasta ese momento.
+  - Los pedidos de los .txt no tienen id: se numeran 1..N según el orden de llegada leído.

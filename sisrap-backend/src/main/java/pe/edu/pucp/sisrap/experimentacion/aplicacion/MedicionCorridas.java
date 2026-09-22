@@ -16,8 +16,26 @@ import pe.edu.pucp.sisrap.planificador.dominio.modelo.Solucion;
 public final class MedicionCorridas {
     private MedicionCorridas() {}
 
+    /** Compatibilidad con el flujo API "ESTATICO_UN_VIAJE_SIN_INCIDENCIAS" (EjecutarExperimento), que no
+     * conoce escenario operativo ni perfil de presión: quedan null. */
     public static Corrida medir(String algoritmo, int n, long semilla, double ms, Solucion s,
                                 ContextoPlanificacion c, IAlgoritmoPlanificacion motor) {
+        return medir(algoritmo, n, semilla, ms, s, c, motor, null, null, null, null, null, null);
+    }
+
+    /** Corrida sin incidencia registrada (escenario distinto de OPERACION_DIARIA, o perfil NORMAL). */
+    public static Corrida medir(String algoritmo, int n, long semilla, double ms, Solucion s,
+                                ContextoPlanificacion c, IAlgoritmoPlanificacion motor,
+                                String escenarioOperativo, String perfilPresion) {
+        return medir(algoritmo, n, semilla, ms, s, c, motor, escenarioOperativo, perfilPresion, null, null, null, null);
+    }
+
+    /** Corrida con la incidencia y su replanificación ya medidas (ver {@link SimuladorIncidencias}). */
+    public static Corrida medir(String algoritmo, int n, long semilla, double ms, Solucion s,
+                                ContextoPlanificacion c, IAlgoritmoPlanificacion motor,
+                                String escenarioOperativo, String perfilPresion,
+                                Integer pedidosAfectadosIncidencia, Integer vehiculosEnAveriaIncidente,
+                                Double tiempoReplanificacionMs, Boolean replanificacionExitosa) {
         int aTiempo = 0, prioritariosATiempo = 0;
         int prioritarios = (int) c.getPedidos().stream().filter(p -> p.getPrioridad().esPriorizado()).count();
         double distancia = 0, carga = 0;
@@ -37,11 +55,13 @@ public final class MedicionCorridas {
         }
         int capacidad = c.getVehiculos().stream().filter(v -> v.isDisponible()).mapToInt(v -> v.getCapacidadPaquetes()).sum();
         return new Corrida(algoritmo, n, semilla, ms, s.getValorFuncionObjetivo(), s.getValorT(), s.getValorR(),
-                s.getValorN(), s.getValorV(), s.isEsFactible(), 100.0 * aTiempo / n,
+                s.getValorN(), s.getValorV(), s.isEsFactible(), n == 0 ? 0.0 : 100.0 * aTiempo / n,
                 prioritarios == 0 ? null : 100.0 * prioritariosATiempo / prioritarios,
                 s.getCostoTransporte(), distancia, capacidad == 0 ? 0 : 100 * carga / capacidad,
                 motor instanceof RecocidoSimulado sa ? sa.getTemperaturaUsada() : null, motor.getConvergencia(),
-                List.copyOf(rutas), s.getPedidosNoAsignados().stream().map(p -> p.getIdPedido()).toList());
+                List.copyOf(rutas), s.getPedidosNoAsignados().stream().map(p -> p.getIdPedido()).toList(),
+                escenarioOperativo, perfilPresion, pedidosAfectadosIncidencia, vehiculosEnAveriaIncidente,
+                tiempoReplanificacionMs, replanificacionExitosa);
     }
 
     /** Desviación muestral (n-1); null con menos de dos valores. */

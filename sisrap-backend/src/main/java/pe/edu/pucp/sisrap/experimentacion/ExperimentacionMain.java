@@ -19,6 +19,8 @@ import pe.edu.pucp.sisrap.experimentacion.aplicacion.GeneradorEscenarios;
 import pe.edu.pucp.sisrap.experimentacion.dominio.BaseOperativa;
 import pe.edu.pucp.sisrap.experimentacion.dominio.DatosArchivos;
 import pe.edu.pucp.sisrap.experimentacion.dominio.Escenario;
+import pe.edu.pucp.sisrap.experimentacion.dominio.EscenarioOperativo;
+import pe.edu.pucp.sisrap.experimentacion.dominio.PerfilPresion;
 import pe.edu.pucp.sisrap.experimentacion.dominio.PlanExperimento;
 import pe.edu.pucp.sisrap.experimentacion.dominio.ResultadoExperimento;
 import pe.edu.pucp.sisrap.experimentacion.dominio.Variante;
@@ -47,7 +49,7 @@ public final class ExperimentacionMain {
               --salida=resultados      carpeta donde se crea resultados/<nombre>/
               --desde=AAAA-MM-DD       primer día de ventas a usar (por defecto, el primer día con archivo)
               --algoritmos=GENETICO,RECOCIDO_SIMULADO
-              --tamanios=25,50,100     por defecto experimento.tamanios de la BD
+              --tamanio-base=25        tamaño de referencia para operación diaria normal
               --instancias=1           bloques de pedidos distintos por cada tamaño
               --repeticiones=30        por defecto experimento.repeticiones de la BD
               --semilla=42             por defecto experimento.semillaBase de la BD
@@ -62,7 +64,7 @@ public final class ExperimentacionMain {
             """;
 
     private static final Set<String> CON_VALOR = Set.of("perfil", "nombre", "datos", "salida", "desde", "algoritmos",
-            "tamanios", "instancias", "repeticiones", "semilla", "variante");
+            "tamanio-base", "instancias", "repeticiones", "semilla", "variante");
     private static final Set<String> BANDERAS = Set.of("sin-mantenimiento", "sin-calentamiento", "sin-detalle", "prueba", "solo-datos", "ayuda");
 
     private ExperimentacionMain() {}
@@ -95,9 +97,9 @@ public final class ExperimentacionMain {
         // 2) Plan (BD como valor por defecto, línea de comandos como sobrescritura)
         var lector = new LectorArchivosExperimento(Path.of(opciones.valor("datos", "datos")), reglasCarga(base));
         PlanExperimento plan = construirPlan(opciones, base.configuracion(), lector.primerDiaDisponible());
-        System.out.printf("Plan %s: %d corridas (%d variantes x %d tamaños x %d instancias x %d repeticiones x %d algoritmos)%n",
-                plan.nombre(), plan.totalCorridas(), plan.variantes().size(), plan.tamanios().size(), plan.instancias(),
-                plan.repeticiones(), plan.algoritmos().size());
+        System.out.printf("Plan %s: %d corridas (%d variantes x %d escenarios x %d perfiles x %d niveles x %d repeticiones x %d algoritmos)%n",
+                plan.nombre(), plan.totalCorridas(), plan.variantes().size(), plan.escenariosOperativos().size(), plan.perfiles().size(),
+                plan.instancias(), plan.repeticiones(), plan.algoritmos().size());
 
         // 3) Archivos .txt
         DatosArchivos datos = lector.leer(plan.desde(), plan.pedidosNecesarios());
@@ -132,11 +134,11 @@ public final class ExperimentacionMain {
     }
 
     private static PlanExperimento construirPlan(Opciones o, Configuracion cfg, LocalDate primerDia) {
-        List<Integer> tamanios = o.tieneValor("tamanios") ? enteros(o.valor("tamanios", "")) : enteros(cfg.texto("experimento.tamanios"));
+        int tamanioBase = o.tieneValor("tamanio-base") ? Integer.parseInt(o.valor("tamanio-base", ""))
+                : enteros(cfg.texto("experimento.tamanios")).stream().min(Integer::compareTo).orElseThrow();
         int instancias = Integer.parseInt(o.valor("instancias", "1"));
         int repeticiones = o.tieneValor("repeticiones") ? Integer.parseInt(o.valor("repeticiones", "")) : cfg.entero("experimento.repeticiones");
         if (o.bandera("prueba")) {
-            tamanios = List.of(tamanios.stream().min(Integer::compare).orElseThrow());
             instancias = 1;
             repeticiones = Math.min(repeticiones, 2);
         }
@@ -145,7 +147,7 @@ public final class ExperimentacionMain {
         String nombre = o.valor("nombre", "exp-" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")));
         return new PlanExperimento(nombre, o.valor("perfil", "BASE"),
                 Arrays.stream(o.valor("algoritmos", "GENETICO,RECOCIDO_SIMULADO").split(",")).map(String::trim).toList(),
-                tamanios, instancias, repeticiones,
+                List.of(EscenarioOperativo.values()), List.of(PerfilPresion.values()), tamanioBase, instancias, repeticiones,
                 o.tieneValor("semilla") ? Long.parseLong(o.valor("semilla", "")) : cfg.largo("experimento.semillaBase"),
                 o.tieneValor("desde") ? LocalDate.parse(o.valor("desde", "")) : primerDia,
                 !o.bandera("sin-mantenimiento"), !o.bandera("sin-calentamiento"), variantes);
@@ -175,7 +177,9 @@ public final class ExperimentacionMain {
     /** Lo que el modelo estático actual no representa: queda escrito en el manifiesto para no sobrevender resultados. */
     private static List<String> limitesDelModelo(DatosArchivos datos) {
         List<String> limites = new ArrayList<>();
-        limites.add("Modelo estático: una salida por vehículo desde el almacén central, pedidos indivisibles, sin recargas, turnos, averías ni replanificación.");
+        limites.add("Modelo semi-estático: una salida por vehículo desde el almacén central, pedidos indivisibles, sin recargas ni turnos. "
+                + "Si el escenario tiene bloqueos activos, se replanifica una vez (planificación inicial sin el bloqueo -> replanificar() con el bloqueo activo); "
+                + "no hay averías de vehículo en curso ni una simulación continua de varios eventos.");
         limites.add("Bloqueos Q7: +2km por tramo cuyo rectángulo Manhattan toque un nodo bloqueado; entregar en nodo bloqueado suma V.");
         limites.add("El mantenimiento preventivo sí se aplica: el vehículo listado ese día queda no disponible para la instancia planificada ese día.");
         limites.add("Cada instancia se planifica en el instante en que llegó su último pedido; los anteriores acumulan espera hasta ese momento.");

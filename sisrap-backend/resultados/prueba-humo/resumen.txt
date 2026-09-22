@@ -1,0 +1,67 @@
+RESUMEN prueba-humo  (36 corridas)
+Corridas con verificación fallida: 0
+
+Variante BASE
+  COLAPSO_LOGISTICO-ALTA-N01 | COLAPSO_LOGISTICO | ALTA | nivel 1 | tamaño 38
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    GENETICO                 291.61         0.53      712.1      94.74       0.00       9060
+    RECOCIDO_SIMULADO        298.71         0.04       19.2      94.74       0.00       1821
+    GENETICO vs RECOCIDO_SIMULADO: 2 pares, victorias 2-0 (empates 0), p=0.5000 r=0.9487 (GRANDE) -> MUESTRA_INSUFICIENTE | a presupuesto igual: p=0.5000 -> MUESTRA_INSUFICIENTE
+      cumplimiento de plazos (métrica primaria, sección 3.3): p=n/d p_holm=n/d r=0.0000 -> MUESTRA_INSUFICIENTE
+  COLAPSO_LOGISTICO-CRITICA-N01 | COLAPSO_LOGISTICO | CRITICA | nivel 1 | tamaño 55
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    GENETICO                 978.94         4.89      397.4      94.55       0.00       9060
+    RECOCIDO_SIMULADO        993.19         0.98       34.9      94.55       0.00       2661
+    GENETICO vs RECOCIDO_SIMULADO: 2 pares, victorias 2-0 (empates 0), p=0.5000 r=0.9487 (GRANDE) -> MUESTRA_INSUFICIENTE | a presupuesto igual: p=0.5000 -> MUESTRA_INSUFICIENTE
+      cumplimiento de plazos (métrica primaria, sección 3.3): p=n/d p_holm=n/d r=0.0000 -> MUESTRA_INSUFICIENTE
+  COLAPSO_LOGISTICO-NORMAL-N01 | COLAPSO_LOGISTICO | NORMAL | nivel 1 | tamaño 25
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    GENETICO                  84.46         0.01      607.2     100.00       0.00       9060
+    RECOCIDO_SIMULADO         86.26         0.00        7.8     100.00       0.00        821
+    GENETICO vs RECOCIDO_SIMULADO: 2 pares, victorias 2-0 (empates 0), p=0.5000 r=0.9487 (GRANDE) -> MUESTRA_INSUFICIENTE | a presupuesto igual: p=0.5000 -> MUESTRA_INSUFICIENTE
+      cumplimiento de plazos (métrica primaria, sección 3.3): p=n/d p_holm=n/d r=0.0000 -> MUESTRA_INSUFICIENTE
+  OPERACION_DIARIA-ALTA-N01 | OPERACION_DIARIA | ALTA | nivel 1 | tamaño 38
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    GENETICO                 437.85       123.80      726.2      94.74       0.00       9060
+    RECOCIDO_SIMULADO        382.63        29.28       20.7      94.74       0.00       1001
+    GENETICO vs RECOCIDO_SIMULADO: 2 pares, victorias 1-1 (empates 0), p=1.0000 r=0.3162 (MEDIANO) -> MUESTRA_INSUFICIENTE | a presupuesto igual: p=1.0000 -> MUESTRA_INSUFICIENTE
+      cumplimiento de plazos (métrica primaria, sección 3.3): p=n/d p_holm=n/d r=0.0000 -> MUESTRA_INSUFICIENTE
+  OPERACION_DIARIA-CRITICA-N01 | OPERACION_DIARIA | CRITICA | nivel 1 | tamaño 55
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    GENETICO                1336.39        55.33      398.3      93.64       0.00       9060
+    RECOCIDO_SIMULADO       1288.75        32.95       35.1      91.82       0.00       1781
+    GENETICO vs RECOCIDO_SIMULADO: 2 pares, victorias 1-1 (empates 0), p=1.0000 r=0.3162 (MEDIANO) -> MUESTRA_INSUFICIENTE | a presupuesto igual: p=1.0000 -> MUESTRA_INSUFICIENTE
+      cumplimiento de plazos (métrica primaria, sección 3.3): p=0.5000 p_holm=1.0000 r=0.9487 -> MUESTRA_INSUFICIENTE
+  OPERACION_DIARIA-NORMAL-N01 | OPERACION_DIARIA | NORMAL | nivel 1 | tamaño 25
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    GENETICO                  84.46         0.01      622.1     100.00       0.00       9060
+    RECOCIDO_SIMULADO         86.26         0.00        8.3     100.00       0.00        821
+    GENETICO vs RECOCIDO_SIMULADO: 2 pares, victorias 2-0 (empates 0), p=0.5000 r=0.9487 (GRANDE) -> MUESTRA_INSUFICIENTE | a presupuesto igual: p=0.5000 -> MUESTRA_INSUFICIENTE
+      cumplimiento de plazos (métrica primaria, sección 3.3): p=n/d p_holm=n/d r=0.0000 -> MUESTRA_INSUFICIENTE
+  SIMULACION_CINCO_DIAS-ALTA-N01 | SIMULACION_CINCO_DIAS | ALTA | nivel 1 | tamaño 190
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    GENETICO              757021.59      8041.15     2780.2      19.21      92.50       9060
+    RECOCIDO_SIMULADO    1003189.93      3324.72      777.2       7.63      90.50       4681
+    GENETICO vs RECOCIDO_SIMULADO: 2 pares, victorias 2-0 (empates 0), p=0.5000 r=0.9487 (GRANDE) -> MUESTRA_INSUFICIENTE | a presupuesto igual: p=0.5000 -> MUESTRA_INSUFICIENTE
+      cumplimiento de plazos (métrica primaria, sección 3.3): p=0.5000 p_holm=1.0000 r=0.9487 -> MUESTRA_INSUFICIENTE
+  SIMULACION_CINCO_DIAS-CRITICA-N01 | SIMULACION_CINCO_DIAS | CRITICA | nivel 1 | tamaño 275
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    GENETICO             1135805.06     18144.99     4238.0      14.55     178.50       9060
+    RECOCIDO_SIMULADO    1563578.46      3016.89     1401.6       0.18     183.50       4581
+    GENETICO vs RECOCIDO_SIMULADO: 2 pares, victorias 2-0 (empates 0), p=0.5000 r=0.9487 (GRANDE) -> MUESTRA_INSUFICIENTE | a presupuesto igual: p=0.5000 -> MUESTRA_INSUFICIENTE
+      cumplimiento de plazos (métrica primaria, sección 3.3): p=0.5000 p_holm=1.0000 r=0.9487 -> MUESTRA_INSUFICIENTE
+  SIMULACION_CINCO_DIAS-NORMAL-N01 | SIMULACION_CINCO_DIAS | NORMAL | nivel 1 | tamaño 125
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    GENETICO              467205.15      5040.10     1720.3      22.00      46.50       9060
+    RECOCIDO_SIMULADO     619372.14      1770.17      403.1       8.80      41.50       4921
+    GENETICO vs RECOCIDO_SIMULADO: 2 pares, victorias 2-0 (empates 0), p=0.5000 r=0.9487 (GRANDE) -> MUESTRA_INSUFICIENTE | a presupuesto igual: p=0.5000 -> MUESTRA_INSUFICIENTE
+      cumplimiento de plazos (métrica primaria, sección 3.3): p=0.5000 p_holm=1.0000 r=0.9487 -> MUESTRA_INSUFICIENTE
+
+Punto de colapso (>50% de repeticiones con pedidos no atendidos, sección 3.4):
+  BASE / GENETICO: nivel SIN_COLAPSO_OBSERVADO (tasa 0.0%)
+  BASE / RECOCIDO_SIMULADO: nivel SIN_COLAPSO_OBSERVADO (tasa 0.0%)
+
+Ganadores por condición experimental (variante, escenario, perfil y nivel) según F, con Wilcoxon al 5%: {SIN_GANADOR=9}
+Ganadores a presupuesto igual de evaluaciones: {SIN_GANADOR=9}
+
+La comparación entre variantes que cambian objetivo.* no es válida sobre F.

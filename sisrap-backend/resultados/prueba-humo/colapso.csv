@@ -1,0 +1,3 @@
+variante,algoritmo,nivel_colapso,tasa_no_atendidos_en_ese_nivel_pct
+BASE,GENETICO,SIN_COLAPSO_OBSERVADO,0
+BASE,RECOCIDO_SIMULADO,SIN_COLAPSO_OBSERVADO,0
