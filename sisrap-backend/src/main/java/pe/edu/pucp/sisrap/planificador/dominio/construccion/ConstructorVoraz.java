@@ -14,7 +14,7 @@ public final class ConstructorVoraz {
         Almacen central=c.getAlmacenes().stream().filter(a->a.getCapacidadMaxima()==null).findFirst()
             .orElseThrow(()->new IllegalArgumentException("Se requiere almacén central"));
         List<Ruta> rutas=new ArrayList<>();
-        for(var v:c.getVehiculos()) rutas.add(new Ruta(v,central,c.instante(),c.reglas()));
+        for(var v:c.getVehiculos()){var r=new Ruta(v,central,c.instante(),c.reglas()); r.setNodosBloqueados(c.nodosBloqueados()); rutas.add(r);}
         return rutas;
     }
     public static List<Pedido> ordenarPedidos(List<Pedido> pedidos,Random random,boolean voraz){

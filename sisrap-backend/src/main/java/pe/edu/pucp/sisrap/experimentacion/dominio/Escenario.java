@@ -25,7 +25,9 @@ public record Escenario(String id, int tamanio, int instancia, LocalDateTime ins
     }
 
     public ContextoPlanificacion contexto(BaseOperativa base, ReglasPlanificacion reglas) {
-        return new ContextoPlanificacion(pedidos, vehiculos, base.almacenes(), instante, reglas);
+        java.util.Set<String> bloqueados = new java.util.HashSet<>();
+        for (var b : bloqueosActivos) for (var n : b.vertices()) bloqueados.add(n.getX() + "," + n.getY());
+        return new ContextoPlanificacion(pedidos, vehiculos, base.almacenes(), instante, reglas, bloqueados);
     }
 
     public int cantidadTotalQq() {

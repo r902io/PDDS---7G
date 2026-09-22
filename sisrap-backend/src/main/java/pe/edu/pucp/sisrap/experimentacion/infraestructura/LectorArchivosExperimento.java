@@ -103,6 +103,15 @@ public final class LectorArchivosExperimento {
                 mantenimiento.computeIfAbsent(fecha, f -> new HashSet<>()).add(m.group(4));
             }
         }
+        // ponytail: autos 2 días (TA fecha+1), motos/bicis 1 día (bici 1 turno ≈ 1 día declarado).
+        // Bimensual se repite generando más archivos mant*.txt, no en código.
+        Map<LocalDate, Set<String>> extra = new HashMap<>();
+        mantenimiento.forEach((fecha, ids) -> {
+            for (String id : ids)
+                if (id.startsWith("TA"))
+                    extra.computeIfAbsent(fecha.plusDays(1), f -> new HashSet<>()).add(id);
+        });
+        extra.forEach((fecha, ids) -> mantenimiento.computeIfAbsent(fecha, f -> new HashSet<>()).addAll(ids));
         if (mantenimiento.isEmpty()) advertencias.add("No se encontró archivo de mantenimiento preventivo (mant*.txt)");
         return mantenimiento;
     }

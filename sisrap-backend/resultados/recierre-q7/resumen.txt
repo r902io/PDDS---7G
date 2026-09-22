@@ -1,0 +1,24 @@
+RESUMEN recierre-q7  (270 corridas)
+Corridas con verificación fallida: 0
+
+Variante BASE
+  Tamaño 25
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    GENETICO               15493.14      5051.65     1028.2      57.33       0.00       9060
+    RECOCIDO_SIMULADO      15503.68      5068.22      231.3      57.42       0.00       4374
+    GENETICO vs RECOCIDO_SIMULADO: 45 pares, victorias 28-8 (empates 9), p=0.0028 -> GANA_GENETICO | a presupuesto igual: p=0.0159 -> GANA_GENETICO
+  Tamaño 50
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    GENETICO               89674.72     11852.85     1070.8      27.33       0.07       9060
+    RECOCIDO_SIMULADO      89884.55     11974.90      372.8      27.29       0.00       4920
+    GENETICO vs RECOCIDO_SIMULADO: 45 pares, victorias 36-9 (empates 0), p=0.0000 -> GANA_GENETICO | a presupuesto igual: p=0.0000 -> GANA_GENETICO
+  Tamaño 100
+    algoritmo               F media      F desv.       t ms   cumpl. %   no asig.      eval.
+    GENETICO              440549.74     23237.55     2788.4      13.09      21.18       9060
+    RECOCIDO_SIMULADO     572359.85     16024.25      762.7       7.22      17.44       4702
+    GENETICO vs RECOCIDO_SIMULADO: 45 pares, victorias 45-0 (empates 0), p=0.0000 -> GANA_GENETICO | a presupuesto igual: p=0.0000 -> GANA_GENETICO
+
+Ganadores por (variante, tamaño) según F, con Wilcoxon al 5%: {GANA_GENETICO=3}
+Ganadores a presupuesto igual de evaluaciones: {GANA_GENETICO=3}
+
+La comparación entre variantes que cambian objetivo.* no es válida sobre F.

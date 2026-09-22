@@ -66,7 +66,7 @@ public final class EjecutarExperimento {
         var informe=new InformeExperimento(UUID.randomUUID().toString(),"ESTATICO_UN_VIAJE_SIN_INCIDENCIAS","0.1.0",
             solicitud,Instantanea.desde(datos),List.copyOf(corridas),resumir(corridas),
             List.of("No equivale a operación diaria, simulación 5D ni colapso logístico.",
-                "Una salida por vehículo desde el central; pedidos indivisibles; sin recargas, turnos, alimentación, averías ni bloqueos.",
+                "Una salida por vehículo desde el central; pedidos indivisibles; sin recargas, turnos, alimentación ni averías. Bloqueos Q7: +2km por tramo afectado, V si entrega en nodo bloqueado.",
                 "Los datos de flota y almacenes se leen de la BD. Las posiciones iniciales se normalizan al central.",
                 "F usa los pesos del perfil; no se garantiza dominancia lexicográfica sin calibrar cotas.",
                 "T incluye servicio; el SLA usa llegada si operacion.servicioDentroPlazo=false.",

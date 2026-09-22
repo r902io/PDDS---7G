@@ -16,19 +16,34 @@ public class Ruta {
     private final ReglasPlanificacion reglas;
     private final List<Pedido> secuenciaPedidos=new ArrayList<>();
     private double distanciaTotalKm, costoTotal, tiempoTotalHoras;
+    private java.util.Set<String> nodosBloqueados=java.util.Set.of();
     public Ruta(Vehiculo vehiculo, Almacen origen, LocalDateTime inicio, ReglasPlanificacion reglas) {
         this.vehiculo=vehiculo; this.almacenOrigen=origen; this.inicio=inicio; this.reglas=reglas;
     }
+    public void setNodosBloqueados(java.util.Set<String> n){this.nodosBloqueados=n==null?java.util.Set.of():java.util.Set.copyOf(n);}
+    public java.util.Set<String> getNodosBloqueados(){return nodosBloqueados;}
+    // ponytail: O(segmentos x bloqueos) naive; vuelta en U = +2km si el rectángulo Manhattan contiene un nodo bloqueado.
+    static int extraPorBloqueo(pe.edu.pucp.sisrap.geografia.dominio.Nodo a, pe.edu.pucp.sisrap.geografia.dominio.Nodo b, java.util.Set<String> bloqueados){
+        if(bloqueados.isEmpty()) return 0;
+        int x1=Math.min(a.getX(),b.getX()), x2=Math.max(a.getX(),b.getX());
+        int y1=Math.min(a.getY(),b.getY()), y2=Math.max(a.getY(),b.getY());
+        for(var s:bloqueados){
+            int c=s.indexOf(','); int x=Integer.parseInt(s.substring(0,c)), y=Integer.parseInt(s.substring(c+1));
+            if(x>=x1 && x<=x2 && y>=y1 && y<=y2) return 2;
+        }
+        return 0;
+    }
     public Ruta copiar() {
         Ruta copia=new Ruta(vehiculo,almacenOrigen,inicio,reglas);
+        copia.nodosBloqueados=nodosBloqueados;
         copia.secuenciaPedidos.addAll(secuenciaPedidos); copia.recalcular(); return copia;
     }
     public int cargaTotal(){return secuenciaPedidos.stream().mapToInt(Pedido::getCantidadQq).sum();}
     public void recalcular() {
         double distancia=0;
         var posicion=almacenOrigen.getUbicacion();
-        for(var p:secuenciaPedidos){distancia+=posicion.distanciaManhattan(p.getUbicacion()); posicion=p.getUbicacion();}
-        if(reglas.incluirRetorno() && !secuenciaPedidos.isEmpty()) distancia+=posicion.distanciaManhattan(almacenOrigen.getUbicacion());
+        for(var p:secuenciaPedidos){distancia+=posicion.distanciaManhattan(p.getUbicacion())+extraPorBloqueo(posicion,p.getUbicacion(),nodosBloqueados); posicion=p.getUbicacion();}
+        if(reglas.incluirRetorno() && !secuenciaPedidos.isEmpty()) distancia+=posicion.distanciaManhattan(almacenOrigen.getUbicacion())+extraPorBloqueo(posicion,almacenOrigen.getUbicacion(),nodosBloqueados);
         distanciaTotalKm=distancia*reglas.distanciaNodoKm();
         costoTotal=distanciaTotalKm*vehiculo.getCostoPorKm();
         tiempoTotalHoras=distanciaTotalKm/vehiculo.getVelocidadKmh()+secuenciaPedidos.size()*reglas.servicioHoras();
@@ -37,7 +52,7 @@ public class Ruta {
         double distancia=0;
         var posicion=almacenOrigen.getUbicacion();
         for(int i=0;i<=indice;i++){
-            var p=secuenciaPedidos.get(i); distancia+=posicion.distanciaManhattan(p.getUbicacion()); posicion=p.getUbicacion();
+            var p=secuenciaPedidos.get(i); distancia+=posicion.distanciaManhattan(p.getUbicacion())+extraPorBloqueo(posicion,p.getUbicacion(),nodosBloqueados); posicion=p.getUbicacion();
         }
         return distancia*reglas.distanciaNodoKm()/vehiculo.getVelocidadKmh()+indice*reglas.servicioHoras();
     }

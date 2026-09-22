@@ -18,6 +18,7 @@ public final class FuncionObjetivo {
         var consumo=new HashMap<String,Integer>();
         var universo=new HashSet<Long>();
         for(var p:contexto.getPedidos()) universo.add(p.getIdPedido());
+        var bloqueados=contexto.nodosBloqueados();
         for(var ruta:s.getRutas()){
             ruta.recalcular(); costo+=ruta.getCostoTotal();
             if(ruta.getSecuenciaPedidos().isEmpty()) continue;
@@ -28,6 +29,8 @@ public final class FuncionObjetivo {
             for(int i=0;i<ruta.getSecuenciaPedidos().size();i++){
                 var p=ruta.getSecuenciaPedidos().get(i);
                 if(!universo.contains(p.getIdPedido()) || !vistos.add(p.getIdPedido())) v++;
+                // ponytail: entregar en nodo bloqueado = infactible (Q7: no atravesar ni girar).
+                if(bloqueados.contains(p.getUbicacion().getX()+","+p.getUbicacion().getY())) v++;
                 t+=ruta.tiempoAtencionDe(i); r+=ruta.retrasoDe(i);
             }
         }

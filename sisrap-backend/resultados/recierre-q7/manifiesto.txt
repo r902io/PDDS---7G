@@ -1,0 +1,29 @@
+EXPERIMENTO recierre-q7
+Inicio: 2026-09-21T23:01:51.274363760  Fin: 2026-09-21T23:06:35.356730035  Duración: 00:04:44
+Entorno: Java 23.0.1, Linux, 12 procesadores
+
+PLAN
+  perfil de parámetros (BD): BASE
+  algoritmos: [GENETICO, RECOCIDO_SIMULADO]
+  tamaños: [25, 50, 100]  instancias por tamaño: 3
+  repeticiones: 15  semilla base: 777 (semillas 777 a 791)
+  pedidos desde: 2026-01-01  mantenimiento preventivo aplicado: true  calentamiento JVM: true
+  total de corridas: 270
+  variante BASE: (perfil tal cual)
+
+DATOS RECOPILADOS
+  pedidos leídos: 641 (del 2026-01-01T01:30 al 2026-01-31T23:35)
+  por prioridad: {PRIORIZADO_12H=91, PRIORIZADO_18H=89, PRIORIZADO_4H=102, PRIORIZADO_8H=114, REGULAR_36H=245}
+  bloqueos leídos: 669
+  días con mantenimiento preventivo: 38 (2026-09-01 a 2026-10-29)
+  archivos leídos (3):
+    datos/ventas.v20260909/ventas.202601.txt
+    datos/bloqueos/bloqueo.2601.txt
+    datos/mant.preventivo.09.10.txt
+
+ADVERTENCIAS Y LÍMITES DEL MODELO
+  - Modelo estático: una salida por vehículo desde el almacén central, pedidos indivisibles, sin recargas, turnos, averías ni replanificación.
+  - Bloqueos Q7: +2km por tramo cuyo rectángulo Manhattan toque un nodo bloqueado; entregar en nodo bloqueado suma V.
+  - El mantenimiento preventivo sí se aplica: el vehículo listado ese día queda no disponible para la instancia planificada ese día.
+  - Cada instancia se planifica en el instante en que llegó su último pedido; los anteriores acumulan espera hasta ese momento.
+  - Los pedidos de los .txt no tienen id: se numeran 1..N según el orden de llegada leído.

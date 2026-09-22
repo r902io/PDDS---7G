@@ -176,7 +176,7 @@ public final class ExperimentacionMain {
     private static List<String> limitesDelModelo(DatosArchivos datos) {
         List<String> limites = new ArrayList<>();
         limites.add("Modelo estático: una salida por vehículo desde el almacén central, pedidos indivisibles, sin recargas, turnos, averías ni replanificación.");
-        limites.add("Los bloqueos se recopilan y se reportan por instancia, pero la distancia es Manhattan sin grafo de vías: NO afectan a los algoritmos.");
+        limites.add("Bloqueos Q7: +2km por tramo cuyo rectángulo Manhattan toque un nodo bloqueado; entregar en nodo bloqueado suma V.");
         limites.add("El mantenimiento preventivo sí se aplica: el vehículo listado ese día queda no disponible para la instancia planificada ese día.");
         limites.add("Cada instancia se planifica en el instante en que llegó su último pedido; los anteriores acumulan espera hasta ese momento.");
         limites.add("Los pedidos de los .txt no tienen id: se numeran 1..N según el orden de llegada leído.");
