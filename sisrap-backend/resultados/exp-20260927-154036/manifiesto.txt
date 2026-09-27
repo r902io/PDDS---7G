@@ -1,0 +1,43 @@
+EXPERIMENTO exp-20260927-154036
+Inicio: 2026-09-27T15:40:36.238153200  Fin: 2026-09-27T15:40:36.238153200  Duración: 00:00:00
+Entorno: Java 21.0.12.1, Windows 11, 16 procesadores
+
+PLAN
+  perfil de parámetros (BD): BASE
+  algoritmos: [GENETICO, RECOCIDO_SIMULADO]
+  escenarios operativos: [OPERACION_DIARIA, SIMULACION_CINCO_DIAS, COLAPSO_LOGISTICO]
+  perfiles de presión: [NORMAL, ALTA, CRITICA]
+  demanda histórica P50 (NORMAL): 34 pedidos/día
+  demanda histórica P75 (ALTA): 46 pedidos/día
+  demanda histórica P90 (CRITICA): 51 pedidos/día
+  incremento diario en COLAPSO_LOGISTICO (P75-P50): 12 pedidos/día
+  instancias por combinación: 3
+  repeticiones por instancia: 30
+  semilla base: 42
+  pedidos desde: 2026-01-01
+  mantenimiento preventivo aplicado: true
+  calentamiento JVM: true
+  total de ejecuciones experimentales: 1620
+  N01/N02/N03 son instancias independientes, no niveles de presión.
+  En COLAPSO_LOGISTICO la presión aumenta dentro de cada corrida usando el incremento histórico P75-P50.
+  La corrida de colapso termina cuando aparece el primer pedido que el planificador no logra mantener dentro de su deadline.
+  variante BASE: (perfil tal cual)
+
+DATOS RECOPILADOS
+  pedidos leídos: 160010 (del 2026-01-01T01:30 al 2028-12-06T23:49)
+  por prioridad: {PRIORIZADO_12H=24126, PRIORIZADO_18H=23722, PRIORIZADO_4H=23940, PRIORIZADO_8H=24037, REGULAR_36H=64185}
+  bloqueos leídos: 21725
+  días con mantenimiento preventivo: 38
+  archivos leídos: 73
+
+ADVERTENCIAS Y LÍMITES DEL MODELO
+  - OPERACION_DIARIA y SIMULACION_CINCO_DIAS usan el planificador estático actual: una salida por vehículo, pedidos indivisibles y sin modelado explícito de turnos o alimentación.
+  - La demanda de NORMAL, ALTA y CRITICA se deriva de P50, P75 y P90 del periodo histórico base; no se usan tamaños 25/38/55 fijados manualmente.
+  - COLAPSO_LOGISTICO aumenta la cantidad esperada de pedidos cada día usando el incremento histórico P75-P50 y termina en el primer deadline que el planificador no logra mantener.
+  - V penaliza restricciones duras representables por el modelo: capacidad, disponibilidad de vehículo, duplicidad, almacén/stock y entrega en nodo bloqueado.
+  - La prioridad se expresa mediante deadlines 4/8/12/18h frente a 36h; no existe un beta adicional por prioridad para no cambiar la F documentada.
+  - Turnos y alimentación aún no forman parte de V porque Ruta/ContextoPlanificacion no modelan esas restricciones temporalmente.
+  - El mantenimiento preventivo se aplica por fecha y deja al vehículo no disponible.
+  - En las instancias estáticas, la planificación ocurre cuando llegó el último pedido del bloque; esta espera forma parte de T y del SLA medido.
+  - Los pedidos de los .txt no tienen id: se numeran 1..N según el orden de llegada leído.
+  - Demanda histórica calibrada con 90 días (2026-01-01 a 2026-03-31): P50=34, P75=46, P90=51; incremento diario de colapso=12.

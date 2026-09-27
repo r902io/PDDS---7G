@@ -1,45 +1,93 @@
 package pe.edu.pucp.sisrap.experimentacion.dominio;
 
 import java.time.LocalDateTime;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import pe.edu.pucp.sisrap.flota.dominio.Vehiculo;
 import pe.edu.pucp.sisrap.parametros.dominio.ReglasPlanificacion;
 import pe.edu.pucp.sisrap.pedido.dominio.Pedido;
 import pe.edu.pucp.sisrap.planificador.dominio.modelo.ContextoPlanificacion;
 
-/**
- * Una instancia del problema: un bloque de pedidos reales planificados en el instante en que llegó el último,
- * bajo un escenario operativo (operación día a día, simulación de 5 días o colapso logístico) y un perfil de
- * presión (normal, alta o crítica), tal como los define el informe "Diseño de Experimento" (sección 3.4).
- * Las reglas de planificación dependen de la variante, por eso el contexto se arma bajo demanda.
- *
- * @param nivel                    ordinal de la instancia dentro de (escenarioOperativo, perfilPresion); en
- *                                COLAPSO_LOGISTICO representa además el nivel de presión progresivo (sección 4.2)
- * @param vehiculosEnMantenimiento ids marcados como no disponibles por el mantenimiento preventivo del día
- * @param vehiculosEnBajaPorPerfil ids retirados de forma permanente por reducción de flota del perfil (CRITICA)
- * @param bloqueosActivos          bloqueos vigentes en el instante; se usan para dimensionar la incidencia
- *                                simulada en operación día a día (sección 4.2 del informe de Selección de Algoritmos)
- */
-public record Escenario(String id, EscenarioOperativo escenarioOperativo, PerfilPresion perfilPresion, int tamanio,
-                        int nivel, LocalDateTime instante, List<Pedido> pedidos, List<Vehiculo> vehiculos,
-                        List<String> vehiculosEnMantenimiento, List<String> vehiculosEnBajaPorPerfil,
-                        List<Bloqueo> bloqueosActivos) {
+public record Escenario(String id,
+                        EscenarioOperativo escenarioOperativo,
+                        PerfilPresion perfilPresion,
+                        int tamanio,
+                        int instancia,
+                        LocalDateTime instante,
+                        List<Pedido> pedidos,
+                        List<Vehiculo> vehiculos,
+                        List<String> vehiculosEnMantenimiento,
+                        List<String> vehiculosEnBajaPorPerfil,
+                        List<Bloqueo> bloqueosProgramados) {
+
     public Escenario {
+        if (instancia < 1) throw new IllegalArgumentException("La instancia debe ser >= 1");
+        if (tamanio < 1) throw new IllegalArgumentException("El tamaño debe ser >= 1");
+        if (instante == null) throw new IllegalArgumentException("Falta instante del escenario");
         pedidos = List.copyOf(pedidos);
         vehiculos = List.copyOf(vehiculos);
         vehiculosEnMantenimiento = List.copyOf(vehiculosEnMantenimiento);
         vehiculosEnBajaPorPerfil = List.copyOf(vehiculosEnBajaPorPerfil);
-        bloqueosActivos = List.copyOf(bloqueosActivos);
+        bloqueosProgramados = List.copyOf(bloqueosProgramados);
     }
 
-    /** Compatibilidad con el código que identifica una instancia por su ordinal (p. ej. comparaciones pareadas). */
-    public int instancia() {
-        return nivel;
-    }
-
+    /**
+     * Contexto estático usado por el planificador actual.
+     *
+     * Los archivos contienen bloqueos con intervalo de inicio y fin. Como el contexto
+     * estático representa un instante concreto, solamente se incorporan los bloqueos
+     * vigentes en dicho instante. Los demás quedan registrados como bloqueos programados
+     * de la instancia y conservan sus fechas para una simulación temporal posterior.
+     */
     public ContextoPlanificacion contexto(BaseOperativa base, ReglasPlanificacion reglas) {
-        return new ContextoPlanificacion(pedidos, vehiculos, base.almacenes(), instante, reglas);
+        List<Bloqueo> activos = bloqueosActivosEnInstante();
+        return new ContextoPlanificacion(
+                pedidos,
+                vehiculos,
+                base.almacenes(),
+                instante,
+                reglas,
+                expandirNodosBloqueados(activos));
+    }
+
+    public List<Bloqueo> bloqueosActivosEnInstante() {
+        return bloqueosProgramados.stream()
+                .filter(b -> b.activoEn(instante))
+                .toList();
+    }
+
+    /** Expande los segmentos de cada poligonal a todos los nodos de la retícula bloqueados. */
+    public static Set<String> expandirNodosBloqueados(List<Bloqueo> bloqueos) {
+        Set<String> salida = new HashSet<>();
+
+        for (Bloqueo bloqueo : bloqueos) {
+            List<pe.edu.pucp.sisrap.geografia.dominio.Nodo> vertices = bloqueo.vertices();
+
+            for (int i = 0; i < vertices.size() - 1; i++) {
+                var a = vertices.get(i);
+                var b = vertices.get(i + 1);
+
+                int x = a.getX();
+                int y = a.getY();
+                salida.add(x + "," + y);
+
+                if (x == b.getX()) {
+                    while (y != b.getY()) {
+                        y += Integer.compare(b.getY(), y);
+                        salida.add(x + "," + y);
+                    }
+                } else {
+                    while (x != b.getX()) {
+                        x += Integer.compare(b.getX(), x);
+                        salida.add(x + "," + y);
+                    }
+                }
+            }
+        }
+
+        return Set.copyOf(salida);
     }
 
     public int cantidadTotalQq() {
@@ -47,6 +95,9 @@ public record Escenario(String id, EscenarioOperativo escenarioOperativo, Perfil
     }
 
     public int capacidadDisponibleQq() {
-        return vehiculos.stream().filter(Vehiculo::isDisponible).mapToInt(Vehiculo::getCapacidadPaquetes).sum();
+        return vehiculos.stream()
+                .filter(Vehiculo::isDisponible)
+                .mapToInt(Vehiculo::getCapacidadPaquetes)
+                .sum();
     }
 }

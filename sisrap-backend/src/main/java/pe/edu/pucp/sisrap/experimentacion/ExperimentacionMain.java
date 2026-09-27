@@ -16,6 +16,9 @@ import java.util.stream.Stream;
 import pe.edu.pucp.sisrap.carga.dominio.ReglasCarga;
 import pe.edu.pucp.sisrap.experimentacion.aplicacion.CorredorExperimento;
 import pe.edu.pucp.sisrap.experimentacion.aplicacion.GeneradorEscenarios;
+import pe.edu.pucp.sisrap.experimentacion.aplicacion.ModeloBloqueosHistoricos;
+import pe.edu.pucp.sisrap.experimentacion.aplicacion.ModeloDemandaHistorica;
+import pe.edu.pucp.sisrap.experimentacion.aplicacion.ValidadorPreExperimento;
 import pe.edu.pucp.sisrap.experimentacion.dominio.BaseOperativa;
 import pe.edu.pucp.sisrap.experimentacion.dominio.DatosArchivos;
 import pe.edu.pucp.sisrap.experimentacion.dominio.Escenario;
@@ -32,13 +35,12 @@ import pe.edu.pucp.sisrap.experimentacion.infraestructura.VariablesEntorno;
 import pe.edu.pucp.sisrap.parametros.dominio.Configuracion;
 import pe.edu.pucp.sisrap.pedido.dominio.TipoPrioridad;
 
-/**
- * Punto de entrada de la experimentación numérica.
- * 1. Lee de la BD los parámetros (algoritmos, función objetivo, experimento), la ciudad, los almacenes y la flota.
- * 2. Lee de los .txt las ventas, los bloqueos y el mantenimiento preventivo.
- * 3. Arma las instancias, corre todos los algoritmos y exporta todo a resultados
- * 
- * Ejecutar desde la raíz del backend
+/*
+ - Para verificar  los datos de la corrida:
+ .\mvnw.cmd spring-boot:run "-Dspring-boot.run.main-class=pe.edu.pucp.sisrap.experimentacion.ExperimentacionMain" "-Dspring-boot.run.arguments=--perfil=BASE --datos=datos --salida=resultados --solo-datos"
+
+ - ejecutar la experimenación completa:
+ .\mvnw.cmd spring-boot:run "-Dspring-boot.run.main-class=pe.edu.pucp.sisrap.experimentacion.ExperimentacionMain" "-Dspring-boot.run.arguments=--perfil=BASE --datos=datos --salida=resultados --instancias=3 --repeticiones=30"
  */
 public final class ExperimentacionMain {
     static final String AYUDA = """
@@ -47,10 +49,9 @@ public final class ExperimentacionMain {
               --nombre=<texto>         nombre del experimento (por defecto exp-AAAAMMDD-HHMMSS)
               --datos=datos            carpeta con ventas, bloqueos y mantenimiento (.txt)
               --salida=resultados      carpeta donde se crea resultados/<nombre>/
-              --desde=AAAA-MM-DD       primer día de ventas a usar (por defecto, el primer día con archivo)
+              --desde=AAAA-MM-DD       primer día del periodo histórico de calibración (por defecto, primer día disponible)
               --algoritmos=GENETICO,RECOCIDO_SIMULADO
-              --tamanio-base=25        tamaño de referencia para operación diaria normal
-              --instancias=1           bloques de pedidos distintos por cada tamaño
+              --instancias=3           instancias distintas N01/N02/N03 por escenario y perfil
               --repeticiones=30        por defecto experimento.repeticiones de la BD
               --semilla=42             por defecto experimento.semillaBase de la BD
               --variante=NOMBRE:clave=valor;clave=valor   (repetible) además de BASE, prueba parámetros sobrescritos
@@ -64,7 +65,7 @@ public final class ExperimentacionMain {
             """;
 
     private static final Set<String> CON_VALOR = Set.of("perfil", "nombre", "datos", "salida", "desde", "algoritmos",
-            "tamanio-base", "instancias", "repeticiones", "semilla", "variante");
+            "instancias", "repeticiones", "semilla", "variante");
     private static final Set<String> BANDERAS = Set.of("sin-mantenimiento", "sin-calentamiento", "sin-detalle", "prueba", "solo-datos", "ayuda");
 
     private ExperimentacionMain() {}
@@ -94,24 +95,49 @@ public final class ExperimentacionMain {
         System.out.printf("BD: perfil %s (%d parámetros), ciudad %dx%d km, %d almacenes, %d vehículos%n", perfil,
                 base.configuracion().valores().size(), base.anchoKm(), base.altoKm(), base.almacenes().size(), base.vehiculos().size());
 
-        // 2) Plan (BD como valor por defecto, línea de comandos como sobrescritura)
+        // 2) Archivos históricos y estimación de presión logística
         var lector = new LectorArchivosExperimento(Path.of(opciones.valor("datos", "datos")), reglasCarga(base));
-        PlanExperimento plan = construirPlan(opciones, base.configuracion(), lector.primerDiaDisponible());
-        System.out.printf("Plan %s: %d corridas (%d variantes x %d escenarios x %d perfiles x %d niveles x %d repeticiones x %d algoritmos)%n",
-                plan.nombre(), plan.totalCorridas(), plan.variantes().size(), plan.escenariosOperativos().size(), plan.perfiles().size(),
-                plan.instancias(), plan.repeticiones(), plan.algoritmos().size());
+        LocalDate desde = opciones.tieneValor("desde")
+                ? LocalDate.parse(opciones.valor("desde", ""))
+                : lector.primerDiaDisponible();
+        DatosArchivos datos = lector.leer(desde, Integer.MAX_VALUE);
+        var demanda = ModeloDemandaHistorica.analizar(datos, desde);
+        var bloqueosHistoricos = ModeloBloqueosHistoricos.analizar(
+                datos, demanda.desde(), demanda.hasta());
 
-        // 3) Archivos .txt
-        DatosArchivos datos = lector.leer(plan.desde(), plan.pedidosNecesarios());
         System.out.printf("Archivos: %d pedidos, %d bloqueos, %d días con mantenimiento preventivo (%d archivos leídos)%n",
                 datos.pedidos().size(), datos.bloqueos().size(), datos.mantenimiento().size(), datos.archivosLeidos().size());
+        System.out.printf("Demanda histórica base %s a %s (%d días): P50=%d, P75=%d, P90=%d, incremento colapso=%d pedidos/día%n",
+                demanda.desde(), demanda.hasta(), demanda.dias(), demanda.p50(), demanda.p75(), demanda.p90(), demanda.incrementoColapso());
+        System.out.printf("Bloqueos históricos base %s a %s (%d días): P50=%d, P75=%d, P90=%d bloqueos/día, %d plantillas%n",
+                bloqueosHistoricos.desde(), bloqueosHistoricos.hasta(), bloqueosHistoricos.dias(),
+                bloqueosHistoricos.p50(), bloqueosHistoricos.p75(), bloqueosHistoricos.p90(),
+                bloqueosHistoricos.plantillasDisponibles());
+
+        // 3) Plan experimental. Los perfiles de demanda salen de los percentiles históricos.
+        PlanExperimento plan = construirPlan(opciones, base.configuracion(), desde, demanda);
+        System.out.printf("Plan %s: %d corridas (%d variantes x %d escenarios x %d perfiles x %d instancias x %d repeticiones x %d algoritmos)%n",
+                plan.nombre(), plan.totalCorridas(), plan.variantes().size(), plan.escenariosOperativos().size(), plan.perfiles().size(),
+                plan.instancias(), plan.repeticiones(), plan.algoritmos().size());
 
         // 4) Instancias
         List<String> advertencias = new ArrayList<>(datos.advertencias());
         advertencias.addAll(limitesDelModelo(datos));
-        List<Escenario> escenarios = GeneradorEscenarios.generar(plan, base, datos, advertencias);
-        escenarios.forEach(e -> System.out.printf("  %s: %d pedidos (%d qq) vs capacidad %d qq, %d vehículos en mantenimiento, %d bloqueos activos%n",
-                e.id(), e.tamanio(), e.cantidadTotalQq(), e.capacidadDisponibleQq(), e.vehiculosEnMantenimiento().size(), e.bloqueosActivos().size()));
+        List<Escenario> escenarios = GeneradorEscenarios.generar(
+                plan, base, datos, demanda, bloqueosHistoricos, advertencias);
+        
+        ValidadorPreExperimento.validar(plan, base, escenarios);
+
+        System.out.println("Validación pre-experimento: OK");
+        escenarios.forEach(e -> System.out.printf(
+                "  %s: %d pedidos (%d qq) vs capacidad %d qq, %d vehículos en mantenimiento, %d bloqueos programados (%d activos a las 00:00)%n",
+                e.id(),
+                e.tamanio(),
+                e.cantidadTotalQq(),
+                e.capacidadDisponibleQq(),
+                e.vehiculosEnMantenimiento().size(),
+                e.bloqueosProgramados().size(),
+                e.bloqueosActivosEnInstante().size()));
 
         Path carpetaSalida = carpetaSalida(opciones, plan);
         var exportador = new ExportadorResultados(carpetaSalida);
@@ -133,24 +159,45 @@ public final class ExperimentacionMain {
         System.out.println("Resultados en " + carpetaSalida.toAbsolutePath());
     }
 
-    private static PlanExperimento construirPlan(Opciones o, Configuracion cfg, LocalDate primerDia) {
-        int tamanioBase = o.tieneValor("tamanio-base") ? Integer.parseInt(o.valor("tamanio-base", ""))
-                : enteros(cfg.texto("experimento.tamanios")).stream().min(Integer::compareTo).orElseThrow();
-        int instancias = Integer.parseInt(o.valor("instancias", "1"));
-        int repeticiones = o.tieneValor("repeticiones") ? Integer.parseInt(o.valor("repeticiones", "")) : cfg.entero("experimento.repeticiones");
+    private static PlanExperimento construirPlan(Opciones o,
+                                                   Configuracion cfg,
+                                                   LocalDate desde,
+                                                   ModeloDemandaHistorica.Resumen demanda) {
+        int instancias = Integer.parseInt(o.valor("instancias", "3"));
+        int repeticiones = o.tieneValor("repeticiones")
+                ? Integer.parseInt(o.valor("repeticiones", ""))
+                : cfg.entero("experimento.repeticiones");
         if (o.bandera("prueba")) {
             instancias = 1;
             repeticiones = Math.min(repeticiones, 2);
         }
+
         List<Variante> variantes = new ArrayList<>(List.of(Variante.base()));
         o.valores("variante").forEach(v -> variantes.add(Variante.parsear(v)));
-        String nombre = o.valor("nombre", "exp-" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")));
-        return new PlanExperimento(nombre, o.valor("perfil", "BASE"),
-                Arrays.stream(o.valor("algoritmos", "GENETICO,RECOCIDO_SIMULADO").split(",")).map(String::trim).toList(),
-                List.of(EscenarioOperativo.values()), List.of(PerfilPresion.values()), tamanioBase, instancias, repeticiones,
-                o.tieneValor("semilla") ? Long.parseLong(o.valor("semilla", "")) : cfg.largo("experimento.semillaBase"),
-                o.tieneValor("desde") ? LocalDate.parse(o.valor("desde", "")) : primerDia,
-                !o.bandera("sin-mantenimiento"), !o.bandera("sin-calentamiento"), variantes);
+        String nombre = o.valor("nombre",
+                "exp-" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")));
+
+        return new PlanExperimento(
+                nombre,
+                o.valor("perfil", "BASE"),
+                Arrays.stream(o.valor("algoritmos", "GENETICO,RECOCIDO_SIMULADO").split(","))
+                        .map(String::trim)
+                        .toList(),
+                List.of(EscenarioOperativo.values()),
+                List.of(PerfilPresion.values()),
+                demanda.p50(),
+                demanda.p75(),
+                demanda.p90(),
+                demanda.incrementoColapso(),
+                instancias,
+                repeticiones,
+                o.tieneValor("semilla")
+                        ? Long.parseLong(o.valor("semilla", ""))
+                        : cfg.largo("experimento.semillaBase"),
+                desde,
+                !o.bandera("sin-mantenimiento"),
+                !o.bandera("sin-calentamiento"),
+                variantes);
     }
 
     private static Path carpetaSalida(Opciones o, PlanExperimento plan) {
@@ -174,23 +221,26 @@ public final class ExperimentacionMain {
         return new ReglasCarga(base.anchoKm(), base.altoKm(), prioridades);
     }
 
-    /** Lo que el modelo estático actual no representa: queda escrito en el manifiesto para no sobrevender resultados. */
+    /** Límites que todavía pertenecen al modelo del planificador y no al diseño estadístico. */
     private static List<String> limitesDelModelo(DatosArchivos datos) {
         List<String> limites = new ArrayList<>();
-        limites.add("Modelo semi-estático: una salida por vehículo desde el almacén central, pedidos indivisibles, sin recargas ni turnos. "
-                + "Si el escenario tiene bloqueos activos, se replanifica una vez (planificación inicial sin el bloqueo -> replanificar() con el bloqueo activo); "
-                + "no hay averías de vehículo en curso ni una simulación continua de varios eventos.");
-        limites.add("Bloqueos Q7: +2km por tramo cuyo rectángulo Manhattan toque un nodo bloqueado; entregar en nodo bloqueado suma V.");
-        limites.add("El mantenimiento preventivo sí se aplica: el vehículo listado ese día queda no disponible para la instancia planificada ese día.");
-        limites.add("Cada instancia se planifica en el instante en que llegó su último pedido; los anteriores acumulan espera hasta ese momento.");
+        limites.add("Los tres escenarios usan una aproximación batch diaria: una salida por vehículo por jornada, pedidos indivisibles y sin modelado explícito de turnos o alimentación.");
+        limites.add("Los pedidos de una jornada se liberan al inicio del día conservando cantidad, prioridad, ubicación y horas de plazo; no se simulan llegadas intradía en esta versión.");
+        limites.add("La demanda de NORMAL, ALTA y CRITICA se deriva de P50, P75 y P90 del periodo histórico base; no se usan tamaños 25/38/55 fijados manualmente.");
+        limites.add("COLAPSO_LOGISTICO aumenta la cantidad esperada de pedidos cada día usando el incremento histórico P75-P50 y termina en el primer deadline que el planificador no logra mantener.");
+        limites.add("V penaliza restricciones duras representables por el modelo: capacidad, disponibilidad de vehículo, duplicidad, almacén/stock y rutas intransitables por bloqueos.");
+        limites.add("La prioridad se expresa mediante deadlines 4/8/12/18h frente a 36h; no existe un beta adicional por prioridad para no cambiar la F documentada.");
+        limites.add("Turnos y alimentación aún no forman parte de V porque Ruta/ContextoPlanificacion no modelan esas restricciones temporalmente.");
+        limites.add("Los bloqueos sintéticos se generan con P50/P75/P90 de eventos diarios históricos y conservan duración y forma de poligonales históricas, trasladadas a posiciones válidas de la ciudad.");
+        limites.add("Para la aproximación batch, todo bloqueo que intersecta una jornada se considera restricción durante esa jornada completa; no se simulan activaciones/desactivaciones intradía.");
+        limites.add("El mantenimiento preventivo sigue el calendario entregado y se repite bimestralmente; no depende del perfil de presión.");
+        limites.add("Las averías están deshabilitadas en esta versión de la experimentación hasta definir una regla de generación respaldada por el curso.");
+        limites.add("Cada ruta puede utilizar el almacén central o uno intermedio como origen; el stock de los almacenes intermedios limita las asignaciones y se restablece en cada jornada batch.");
         limites.add("Los pedidos de los .txt no tienen id: se numeran 1..N según el orden de llegada leído.");
-        if (datos.mantenimiento().isEmpty()) limites.add("Sin datos de mantenimiento: todas las instancias usan la flota completa de la BD.");
+        if (datos.mantenimiento().isEmpty()) limites.add("Sin datos de mantenimiento: las instancias usan la disponibilidad de la flota registrada en BD.");
         return limites;
     }
 
-    private static List<Integer> enteros(String texto) {
-        return Arrays.stream(texto.split(",")).map(String::trim).map(Integer::parseInt).toList();
-    }
 
     /** Parseo mínimo de --clave=valor y --bandera. */
     private record Opciones(Map<String, List<String>> valores, Set<String> banderas) {

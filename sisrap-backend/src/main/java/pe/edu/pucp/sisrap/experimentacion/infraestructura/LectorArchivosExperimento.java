@@ -63,7 +63,9 @@ public final class LectorArchivosExperimento {
     }
 
     /**
-     * Lee ventas desde {@code desde} y avanza mes a mes hasta reunir {@code pedidosNecesarios}.
+     * Lee ventas desde {@code desde}. Si {@code pedidosNecesarios == Integer.MAX_VALUE},
+     * recorre todos los meses consecutivos disponibles; esto se usa cuando el plan incluye
+     * COLAPSO_LOGISTICO, cuyo horizonte termina por condición y no por cantidad fija de pedidos.
      * Los bloqueos se leen para los mismos meses; el mantenimiento se lee completo.
      */
     public DatosArchivos leer(LocalDate desde, int pedidosNecesarios) {
@@ -78,7 +80,8 @@ public final class LectorArchivosExperimento {
 
         List<PedidoImportado> pedidos = new ArrayList<>();
         List<Bloqueo> listaBloqueos = new ArrayList<>();
-        while (pedidos.size() < pedidosNecesarios && ventas.containsKey(mes)) {
+        boolean leerTodo = pedidosNecesarios == Integer.MAX_VALUE;
+        while ((leerTodo || pedidos.size() < pedidosNecesarios) && ventas.containsKey(mes)) {
             for (PedidoImportado p : ImportarPedidos.parsear(mes, leerTexto(ventas.get(mes)), reglas))
                 if (!p.llegada().isBefore(desde.atStartOfDay())) pedidos.add(p);
             if (bloqueos.containsKey(mes)) listaBloqueos.addAll(parsearBloqueos(mes, leerTexto(bloqueos.get(mes))));

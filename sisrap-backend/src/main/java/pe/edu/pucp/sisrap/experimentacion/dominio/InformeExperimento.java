@@ -34,7 +34,8 @@ public record InformeExperimento(String id,String modelo,String versionImplement
         double costo,double distancia,double utilizacion,Double temperaturaInicial,
         List<PuntoConvergencia> convergencia,List<Asignacion> rutas,List<Long> noAsignados,
         String escenarioOperativo,String perfilPresion,Integer pedidosAfectadosIncidencia,
-        Integer vehiculosEnAveriaIncidente,Double tiempoReplanificacionMs,Boolean replanificacionExitosa) {}
+        Integer vehiculosEnAveriaIncidente,Double tiempoReplanificacionMs,Boolean replanificacionExitosa,
+        Integer tamanioAlColapso,Boolean colapsoAlcanzado,Double tiempoColapsoHoras,java.time.LocalDateTime instanteColapso) {}
     public record Estadistica(double media,double mediana,Double desviacionMuestral,double mejor,double peor) {}
     public record Resumen(String algoritmo,int tamanio,Map<String,Estadistica> metricas) {}
 }
