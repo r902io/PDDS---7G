@@ -4,7 +4,9 @@ import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 import java.util.function.BiFunction;
 
@@ -23,24 +25,13 @@ import pe.edu.pucp.sisrap.planificador.dominio.modelo.ContextoPlanificacion;
 import pe.edu.pucp.sisrap.planificador.dominio.modelo.Solucion;
 import pe.edu.pucp.sisrap.planificador.dominio.objetivo.FuncionObjetivo;
 
-/**
- * Simulación del escenario COLAPSO_LOGISTICO.
- *
- * La primera jornada parte del percentil del perfil:
- * NORMAL=P50, ALTA=P75, CRITICA=P90.
- * Después, la cantidad esperada aumenta cada día en (P75-P50) pedidos.
- *
- * La demanda y los bloqueos de N01/N02/N03 quedan fijos entre repeticiones;
- * solamente cambia la semilla interna del algoritmo.
- *
- * Cada día se resuelve con la misma aproximación batch de SimuladorJornada.
- * La simulación termina cuando la solución de una jornada contiene al menos un
- * pedido que ya no puede cumplir su deadline.
- */
+
 public final class SimuladorColapso {
     private static final long SALTO_SEMILLA_DIA_ALGORITMO = 104_729L;
+    private static final double NANOS_POR_HORA = 3_600_000_000_000.0;
 
-    private SimuladorColapso() {}
+    private SimuladorColapso() {
+    }
 
     public record Resultado(
             Solucion solucionFinal,
@@ -52,7 +43,8 @@ public final class SimuladorColapso {
             boolean colapsoAlcanzado,
             Double tiempoColapsoHoras,
             LocalDateTime instanteColapso,
-            int diasCompletados) {}
+            int diasCompletados) {
+    }
 
     public static Resultado simular(
             String algoritmo,
@@ -92,6 +84,7 @@ public final class SimuladorColapso {
                         escenario.instancia()));
 
         List<Bloqueo> bloqueosGenerados = new ArrayList<>();
+        List<Pedido> pendientes = new ArrayList<>();
 
         double tiempoTotalMs = 0.0;
         int evaluacionesTotales = 0;
@@ -103,6 +96,37 @@ public final class SimuladorColapso {
 
         for (int dia = 0; dia < maxDias; dia++) {
             LocalDate fechaJornada = fechaInicio.plusDays(dia);
+            LocalDateTime inicioJornada = fechaJornada.atStartOfDay();
+            LocalDateTime finJornada = inicioJornada.plusDays(1);
+
+            /*
+             * Salvaguarda: un pedido no debería llegar a una nueva jornada con
+             * el deadline ya vencido. Si ocurre, el colapso real fue exactamente
+             * en ese deadline y no al comienzo de la nueva jornada.
+             */
+            LocalDateTime vencidoAntesDePlanificar = pendientes.stream()
+                    .map(Pedido::getFechaLimite)
+                    .filter(limite -> !limite.isAfter(inicioJornada))
+                    .min(LocalDateTime::compareTo)
+                    .orElse(null);
+
+            if (vencidoAntesDePlanificar != null) {
+                if (ultimaSolucion == null || ultimoContexto == null || ultimoMotor == null) {
+                    throw new IllegalStateException(
+                            "Se detectó un pedido vencido antes de ejecutar la primera jornada de colapso");
+                }
+
+                return resultadoColapso(
+                        ultimaSolucion,
+                        ultimoContexto,
+                        ultimoMotor,
+                        tiempoTotalMs,
+                        evaluacionesTotales,
+                        tamanioUltimaJornada,
+                        inicioSimulacion,
+                        vencidoAntesDePlanificar,
+                        dia);
+            }
 
             double lambda = plan.lambdaPedidos(escenario.perfilPresion())
                     + (double) plan.incrementoColapsoDiario() * dia;
@@ -113,12 +137,20 @@ public final class SimuladorColapso {
                     escenario.instancia(),
                     dia);
 
-            List<Pedido> pedidosJornada = ModeloDemandaHistorica.generarDia(
+            List<Pedido> pedidosNuevos = ModeloDemandaHistorica.generarDia(
                     demanda,
                     lambda,
                     fechaJornada,
                     randomDemanda,
                     idInicial);
+
+            /*
+             * En cada jornada se vuelven a presentar al planificador los pedidos
+             * pendientes del día anterior junto con la nueva demanda generada.
+             */
+            List<Pedido> pedidosJornada = combinarPedidos(
+                    pendientes,
+                    pedidosNuevos);
 
             bloqueosGenerados.addAll(ModeloBloqueosHistoricos.generarDia(
                     bloqueosHistoricos,
@@ -152,23 +184,39 @@ public final class SimuladorColapso {
             ultimoMotor = resultadoDia.motor();
             tamanioUltimaJornada = resultadoDia.tamanio();
 
-            LocalDateTime instanteFallo = primerDeadlineIncumplido(ultimaSolucion);
-            if (instanteFallo != null) {
-                double horas = Duration.between(inicioSimulacion, instanteFallo)
-                        .toNanos() / 3_600_000_000_000.0;
+            /*
+             * Solo se declara colapso si el deadline incumplido ocurre dentro
+             * de la jornada que realmente acabamos de simular.
+             *
+             * Un pedido no asignado cuyo deadline cae mañana NO provoca todavía
+             * colapso: se conserva como pendiente y se vuelve a planificar.
+             */
+            LocalDateTime instanteFallo = primerDeadlineIncumplidoHasta(
+                    ultimaSolucion,
+                    finJornada);
 
-                return new Resultado(
+            if (instanteFallo != null) {
+                return resultadoColapso(
                         ultimaSolucion,
                         ultimoContexto,
                         ultimoMotor,
                         tiempoTotalMs,
                         evaluacionesTotales,
                         tamanioUltimaJornada,
-                        true,
-                        horas,
+                        inicioSimulacion,
                         instanteFallo,
                         dia);
             }
+
+            /*
+             * Se arrastran únicamente los pedidos que al finalizar la jornada
+             * todavía requieren otra oportunidad de planificación y que siguen
+             * teniendo un deadline futuro.
+             */
+            pendientes = pendientesParaSiguienteJornada(
+                    ultimaSolucion,
+                    ultimoContexto,
+                    finJornada);
         }
 
         if (ultimaSolucion == null || ultimoContexto == null || ultimoMotor == null) {
@@ -189,20 +237,60 @@ public final class SimuladorColapso {
                 maxDias);
     }
 
-    /** Devuelve el deadline más temprano que la solución no logra cumplir. */
-    private static LocalDateTime primerDeadlineIncumplido(Solucion solucion) {
+    /**
+     * Une pendientes y demanda nueva sin permitir IDs repetidos.
+     */
+    private static List<Pedido> combinarPedidos(
+            List<Pedido> pendientes,
+            List<Pedido> nuevos) {
+
+        Map<Long, Pedido> porId = new LinkedHashMap<>();
+
+        for (Pedido pedido : pendientes) {
+            if (porId.putIfAbsent(pedido.getIdPedido(), pedido) != null) {
+                throw new IllegalStateException(
+                        "Pedido pendiente duplicado: " + pedido.getIdPedido());
+            }
+        }
+
+        for (Pedido pedido : nuevos) {
+            if (porId.putIfAbsent(pedido.getIdPedido(), pedido) != null) {
+                throw new IllegalStateException(
+                        "ID de pedido repetido entre pendientes y nueva demanda: "
+                                + pedido.getIdPedido());
+            }
+        }
+
+        return new ArrayList<>(porId.values());
+    }
+
+    /**
+     * Devuelve el primer deadline realmente incumplido hasta el cierre de la
+     * jornada. Los deadlines posteriores se dejan para jornadas futuras.
+     */
+    private static LocalDateTime primerDeadlineIncumplidoHasta(
+            Solucion solucion,
+            LocalDateTime finJornada) {
+
         LocalDateTime primero = solucion.getPedidosNoAsignados().stream()
                 .map(Pedido::getFechaLimite)
+                .filter(limite -> !limite.isAfter(finJornada))
                 .min(LocalDateTime::compareTo)
                 .orElse(null);
 
         for (var ruta : solucion.getRutas()) {
             for (int i = 0; i < ruta.getSecuenciaPedidos().size(); i++) {
-                if (ruta.retrasoDe(i) <= 0) continue;
+                if (ruta.retrasoDe(i) <= 0) {
+                    continue;
+                }
 
                 LocalDateTime limite = ruta.getSecuenciaPedidos()
                         .get(i)
                         .getFechaLimite();
+
+                if (limite.isAfter(finJornada)) {
+                    continue;
+                }
 
                 if (primero == null || limite.isBefore(primero)) {
                     primero = limite;
@@ -211,5 +299,96 @@ public final class SimuladorColapso {
         }
 
         return primero;
+    }
+
+    /**
+     * Construye la cola de pedidos que deben volver a planificarse en la
+     * siguiente jornada.
+     *
+     * 1) Todo pedido no asignado cuyo deadline todavía está vigente.
+     * 2) Una entrega asignada pero prevista después del cierre de la jornada.
+     * 3) Una entrega que ya se sabe tardía, pero cuyo deadline ocurre después
+     *    del cierre actual; se le da una nueva oportunidad al día siguiente.
+     */
+    private static List<Pedido> pendientesParaSiguienteJornada(
+            Solucion solucion,
+            ContextoPlanificacion contexto,
+            LocalDateTime finJornada) {
+
+        Map<Long, Pedido> pendientes = new LinkedHashMap<>();
+
+        for (Pedido pedido : solucion.getPedidosNoAsignados()) {
+            if (pedido.getFechaLimite().isAfter(finJornada)) {
+                pendientes.put(pedido.getIdPedido(), pedido);
+            }
+        }
+
+        for (var ruta : solucion.getRutas()) {
+            for (int i = 0; i < ruta.getSecuenciaPedidos().size(); i++) {
+                Pedido pedido = ruta.getSecuenciaPedidos().get(i);
+
+                double horasEntrega = ruta.horaEntregaDe(i);
+                LocalDateTime instanteEntrega = sumarHoras(
+                        contexto.instante(),
+                        horasEntrega);
+
+                boolean terminaDespuesDeLaJornada = instanteEntrega.isAfter(finJornada);
+                boolean entregaTardiaConDeadlineFuturo = ruta.retrasoDe(i) > 0
+                        && pedido.getFechaLimite().isAfter(finJornada);
+
+                if ((terminaDespuesDeLaJornada || entregaTardiaConDeadlineFuturo)
+                        && pedido.getFechaLimite().isAfter(finJornada)) {
+                    pendientes.putIfAbsent(pedido.getIdPedido(), pedido);
+                }
+            }
+        }
+
+        return new ArrayList<>(pendientes.values());
+    }
+
+    private static LocalDateTime sumarHoras(
+            LocalDateTime inicio,
+            double horas) {
+
+        if (!Double.isFinite(horas) || horas < 0) {
+            return LocalDateTime.MAX;
+        }
+
+        long nanos = Math.round(horas * NANOS_POR_HORA);
+        return inicio.plusNanos(nanos);
+    }
+
+    private static Resultado resultadoColapso(
+            Solucion solucion,
+            ContextoPlanificacion contexto,
+            IAlgoritmoPlanificacion motor,
+            double tiempoTotalMs,
+            int evaluacionesTotales,
+            int tamanioUltimaJornada,
+            LocalDateTime inicioSimulacion,
+            LocalDateTime instanteFallo,
+            int diasCompletados) {
+
+        double horas = Duration.between(
+                inicioSimulacion,
+                instanteFallo)
+                .toNanos() / NANOS_POR_HORA;
+
+        if (horas < 0) {
+            throw new IllegalStateException(
+                    "El instante de colapso no puede ser anterior al inicio de la simulación");
+        }
+
+        return new Resultado(
+                solucion,
+                contexto,
+                motor,
+                tiempoTotalMs,
+                evaluacionesTotales,
+                tamanioUltimaJornada,
+                true,
+                horas,
+                instanteFallo,
+                diasCompletados);
     }
 }

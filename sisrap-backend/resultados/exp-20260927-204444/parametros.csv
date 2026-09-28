@@ -1,4 +1,6 @@
 variante,clave,valor
+BASE,sa.enfriamiento,0.95
+BASE,sa.temperaturaInicial,1000
 BASE,ga.cruzamiento,0.9
 BASE,prioridad.PRIORIZADO_18H,18
 BASE,operacion.servicioHoras,1
@@ -31,5 +33,3 @@ BASE,sa.aceptacion,0.6
 BASE,sa.recalentamiento,0.3
 BASE,operacion.servicioDentroPlazo,true
 BASE,ga.proporcionVoraz,0.5
-BASE,sa.enfriamiento,0.95
-BASE,sa.temperaturaInicial,1000

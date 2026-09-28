@@ -8,7 +8,6 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Random;
 import java.util.Set;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
@@ -29,7 +28,7 @@ import pe.edu.pucp.sisrap.planificador.dominio.algoritmo.AlgoritmoGenetico;
 import pe.edu.pucp.sisrap.planificador.dominio.algoritmo.IAlgoritmoPlanificacion;
 import pe.edu.pucp.sisrap.planificador.dominio.algoritmo.RecocidoSimulado;
 import pe.edu.pucp.sisrap.planificador.dominio.modelo.ContextoPlanificacion;
-import pe.edu.pucp.sisrap.planificador.dominio.modelo.PuntoConvergencia;
+import pe.edu.pucp.sisrap.planificador.dominio.modelo.DistanciaReticula;
 import pe.edu.pucp.sisrap.planificador.dominio.modelo.Solucion;
 import pe.edu.pucp.sisrap.planificador.dominio.objetivo.FuncionObjetivo;
 
@@ -126,6 +125,8 @@ public final class CorredorExperimento {
                         plan,
                         cfg,
                         contextoCalentamiento);
+
+                DistanciaReticula.limpiarCache();
             }
         }
 
@@ -136,22 +137,55 @@ public final class CorredorExperimento {
                     Collections.rotate(orden, -repeticion);
 
                     for (String algoritmo : orden) {
-                        CorridaRegistrada corrida = switch (escenario.escenarioOperativo()) {
-                            case COLAPSO_LOGISTICO -> ejecutarColapso(
-                                    variante.nombre(), algoritmo, cfg, reglas, plan, base, archivos,
-                                    escenario, repeticion, semilla, avisosDeVerificacion);
-                            case SIMULACION_CINCO_DIAS -> ejecutarCincoDias(
-                                    variante.nombre(), algoritmo, cfg, reglas, plan, base, archivos,
-                                    escenario, repeticion, semilla, avisosDeVerificacion);
-                            case OPERACION_DIARIA -> ejecutarOperacionDiaria(
-                                    variante.nombre(), algoritmo, cfg, reglas, plan, base, archivos,
-                                    escenario, repeticion, semilla, avisosDeVerificacion);
+                        DistanciaReticula.limpiarCache();
+
+                        CorridaRegistrada corrida = switch (
+                                escenario.escenarioOperativo()) {
+
+                                case COLAPSO_LOGISTICO -> ejecutarColapso(
+                                        variante.nombre(),
+                                        algoritmo,
+                                        cfg,
+                                        reglas,
+                                        plan,
+                                        base,
+                                        archivos,
+                                        escenario,
+                                        repeticion,
+                                        semilla,
+                                        avisosDeVerificacion);
+
+                                case SIMULACION_CINCO_DIAS -> ejecutarCincoDias(
+                                        variante.nombre(),
+                                        algoritmo,
+                                        cfg,
+                                        reglas,
+                                        plan,
+                                        base,
+                                        archivos,
+                                        escenario,
+                                        repeticion,
+                                        semilla,
+                                        avisosDeVerificacion);
+
+                                case OPERACION_DIARIA -> ejecutarOperacionDiaria(
+                                        variante.nombre(),
+                                        algoritmo,
+                                        cfg,
+                                        reglas,
+                                        plan,
+                                        base,
+                                        archivos,
+                                        escenario,
+                                        repeticion,
+                                        semilla,
+                                        avisosDeVerificacion);
                         };
 
                         corridas.add(corrida);
                         alTerminarCorrida.accept(corrida);
                         hechas++;
-                    }
+                        }
                 }
                 registro.accept(progreso(variante.nombre(), escenario.id(), hechas, total, t0));
             }
@@ -227,97 +261,6 @@ public final class CorredorExperimento {
                 verificada,
                 corrida);
     }
-
-    private CorridaRegistrada ejecutarEstatica(String variante,
-                                                String algoritmo,
-                                                Configuracion cfg,
-                                                BaseOperativa base,
-                                                Escenario escenario,
-                                                int repeticion,
-                                                long semilla,
-                                                Set<String> avisos) {
-        ContextoPlanificacion contexto = escenario.contexto(base, ReglasPlanificacion.desde(cfg));
-        var parametros = new ParametrosAlgoritmo(cfg, semilla);
-        var objetivo = new FuncionObjetivo(cfg, contexto);
-        IAlgoritmoPlanificacion motor = fabricas.get(algoritmo).apply(parametros, objetivo);
-
-        long inicio = System.nanoTime();
-        Solucion solucion = motor.planificar(contexto);
-        double ms = (System.nanoTime() - inicio) / 1_000_000.0;
-
-        String etiqueta = variante + "/" + escenario.id() + "/" + algoritmo;
-        boolean verificada = verificar(solucion, contexto, cfg, etiqueta, avisos);
-        ContextoPlanificacion contextoMedicion = contexto;
-
-        Integer pedidosAfectados = null;
-        Integer vehiculosAveria = null;
-        Double tiempoReplanificacionMs = null;
-        Boolean replanificacionExitosa = null;
-
-        if (escenario.escenarioOperativo() == EscenarioOperativo.OPERACION_DIARIA
-                && escenario.perfilPresion().simulaIncidencia()) {
-            var incidencia = SimuladorIncidencias.simular(
-                    solucion,
-                    contexto,
-                    escenario.perfilPresion(),
-                    new Random(semilla + 987_654_321L));
-
-            pedidosAfectados = incidencia.pedidosAfectados();
-            vehiculosAveria = incidencia.vehiculosEnAveria();
-
-            // El mismo motor conserva su estado/warm-start, pero la función objetivo debe
-            // evaluar el contexto vigente después de la incidencia.
-            objetivo.actualizarContexto(incidencia.contextoTrasIncidencia());
-            long inicioReplan = System.nanoTime();
-            Solucion replan = motor.replanificar(
-                    incidencia.solucionTrasIncidencia(),
-                    incidencia.contextoTrasIncidencia());
-            tiempoReplanificacionMs = (System.nanoTime() - inicioReplan) / 1_000_000.0;
-
-            boolean verificadaReplan = verificar(
-                    replan,
-                    incidencia.contextoTrasIncidencia(),
-                    cfg,
-                    etiqueta + "/replanificacion",
-                    avisos);
-
-            replanificacionExitosa = verificadaReplan
-                    && replan.isEsFactible()
-                    && replan.getPedidosNoAsignados().isEmpty();
-
-            solucion = replan;
-            contextoMedicion = incidencia.contextoTrasIncidencia();
-            verificada = verificada && verificadaReplan;
-        }
-
-        var corrida = MedicionCorridas.medir(
-                algoritmo,
-                escenario.tamanio(),
-                semilla,
-                ms,
-                solucion,
-                contextoMedicion,
-                motor,
-                escenario.escenarioOperativo().name(),
-                escenario.perfilPresion().name(),
-                pedidosAfectados,
-                vehiculosAveria,
-                tiempoReplanificacionMs,
-                replanificacionExitosa);
-
-        List<PuntoConvergencia> traza = corrida.convergencia();
-        int evaluaciones = traza.isEmpty() ? 0 : traza.get(traza.size() - 1).evaluaciones();
-
-        return new CorridaRegistrada(
-                variante,
-                escenario.id(),
-                escenario.instancia(),
-                repeticion,
-                evaluaciones,
-                verificada,
-                corrida);
-    }
-
 
     private CorridaRegistrada ejecutarCincoDias(String variante,
                                                  String algoritmo,

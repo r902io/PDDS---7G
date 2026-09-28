@@ -21,16 +21,6 @@ import pe.edu.pucp.sisrap.planificador.dominio.modelo.ContextoPlanificacion;
 import pe.edu.pucp.sisrap.planificador.dominio.modelo.Solucion;
 import pe.edu.pucp.sisrap.planificador.dominio.objetivo.FuncionObjetivo;
 
-/**
- * Ejecuta una jornada como un problema batch diario.
- *
- * Todos los pedidos generados para una jornada se consideran disponibles
- * al inicio del día. Se conservan cantidad, prioridad, ubicación y horas
- * comprometidas de entrega.
- *
- * Los bloqueos cuyo intervalo intersecta la jornada se consideran durante
- * la planificación de esa jornada.
- */
 public final class SimuladorJornada {
 
     private SimuladorJornada() {
@@ -167,13 +157,13 @@ public final class SimuladorJornada {
                 fecha.atStartOfDay();
 
         /*
-         * El planificador es batch.
-         *
-         * Por ello todos los pedidos del día se liberan a las 00:00
-         * preservando las horas de plazo.
+         * El experimento es batch diario con información completa de la demanda
+         * sintética del día. Se conserva la llegada real de cada pedido para
+         * calcular espera, entrega y deadline; únicamente se adelanta el instante
+         * desde el que el planificador conoce el pedido.
          */
         List<Pedido> pedidos =
-                normalizarPedidos(
+                prepararPedidosBatch(
                         pedidosOriginales,
                         inicioJornada);
 
@@ -196,11 +186,12 @@ public final class SimuladorJornada {
                         Set.of());
 
         /*
-         * Se toman todos los bloqueos cuyo intervalo intersecta
-         * la jornada.
+         * Se utiliza el snapshot con mayor cantidad de bloqueos simultáneamente
+         * activos. Esto preserva la presión vial sin convertir todos los eventos
+         * del día en un único bloqueo permanente.
          */
         List<Bloqueo> bloqueosJornada =
-                bloqueosQueIntersectanJornada(
+                bloqueosPicoJornada(
                         bloqueosProgramados,
                         inicioJornada);
 
@@ -219,52 +210,84 @@ public final class SimuladorJornada {
     }
 
     /**
-     * Convierte los pedidos generados del día al modelo batch.
-     *
-     * El nuevo deadline se obtiene automáticamente mediante
-     * Pedido#getFechaLimite():
-     *
-     * fechaLlegadaNormalizada + horasLimite.
+     * Hace visible el pedido desde el inicio de la jornada sin modificar su
+     * fecha real de llegada ni, por tanto, su fecha límite.
      */
-    static List<Pedido> normalizarPedidos(
+    static List<Pedido> prepararPedidosBatch(
             List<Pedido> fuente,
             LocalDateTime inicioJornada) {
 
         return fuente.stream()
                 .sorted(
                         Comparator
-                                .comparing(
-                                        Pedido::getFechaLlegada)
-                                .thenComparing(
-                                        Pedido::getIdPedido))
-                .map(p ->
-                        new Pedido(
-                                p.getIdPedido(),
-                                p.getIdCliente(),
-                                p.getCantidadQq(),
-                                p.getPrioridad(),
-                                p.getUbicacion(),
-                                inicioJornada,
-                                p.getHorasLimite()))
+                                .comparing(Pedido::getFechaLlegada)
+                                .thenComparing(Pedido::getIdPedido))
+                .map(p -> {
+                    /*
+                     * Pedido nuevo del día: el experimento batch permite que el
+                     * planificador lo conozca desde las 00:00.
+                     *
+                     * Pedido pendiente de una jornada anterior: ya era conocido,
+                     * por lo que se conserva su disponibilidad original. Intentar
+                     * moverla al inicio del día actual la haría posterior a su
+                     * fecha real de llegada y sería conceptualmente incorrecto.
+                     */
+                    if (!p.getFechaDisponiblePlanificacion().isAfter(inicioJornada)) {
+                        return p;
+                    }
+                    return p.disponibleDesde(inicioJornada);
+                })
                 .toList();
     }
 
     /**
-     * Un bloqueo pertenece a una jornada cuando existe intersección
-     * entre su intervalo temporal y [inicioDia, inicioDia + 24h).
+     * Devuelve los bloqueos simultáneamente activos en el instante de máxima
+     * concurrencia dentro de la jornada. Los bloqueos que cruzan medianoche se
+     * consideran también al inicio del día.
      */
-    static List<Bloqueo> bloqueosQueIntersectanJornada(
+    public static List<Bloqueo> bloqueosPicoJornada(
             List<Bloqueo> programados,
             LocalDateTime inicioJornada) {
 
-        LocalDateTime finJornada =
-                inicioJornada.plusDays(1);
+        LocalDateTime finJornada = inicioJornada.plusDays(1);
 
-        return programados.stream()
-                .filter(b ->
-                        b.inicio().isBefore(finJornada)
-                                && b.fin()
-                                        .isAfter(inicioJornada))
+        List<Bloqueo> delDia = programados.stream()
+                .filter(b -> b.inicio().isBefore(finJornada)
+                        && b.fin().isAfter(inicioJornada))
+                .toList();
+
+        if (delDia.isEmpty()) return List.of();
+
+        List<LocalDateTime> candidatos = new java.util.ArrayList<>();
+        candidatos.add(inicioJornada);
+        delDia.stream()
+                .map(Bloqueo::inicio)
+                .filter(t -> !t.isBefore(inicioJornada) && t.isBefore(finJornada))
+                .sorted()
+                .forEach(candidatos::add);
+
+        LocalDateTime mejorInstante = inicioJornada;
+        int mejorCantidad = -1;
+
+        for (LocalDateTime candidato : candidatos) {
+            int cantidad = 0;
+            for (Bloqueo bloqueo : delDia) {
+                boolean activo = !bloqueo.inicio().isAfter(candidato)
+                        && bloqueo.fin().isAfter(candidato);
+                if (activo) cantidad++;
+            }
+
+            if (cantidad > mejorCantidad) {
+                mejorCantidad = cantidad;
+                mejorInstante = candidato;
+            }
+        }
+
+        LocalDateTime instantePico = mejorInstante;
+        return delDia.stream()
+                .filter(b -> !b.inicio().isAfter(instantePico)
+                        && b.fin().isAfter(instantePico))
                 .toList();
     }
+
 }

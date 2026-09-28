@@ -12,9 +12,7 @@ import pe.edu.pucp.sisrap.geografia.dominio.Nodo;
 import pe.edu.pucp.sisrap.parametros.dominio.ReglasPlanificacion;
 import pe.edu.pucp.sisrap.pedido.dominio.Pedido;
 
-/*
-  Ruta de una unidad de transporte.
- */
+/** Ruta de una unidad de transporte. */
 public class Ruta {
 
     private final Vehiculo vehiculo;
@@ -30,10 +28,6 @@ public class Ruta {
 
     private Set<String> nodosBloqueados = Set.of();
     private List<Almacen> almacenesCandidatos = List.of();
-
-    /**
-     * Indica que al menos uno de los tramos de la ruta no posee camino válido.
-     */
     private boolean intransitable;
 
     public Ruta(
@@ -41,7 +35,6 @@ public class Ruta {
             Almacen origen,
             LocalDateTime inicio,
             ReglasPlanificacion reglas) {
-
         this.vehiculo = vehiculo;
         this.almacenOrigen = origen;
         this.inicio = inicio;
@@ -49,31 +42,18 @@ public class Ruta {
     }
 
     public void setNodosBloqueados(Set<String> nodos) {
-        this.nodosBloqueados = nodos == null
-                ? Set.of()
-                : Set.copyOf(nodos);
+        this.nodosBloqueados = nodos == null ? Set.of() : nodos;
     }
 
-    public Set<String> getNodosBloqueados() {
-        return nodosBloqueados;
-    }
-
-    public boolean isIntransitable() {
-        return intransitable;
-    }
+    public Set<String> getNodosBloqueados() { return nodosBloqueados; }
+    public boolean isIntransitable() { return intransitable; }
 
     public Ruta copiar() {
-        Ruta copia = new Ruta(
-                vehiculo,
-                almacenOrigen,
-                inicio,
-                reglas);
-
+        Ruta copia = new Ruta(vehiculo, almacenOrigen, inicio, reglas);
         copia.nodosBloqueados = nodosBloqueados;
         copia.almacenesCandidatos = almacenesCandidatos;
         copia.secuenciaPedidos.addAll(secuenciaPedidos);
         copia.recalcular();
-
         return copia;
     }
 
@@ -83,174 +63,171 @@ public class Ruta {
                 .sum();
     }
 
+    /**
+     * Recalcula distancia/costo y tiempo operacional. Si una ruta alcanza un
+     * pedido antes de su hora real de llegada, el vehículo espera hasta que el
+     * pedido esté disponible para ser atendido.
+     */
     public void recalcular() {
         intransitable = false;
-
-        double distancia = 0.0;
-
+        double distanciaPasos = 0.0;
         Nodo posicion = almacenOrigen.getUbicacion();
+        LocalDateTime reloj = inicio;
 
         for (Pedido pedido : secuenciaPedidos) {
-            distancia += distanciaEntre(
-                    posicion,
-                    pedido.getUbicacion());
+            int pasos = pasosEntre(posicion, pedido.getUbicacion());
+            if (pasos < 0) {
+                intransitable = true;
+                pasos = posicion.distanciaManhattan(pedido.getUbicacion());
+            }
 
+            distanciaPasos += pasos;
+            reloj = sumarHoras(reloj,
+                    pasos * reglas.distanciaNodoKm() / vehiculo.getVelocidadKmh());
+
+            if (reloj.isBefore(pedido.getFechaLlegada())) {
+                reloj = pedido.getFechaLlegada();
+            }
+
+            reloj = sumarHoras(reloj, reglas.servicioHoras());
             posicion = pedido.getUbicacion();
         }
 
-        if (reglas.incluirRetorno()
-                && !secuenciaPedidos.isEmpty()) {
-
-            distancia += distanciaEntre(
-                    posicion,
-                    almacenOrigen.getUbicacion());
+        if (reglas.incluirRetorno() && !secuenciaPedidos.isEmpty()) {
+            int pasos = pasosEntre(posicion, almacenOrigen.getUbicacion());
+            if (pasos < 0) {
+                intransitable = true;
+                pasos = posicion.distanciaManhattan(almacenOrigen.getUbicacion());
+            }
+            distanciaPasos += pasos;
+            reloj = sumarHoras(reloj,
+                    pasos * reglas.distanciaNodoKm() / vehiculo.getVelocidadKmh());
         }
 
-        distanciaTotalKm =
-                distancia * reglas.distanciaNodoKm();
-
-        costoTotal =
-                distanciaTotalKm * vehiculo.getCostoPorKm();
-
-        tiempoTotalHoras =
-                distanciaTotalKm / vehiculo.getVelocidadKmh()
-                        + secuenciaPedidos.size()
-                        * reglas.servicioHoras();
+        distanciaTotalKm = distanciaPasos * reglas.distanciaNodoKm();
+        costoTotal = distanciaTotalKm * vehiculo.getCostoPorKm();
+        tiempoTotalHoras = horasEntre(inicio, reloj);
     }
 
     public double horaLlegadaDe(int indice) {
-        double distancia = 0.0;
-
-        Nodo posicion = almacenOrigen.getUbicacion();
-
-        for (int i = 0; i <= indice; i++) {
-            Pedido pedido = secuenciaPedidos.get(i);
-
-            distancia += distanciaEntre(
-                    posicion,
-                    pedido.getUbicacion());
-
-            posicion = pedido.getUbicacion();
-        }
-
-        return distancia * reglas.distanciaNodoKm()
-                / vehiculo.getVelocidadKmh()
-                + indice * reglas.servicioHoras();
+        return horasEntre(inicio, fechaLlegadaRutaDe(indice));
     }
 
     /**
-     * Evalúa la hora relativa de llegada si se agregara un pedido al final de
-     * la ruta usando un almacén candidato, sin modificar el estado de la ruta.
-     * Devuelve infinito si alguno de los tramos no tiene camino válido.
+     * Evalúa la hora relativa de llegada si se agrega un pedido al final de la
+     * ruta usando un almacén candidato. Respeta las horas reales de llegada de
+     * los pedidos y devuelve infinito cuando algún tramo no tiene camino.
      */
     public double horaLlegadaSiAgrega(Pedido nuevoPedido, Almacen origenCandidato) {
         if (nuevoPedido == null || origenCandidato == null) {
             throw new IllegalArgumentException("Pedido/origen candidato inválido");
         }
 
-        double distancia = 0.0;
         Nodo posicion = origenCandidato.getUbicacion();
+        LocalDateTime reloj = inicio;
 
         for (Pedido pedido : secuenciaPedidos) {
-            int pasos = DistanciaReticula.distancia(
-                    posicion,
-                    pedido.getUbicacion(),
-                    nodosBloqueados,
-                    reglas.anchoCiudad(),
-                    reglas.altoCiudad());
+            int pasos = pasosEntre(posicion, pedido.getUbicacion());
+            if (pasos < 0) return Double.POSITIVE_INFINITY;
 
-            if (pasos < 0) {
-                return Double.POSITIVE_INFINITY;
+            reloj = sumarHoras(reloj,
+                    pasos * reglas.distanciaNodoKm() / vehiculo.getVelocidadKmh());
+            if (reloj.isBefore(pedido.getFechaLlegada())) {
+                reloj = pedido.getFechaLlegada();
             }
-
-            distancia += pasos;
+            reloj = sumarHoras(reloj, reglas.servicioHoras());
             posicion = pedido.getUbicacion();
         }
 
-        int pasosFinales = DistanciaReticula.distancia(
-                posicion,
-                nuevoPedido.getUbicacion(),
-                nodosBloqueados,
-                reglas.anchoCiudad(),
-                reglas.altoCiudad());
+        int pasosFinales = pasosEntre(posicion, nuevoPedido.getUbicacion());
+        if (pasosFinales < 0) return Double.POSITIVE_INFINITY;
 
-        if (pasosFinales < 0) {
-            return Double.POSITIVE_INFINITY;
+        reloj = sumarHoras(reloj,
+                pasosFinales * reglas.distanciaNodoKm() / vehiculo.getVelocidadKmh());
+        if (reloj.isBefore(nuevoPedido.getFechaLlegada())) {
+            reloj = nuevoPedido.getFechaLlegada();
         }
 
-        distancia += pasosFinales;
-
-        return distancia * reglas.distanciaNodoKm()
-                / vehiculo.getVelocidadKmh()
-                + secuenciaPedidos.size() * reglas.servicioHoras();
+        return horasEntre(inicio, reloj);
     }
 
     public double horaEntregaDe(int indice) {
-        return horaLlegadaDe(indice)
-                + reglas.servicioHoras();
+        LocalDateTime entrega = sumarHoras(
+                fechaLlegadaRutaDe(indice),
+                reglas.servicioHoras());
+        return horasEntre(inicio, entrega);
     }
 
     public double tiempoAtencionDe(int indice) {
-        return Duration.between(
-                secuenciaPedidos.get(indice).getFechaLlegada(),
-                inicio)
-                .toNanos()
-                / 3_600_000_000_000.0
-                + horaEntregaDe(indice);
+        Pedido pedido = secuenciaPedidos.get(indice);
+        LocalDateTime entrega = sumarHoras(
+                fechaLlegadaRutaDe(indice),
+                reglas.servicioHoras());
+        return Math.max(0.0, horasEntre(pedido.getFechaLlegada(), entrega));
     }
 
     public double retrasoDe(int indice) {
         Pedido pedido = secuenciaPedidos.get(indice);
+        LocalDateTime momento = reglas.servicioDentroPlazo()
+                ? sumarHoras(fechaLlegadaRutaDe(indice), reglas.servicioHoras())
+                : fechaLlegadaRutaDe(indice);
 
-        double disponible =
-                Duration.between(
-                        inicio,
-                        pedido.getFechaLimite())
-                        .toNanos()
-                        / 3_600_000_000_000.0;
-
-        double momentoEntrega =
-                reglas.servicioDentroPlazo()
-                        ? horaEntregaDe(indice)
-                        : horaLlegadaDe(indice);
-
-        return Math.max(
-                0.0,
-                momentoEntrega - disponible);
+        if (!momento.isAfter(pedido.getFechaLimite())) return 0.0;
+        return horasEntre(pedido.getFechaLimite(), momento);
     }
 
-    private double distanciaEntre(
-            Nodo origen,
-            Nodo destino) {
+    private LocalDateTime fechaLlegadaRutaDe(int indice) {
+        if (indice < 0 || indice >= secuenciaPedidos.size()) {
+            throw new IndexOutOfBoundsException("Índice de pedido fuera de ruta");
+        }
 
-        int pasos = DistanciaReticula.distancia(
+        Nodo posicion = almacenOrigen.getUbicacion();
+        LocalDateTime reloj = inicio;
+
+        for (int i = 0; i <= indice; i++) {
+            Pedido pedido = secuenciaPedidos.get(i);
+            int pasos = pasosEntre(posicion, pedido.getUbicacion());
+            if (pasos < 0) {
+                pasos = posicion.distanciaManhattan(pedido.getUbicacion());
+            }
+
+            reloj = sumarHoras(reloj,
+                    pasos * reglas.distanciaNodoKm() / vehiculo.getVelocidadKmh());
+
+            if (reloj.isBefore(pedido.getFechaLlegada())) {
+                reloj = pedido.getFechaLlegada();
+            }
+
+            if (i == indice) return reloj;
+
+            reloj = sumarHoras(reloj, reglas.servicioHoras());
+            posicion = pedido.getUbicacion();
+        }
+
+        throw new IllegalStateException("No se pudo calcular la llegada");
+    }
+
+    private int pasosEntre(Nodo origen, Nodo destino) {
+        return DistanciaReticula.distancia(
                 origen,
                 destino,
                 nodosBloqueados,
                 reglas.anchoCiudad(),
                 reglas.altoCiudad());
-
-        if (pasos >= 0) {
-            return pasos;
-        }
-
-        /*
-         * La ruta queda marcada como infactible.
-         * Se mantiene una distancia finita únicamente para evitar NaN/Infinity
-         * en las métricas. FuncionObjetivo penalizará la infactibilidad mediante V.
-         */
-        intransitable = true;
-
-        return origen.distanciaManhattan(destino);
     }
 
-    public Vehiculo getVehiculo() {
-        return vehiculo;
+    private static LocalDateTime sumarHoras(LocalDateTime base, double horas) {
+        long nanos = Math.round(horas * 3_600_000_000_000.0);
+        return base.plusNanos(nanos);
     }
 
-    public Almacen getAlmacenOrigen() {
-        return almacenOrigen;
+    private static double horasEntre(LocalDateTime desde, LocalDateTime hasta) {
+        return Duration.between(desde, hasta).toNanos()
+                / 3_600_000_000_000.0;
     }
+
+    public Vehiculo getVehiculo() { return vehiculo; }
+    public Almacen getAlmacenOrigen() { return almacenOrigen; }
 
     public void setAlmacenOrigen(Almacen almacenOrigen) {
         if (almacenOrigen == null) {
@@ -260,26 +237,14 @@ public class Ruta {
     }
 
     public void setAlmacenesCandidatos(List<Almacen> almacenes) {
-        this.almacenesCandidatos = almacenes == null ? List.of() : List.copyOf(almacenes);
+        this.almacenesCandidatos = almacenes == null
+                ? List.of()
+                : List.copyOf(almacenes);
     }
 
-    public List<Almacen> getAlmacenesCandidatos() {
-        return almacenesCandidatos;
-    }
-
-    public List<Pedido> getSecuenciaPedidos() {
-        return secuenciaPedidos;
-    }
-
-    public double getDistanciaTotalKm() {
-        return distanciaTotalKm;
-    }
-
-    public double getCostoTotal() {
-        return costoTotal;
-    }
-
-    public double getTiempoTotalHoras() {
-        return tiempoTotalHoras;
-    }
+    public List<Almacen> getAlmacenesCandidatos() { return almacenesCandidatos; }
+    public List<Pedido> getSecuenciaPedidos() { return secuenciaPedidos; }
+    public double getDistanciaTotalKm() { return distanciaTotalKm; }
+    public double getCostoTotal() { return costoTotal; }
+    public double getTiempoTotalHoras() { return tiempoTotalHoras; }
 }

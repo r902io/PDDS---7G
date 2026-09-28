@@ -130,14 +130,13 @@ public final class ExperimentacionMain {
 
         System.out.println("Validación pre-experimento: OK");
         escenarios.forEach(e -> System.out.printf(
-                "  %s: %d pedidos (%d qq) vs capacidad %d qq, %d vehículos en mantenimiento, %d bloqueos programados (%d activos a las 00:00)%n",
+                "  %s: %d pedidos (%d qq) vs capacidad %d qq, %d vehículos en mantenimiento, %d bloqueos programados%n",
                 e.id(),
                 e.tamanio(),
                 e.cantidadTotalQq(),
                 e.capacidadDisponibleQq(),
                 e.vehiculosEnMantenimiento().size(),
-                e.bloqueosProgramados().size(),
-                e.bloqueosActivosEnInstante().size()));
+                e.bloqueosProgramados().size()));
 
         Path carpetaSalida = carpetaSalida(opciones, plan);
         var exportador = new ExportadorResultados(carpetaSalida);
@@ -225,14 +224,14 @@ public final class ExperimentacionMain {
     private static List<String> limitesDelModelo(DatosArchivos datos) {
         List<String> limites = new ArrayList<>();
         limites.add("Los tres escenarios usan una aproximación batch diaria: una salida por vehículo por jornada, pedidos indivisibles y sin modelado explícito de turnos o alimentación.");
-        limites.add("Los pedidos de una jornada se liberan al inicio del día conservando cantidad, prioridad, ubicación y horas de plazo; no se simulan llegadas intradía en esta versión.");
+        limites.add("La experimentación usa planificación batch diaria con información completa de la demanda sintética del día; se conservan las horas reales de llegada y deadlines, y una ruta espera si alcanza un pedido antes de su llegada.");
         limites.add("La demanda de NORMAL, ALTA y CRITICA se deriva de P50, P75 y P90 del periodo histórico base; no se usan tamaños 25/38/55 fijados manualmente.");
         limites.add("COLAPSO_LOGISTICO aumenta la cantidad esperada de pedidos cada día usando el incremento histórico P75-P50 y termina en el primer deadline que el planificador no logra mantener.");
         limites.add("V penaliza restricciones duras representables por el modelo: capacidad, disponibilidad de vehículo, duplicidad, almacén/stock y rutas intransitables por bloqueos.");
         limites.add("La prioridad se expresa mediante deadlines 4/8/12/18h frente a 36h; no existe un beta adicional por prioridad para no cambiar la F documentada.");
         limites.add("Turnos y alimentación aún no forman parte de V porque Ruta/ContextoPlanificacion no modelan esas restricciones temporalmente.");
         limites.add("Los bloqueos sintéticos se generan con P50/P75/P90 de eventos diarios históricos y conservan duración y forma de poligonales históricas, trasladadas a posiciones válidas de la ciudad.");
-        limites.add("Para la aproximación batch, todo bloqueo que intersecta una jornada se considera restricción durante esa jornada completa; no se simulan activaciones/desactivaciones intradía.");
+        limites.add("Para la aproximación batch se usa, por jornada, el snapshot de máxima concurrencia de bloqueos; no se fusionan todos los bloqueos del día en una única topología permanente.");
         limites.add("El mantenimiento preventivo sigue el calendario entregado y se repite bimestralmente; no depende del perfil de presión.");
         limites.add("Las averías están deshabilitadas en esta versión de la experimentación hasta definir una regla de generación respaldada por el curso.");
         limites.add("Cada ruta puede utilizar el almacén central o uno intermedio como origen; el stock de los almacenes intermedios limita las asignaciones y se restablece en cada jornada batch.");
