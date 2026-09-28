@@ -1,0 +1,3 @@
+variante,algoritmo,nivel_colapso,tasa_no_atendidos_en_ese_nivel_pct
+BASE,GENETICO,3,66.666667
+BASE,RECOCIDO_SIMULADO,3,66.666667

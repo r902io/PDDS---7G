@@ -1,0 +1,4 @@
+escenario,tamanio,instancia,instante,primer_pedido,ultimo_pedido,cantidad_total_qq,capacidad_disponible_qq,ratio_demanda_capacidad,prioritarios,vehiculos_disponibles,vehiculos_en_mantenimiento,bloqueos_activos
+N025-I01,25,1,2026-01-03T01:13,2026-01-01T01:30,2026-01-03T01:13,173,408,0.42402,15,37,,2
+N050-I01,50,1,2026-01-04T11:58,2026-01-01T01:30,2026-01-04T11:58,302,408,0.740196,28,37,,4
+N100-I01,100,1,2026-01-07T02:37,2026-01-01T01:30,2026-01-07T02:37,523,408,1.281863,62,37,,1

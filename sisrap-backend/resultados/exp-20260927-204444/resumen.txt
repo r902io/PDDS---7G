@@ -1,0 +1,55 @@
+RESUMEN exp-20260927-204444  (36 corridas)
+Corridas con verificación fallida: 0
+
+Variante BASE
+  COLAPSO_LOGISTICO-ALTA-N01 | COLAPSO_LOGISTICO | ALTA | instancia N01 | tamaño 42
+    GENETICO           F=    15039.44  t=   6138.5 ms  SLA=  92.86%  noAsig=    3.00  eval=     9060  colapso mediano=0d23h14min
+    RECOCIDO_SIMULADO  F=    15042.60  t=   1244.5 ms  SLA=  92.86%  noAsig=    3.00  eval=     4201  colapso mediano=0d23h14min
+    GENETICO vs RECOCIDO_SIMULADO: F p=n/d r=n/d (N/D) -> NO_COMPARABLE_EN_COLAPSO
+      SLA: p=n/d r=0.0000 -> MUESTRA_INSUFICIENTE
+      tiempo hasta colapso: p=n/d r=0.0000 -> MUESTRA_INSUFICIENTE
+  COLAPSO_LOGISTICO-CRITICA-N01 | COLAPSO_LOGISTICO | CRITICA | instancia N01 | tamaño 49
+    GENETICO           F=    15046.98  t=   9323.6 ms  SLA=  93.88%  noAsig=    3.00  eval=     9060  colapso mediano=0d20h15min
+    RECOCIDO_SIMULADO  F=    15064.28  t=   2536.0 ms  SLA=  93.88%  noAsig=    3.00  eval=     6401  colapso mediano=0d20h15min
+    GENETICO vs RECOCIDO_SIMULADO: F p=n/d r=n/d (N/D) -> NO_COMPARABLE_EN_COLAPSO
+      SLA: p=n/d r=0.0000 -> MUESTRA_INSUFICIENTE
+      tiempo hasta colapso: p=n/d r=0.0000 -> MUESTRA_INSUFICIENTE
+  COLAPSO_LOGISTICO-NORMAL-N01 | COLAPSO_LOGISTICO | NORMAL | instancia N01 | tamaño 83
+    GENETICO           F=    57577.17  t=  17892.2 ms  SLA=  86.14%  noAsig=   11.50  eval=    36240  colapso mediano=3d13h43min
+    RECOCIDO_SIMULADO  F=    55094.11  t=   4239.8 ms  SLA=  86.83%  noAsig=   11.00  eval=    16844  colapso mediano=3d13h43min
+    GENETICO vs RECOCIDO_SIMULADO: F p=n/d r=n/d (N/D) -> NO_COMPARABLE_EN_COLAPSO
+      SLA: p=0.5000 r=0.9487 -> MUESTRA_INSUFICIENTE
+      tiempo hasta colapso: p=n/d r=0.0000 -> MUESTRA_INSUFICIENTE
+  OPERACION_DIARIA-ALTA-N01 | OPERACION_DIARIA | ALTA | instancia N01 | tamaño 34
+    GENETICO           F=    10032.28  t=   5061.5 ms  SLA=  94.12%  noAsig=    2.00  eval=     9060
+    RECOCIDO_SIMULADO  F=    10032.70  t=    906.9 ms  SLA=  94.12%  noAsig=    2.00  eval=     2901
+    GENETICO vs RECOCIDO_SIMULADO: F p=0.1573 r=1.0000 (GRANDE) -> MUESTRA_INSUFICIENTE
+      SLA: p=n/d r=0.0000 -> MUESTRA_INSUFICIENTE
+  OPERACION_DIARIA-CRITICA-N01 | OPERACION_DIARIA | CRITICA | instancia N01 | tamaño 40
+    GENETICO           F=       40.19  t=   3998.3 ms  SLA= 100.00%  noAsig=    0.00  eval=     9060
+    RECOCIDO_SIMULADO  F=       41.39  t=    636.6 ms  SLA= 100.00%  noAsig=    0.00  eval=     3501
+    GENETICO vs RECOCIDO_SIMULADO: F p=0.5000 r=0.9487 (GRANDE) -> MUESTRA_INSUFICIENTE
+      SLA: p=n/d r=0.0000 -> MUESTRA_INSUFICIENTE
+  OPERACION_DIARIA-NORMAL-N01 | OPERACION_DIARIA | NORMAL | instancia N01 | tamaño 29
+    GENETICO           F=     5028.43  t=   3859.7 ms  SLA=  96.55%  noAsig=    1.00  eval=     9060
+    RECOCIDO_SIMULADO  F=     5028.70  t=    698.7 ms  SLA=  96.55%  noAsig=    1.00  eval=     3581
+    GENETICO vs RECOCIDO_SIMULADO: F p=0.1573 r=1.0000 (GRANDE) -> MUESTRA_INSUFICIENTE
+      SLA: p=n/d r=0.0000 -> MUESTRA_INSUFICIENTE
+  SIMULACION_CINCO_DIAS-ALTA-N01 | SIMULACION_CINCO_DIAS | ALTA | instancia N01 | tamaño 214
+    GENETICO           F=    40207.56  t=  26974.3 ms  SLA=  96.26%  noAsig=    8.00  eval=    45300
+    RECOCIDO_SIMULADO  F=    40225.32  t=   5066.3 ms  SLA=  96.26%  noAsig=    8.00  eval=    20125
+    GENETICO vs RECOCIDO_SIMULADO: F p=0.5000 r=0.9487 (GRANDE) -> MUESTRA_INSUFICIENTE
+      SLA: p=n/d r=0.0000 -> MUESTRA_INSUFICIENTE
+  SIMULACION_CINCO_DIAS-CRITICA-N01 | SIMULACION_CINCO_DIAS | CRITICA | instancia N01 | tamaño 267
+    GENETICO           F=    55261.16  t=  34160.1 ms  SLA=  95.88%  noAsig=   11.00  eval=    45300
+    RECOCIDO_SIMULADO  F=    55286.57  t=   6032.9 ms  SLA=  95.88%  noAsig=   11.00  eval=    19285
+    GENETICO vs RECOCIDO_SIMULADO: F p=0.5000 r=0.9487 (GRANDE) -> MUESTRA_INSUFICIENTE
+      SLA: p=n/d r=0.0000 -> MUESTRA_INSUFICIENTE
+  SIMULACION_CINCO_DIAS-NORMAL-N01 | SIMULACION_CINCO_DIAS | NORMAL | instancia N01 | tamaño 194
+    GENETICO           F=    35189.66  t=  23115.4 ms  SLA=  96.39%  noAsig=    7.00  eval=    45300
+    RECOCIDO_SIMULADO  F=    35192.90  t=   4365.3 ms  SLA=  96.39%  noAsig=    7.00  eval=    19145
+    GENETICO vs RECOCIDO_SIMULADO: F p=0.5000 r=0.9487 (GRANDE) -> MUESTRA_INSUFICIENTE
+      SLA: p=n/d r=0.0000 -> MUESTRA_INSUFICIENTE
+
+Ganadores por F con Wilcoxon al 5% (excluye colapso, donde F final no es comparable): {SIN_GANADOR=6}
+SLA no usa ajuste Holm; tiempo hasta colapso tampoco. Las demás métricas secundarias sí.
