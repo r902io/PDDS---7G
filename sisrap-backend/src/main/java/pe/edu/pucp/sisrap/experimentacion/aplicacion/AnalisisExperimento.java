@@ -196,6 +196,11 @@ public final class AnalisisExperimento {
         // de este escenario es el tiempo hasta el colapso.
         Wilcoxon wF = esColapso ? new Wilcoxon(Double.NaN, 0.0, 0) : wilcoxon(diferenciaF);
         double efectoF = esColapso ? Double.NaN : tamanoEfecto(wF.z(), wF.nNoCero());
+        double mediaObjetivoA = sumaA / n;
+        double mediaObjetivoB = sumaB / n;
+        double diferenciaRelativaObjetivoPct = esColapso
+                ? Double.NaN
+                : diferenciaRelativaPct(mediaObjetivoA, mediaObjetivoB);
 
         double pPresupuesto = Double.NaN;
         String veredictoPresupuesto = SIN_DIFERENCIA;
@@ -243,12 +248,15 @@ public final class AnalisisExperimento {
             double[] diferencias = diferencias(pares, e.getValue().valor());
             if (diferencias.length == 0) continue;
             Wilcoxon w = wilcoxon(diferencias);
+            double[] medias = mediasPares(pares, e.getValue().valor());
             crudos.put(e.getKey(), new ResultadoMetrica(
                     w,
                     diferencias.length,
                     direccion(diferencias),
                     e.getValue().maximizar(),
-                    e.getValue().ajustarHolm()));
+                    e.getValue().ajustarHolm(),
+                    medias[0],
+                    medias[1]));
         }
 
         Map<String, Wilcoxon> paraHolm = new LinkedHashMap<>();
@@ -270,6 +278,11 @@ public final class AnalisisExperimento {
                     pCrudo,
                     pHolm,
                     efecto,
+                    rm.paresValidos(),
+                    rm.wilcoxon().nNoCero(),
+                    rm.mediaA(),
+                    rm.mediaB(),
+                    diferenciaRelativaPct(rm.mediaA(), rm.mediaB()),
                     veredicto(pDecision, rm.paresValidos(), rm.direccion(), rm.maximizar(), algoritmoA, algoritmoB)));
         }
 
@@ -283,13 +296,15 @@ public final class AnalisisExperimento {
                 algoritmoA,
                 algoritmoB,
                 n,
-                sumaA / n,
-                sumaB / n,
+                mediaObjetivoA,
+                mediaObjetivoB,
                 victoriasA,
                 victoriasB,
                 n - victoriasA - victoriasB,
                 wF.pValor(),
                 efectoF,
+                wF.nNoCero(),
+                diferenciaRelativaObjetivoPct,
                 interpretarEfecto(efectoF),
                 esColapso ? NO_COMPARABLE_COLAPSO
                         : veredicto(wF.pValor(), paresValidos(diferenciaF), direccion(diferenciaF), false, algoritmoA, algoritmoB),
@@ -310,7 +325,9 @@ public final class AnalisisExperimento {
                                     int paresValidos,
                                     double direccion,
                                     boolean maximizar,
-                                    boolean ajustarHolm) {}
+                                    boolean ajustarHolm,
+                                    double mediaA,
+                                    double mediaB) {}
 
     private static double[] diferencias(List<CorridaRegistrada[]> pares,
                                         ToDoubleFunction<CorridaRegistrada> f) {
@@ -322,6 +339,31 @@ public final class AnalisisExperimento {
                 })
                 .filter(Double::isFinite)
                 .toArray();
+    }
+
+    private static double[] mediasPares(List<CorridaRegistrada[]> pares,
+                                       ToDoubleFunction<CorridaRegistrada> f) {
+        double sumaA = 0.0;
+        double sumaB = 0.0;
+        int n = 0;
+        for (CorridaRegistrada[] par : pares) {
+            double a = f.applyAsDouble(par[0]);
+            double b = f.applyAsDouble(par[1]);
+            if (!Double.isFinite(a) || !Double.isFinite(b)) continue;
+            sumaA += a;
+            sumaB += b;
+            n++;
+        }
+        return n == 0
+                ? new double[]{Double.NaN, Double.NaN}
+                : new double[]{sumaA / n, sumaB / n};
+    }
+
+    static double diferenciaRelativaPct(double mediaA, double mediaB) {
+        if (!Double.isFinite(mediaA) || !Double.isFinite(mediaB) || Math.abs(mediaB) < 1e-12) {
+            return Double.NaN;
+        }
+        return 100.0 * (mediaA - mediaB) / Math.abs(mediaB);
     }
 
     private static int paresValidos(double[] diferencias) {

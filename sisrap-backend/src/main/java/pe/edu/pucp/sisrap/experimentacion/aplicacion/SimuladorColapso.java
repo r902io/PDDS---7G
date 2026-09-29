@@ -25,12 +25,30 @@ import pe.edu.pucp.sisrap.planificador.dominio.modelo.ContextoPlanificacion;
 import pe.edu.pucp.sisrap.planificador.dominio.modelo.Solucion;
 import pe.edu.pucp.sisrap.planificador.dominio.objetivo.FuncionObjetivo;
 
-
+/**
+ * Simulación batch diaria hasta el primer deadline incumplido.
+ *
+ * Diseño mejorado:
+ * - NORMAL, ALTA y CRITICA parten de la misma demanda esperada P50;
+ * - solo cambia la tasa de crecimiento compuesto (g, 2g, 3g);
+ * - los tres perfiles comparten la misma realización aleatoria máxima de demanda;
+ * - los bloqueos se mantienen en P50 y con la misma semilla para aislar el efecto
+ *   del crecimiento de demanda;
+ * - los pedidos pendientes se arrastran a jornadas posteriores mientras su deadline
+ *   siga vigente;
+ * - se registra el pedido concreto que provoca el colapso.
+ */
 public final class SimuladorColapso {
     private static final long SALTO_SEMILLA_DIA_ALGORITMO = 104_729L;
     private static final double NANOS_POR_HORA = 3_600_000_000_000.0;
 
-    private SimuladorColapso() {
+    private SimuladorColapso() {}
+
+    private record EventoColapso(Pedido pedido, LocalDateTime instante) {
+        private EventoColapso {
+            if (pedido == null || instante == null)
+                throw new IllegalArgumentException("Evento de colapso incompleto");
+        }
     }
 
     public record Resultado(
@@ -43,7 +61,12 @@ public final class SimuladorColapso {
             boolean colapsoAlcanzado,
             Double tiempoColapsoHoras,
             LocalDateTime instanteColapso,
-            int diasCompletados) {
+            int diasCompletados,
+            Long pedidoCausaColapso,
+            String prioridadCausaColapso,
+            LocalDateTime deadlineCausaColapso,
+            Integer noAsignadosAlColapso,
+            Double lambdaAlColapso) {
     }
 
     public static Resultado simular(
@@ -70,6 +93,7 @@ public final class SimuladorColapso {
         LocalDateTime inicioSimulacion = fechaInicio.atStartOfDay();
         int maxDias = cfg.entero("experimento.colapso.maxDias");
 
+        // La semilla externa NO depende del perfil. El mismo Nxx recibe el mismo mundo base.
         Random randomDemanda = new Random(
                 GeneradorEscenarios.semillaDemanda(
                         plan,
@@ -80,7 +104,6 @@ public final class SimuladorColapso {
                 GeneradorEscenarios.semillaBloqueos(
                         plan,
                         EscenarioOperativo.COLAPSO_LOGISTICO,
-                        escenario.perfilPresion(),
                         escenario.instancia()));
 
         List<Bloqueo> bloqueosGenerados = new ArrayList<>();
@@ -93,22 +116,16 @@ public final class SimuladorColapso {
         ContextoPlanificacion ultimoContexto = null;
         IAlgoritmoPlanificacion ultimoMotor = null;
         int tamanioUltimaJornada = 0;
+        double ultimaLambda = plan.demandaP50Diaria();
 
         for (int dia = 0; dia < maxDias; dia++) {
             LocalDate fechaJornada = fechaInicio.plusDays(dia);
             LocalDateTime inicioJornada = fechaJornada.atStartOfDay();
             LocalDateTime finJornada = inicioJornada.plusDays(1);
 
-            /*
-             * Salvaguarda: un pedido no debería llegar a una nueva jornada con
-             * el deadline ya vencido. Si ocurre, el colapso real fue exactamente
-             * en ese deadline y no al comienzo de la nueva jornada.
-             */
-            LocalDateTime vencidoAntesDePlanificar = pendientes.stream()
-                    .map(Pedido::getFechaLimite)
-                    .filter(limite -> !limite.isAfter(inicioJornada))
-                    .min(LocalDateTime::compareTo)
-                    .orElse(null);
+            EventoColapso vencidoAntesDePlanificar = primerPendienteVencido(
+                    pendientes,
+                    inicioJornada);
 
             if (vencidoAntesDePlanificar != null) {
                 if (ultimaSolucion == null || ultimoContexto == null || ultimoMotor == null) {
@@ -125,36 +142,37 @@ public final class SimuladorColapso {
                         tamanioUltimaJornada,
                         inicioSimulacion,
                         vencidoAntesDePlanificar,
-                        dia);
+                        dia,
+                        ultimaLambda);
             }
 
-            double lambda = plan.lambdaPedidos(escenario.perfilPresion())
-                    + (double) plan.incrementoColapsoDiario() * dia;
+            double lambda = plan.lambdaColapso(
+                    escenario.perfilPresion(),
+                    dia);
+            double lambdaMaxima = plan.lambdaColapsoMaxima(dia);
+            ultimaLambda = lambda;
 
             long idInicial = GeneradorEscenarios.idInicial(
                     EscenarioOperativo.COLAPSO_LOGISTICO,
-                    escenario.perfilPresion(),
                     escenario.instancia(),
                     dia);
 
-            List<Pedido> pedidosNuevos = ModeloDemandaHistorica.generarDia(
+            List<Pedido> pedidosNuevos = ModeloDemandaHistorica.generarDiaAcoplado(
                     demanda,
                     lambda,
+                    lambdaMaxima,
                     fechaJornada,
                     randomDemanda,
                     idInicial);
 
-            /*
-             * En cada jornada se vuelven a presentar al planificador los pedidos
-             * pendientes del día anterior junto con la nueva demanda generada.
-             */
             List<Pedido> pedidosJornada = combinarPedidos(
                     pendientes,
                     pedidosNuevos);
 
+            // En colapso los bloqueos no aumentan con el perfil: P50 para todos.
             bloqueosGenerados.addAll(ModeloBloqueosHistoricos.generarDia(
                     bloqueosHistoricos,
-                    escenario.perfilPresion(),
+                    bloqueosHistoricos.p50(),
                     fechaJornada,
                     randomBloqueos,
                     base.anchoKm(),
@@ -184,18 +202,11 @@ public final class SimuladorColapso {
             ultimoMotor = resultadoDia.motor();
             tamanioUltimaJornada = resultadoDia.tamanio();
 
-            /*
-             * Solo se declara colapso si el deadline incumplido ocurre dentro
-             * de la jornada que realmente acabamos de simular.
-             *
-             * Un pedido no asignado cuyo deadline cae mañana NO provoca todavía
-             * colapso: se conserva como pendiente y se vuelve a planificar.
-             */
-            LocalDateTime instanteFallo = primerDeadlineIncumplidoHasta(
+            EventoColapso evento = primerDeadlineIncumplidoHasta(
                     ultimaSolucion,
                     finJornada);
 
-            if (instanteFallo != null) {
+            if (evento != null) {
                 return resultadoColapso(
                         ultimaSolucion,
                         ultimoContexto,
@@ -204,15 +215,11 @@ public final class SimuladorColapso {
                         evaluacionesTotales,
                         tamanioUltimaJornada,
                         inicioSimulacion,
-                        instanteFallo,
-                        dia);
+                        evento,
+                        dia,
+                        lambda);
             }
 
-            /*
-             * Se arrastran únicamente los pedidos que al finalizar la jornada
-             * todavía requieren otra oportunidad de planificación y que siguen
-             * teniendo un deadline futuro.
-             */
             pendientes = pendientesParaSiguienteJornada(
                     ultimaSolucion,
                     ultimoContexto,
@@ -234,12 +241,27 @@ public final class SimuladorColapso {
                 false,
                 null,
                 null,
-                maxDias);
+                maxDias,
+                null,
+                null,
+                null,
+                null,
+                null);
     }
 
-    /**
-     * Une pendientes y demanda nueva sin permitir IDs repetidos.
-     */
+    private static EventoColapso primerPendienteVencido(
+            List<Pedido> pendientes,
+            LocalDateTime instante) {
+        Pedido causa = pendientes.stream()
+                .filter(p -> !p.getFechaLimite().isAfter(instante))
+                .min(java.util.Comparator
+                        .comparing(Pedido::getFechaLimite)
+                        .thenComparing(Pedido::getIdPedido))
+                .orElse(null);
+        return causa == null ? null : new EventoColapso(causa, causa.getFechaLimite());
+    }
+
+    /** Une pendientes y demanda nueva sin permitir IDs repetidos. */
     private static List<Pedido> combinarPedidos(
             List<Pedido> pendientes,
             List<Pedido> nuevos) {
@@ -265,51 +287,41 @@ public final class SimuladorColapso {
     }
 
     /**
-     * Devuelve el primer deadline realmente incumplido hasta el cierre de la
-     * jornada. Los deadlines posteriores se dejan para jornadas futuras.
+     * Devuelve el primer pedido cuyo deadline fue incumplido dentro de la jornada.
+     * Los deadlines posteriores se arrastran a jornadas futuras.
      */
-    private static LocalDateTime primerDeadlineIncumplidoHasta(
+    private static EventoColapso primerDeadlineIncumplidoHasta(
             Solucion solucion,
             LocalDateTime finJornada) {
 
-        LocalDateTime primero = solucion.getPedidosNoAsignados().stream()
-                .map(Pedido::getFechaLimite)
-                .filter(limite -> !limite.isAfter(finJornada))
-                .min(LocalDateTime::compareTo)
+        Pedido causa = solucion.getPedidosNoAsignados().stream()
+                .filter(p -> !p.getFechaLimite().isAfter(finJornada))
+                .min(java.util.Comparator
+                        .comparing(Pedido::getFechaLimite)
+                        .thenComparing(Pedido::getIdPedido))
                 .orElse(null);
 
         for (var ruta : solucion.getRutas()) {
             for (int i = 0; i < ruta.getSecuenciaPedidos().size(); i++) {
-                if (ruta.retrasoDe(i) <= 0) {
-                    continue;
-                }
+                if (ruta.retrasoDe(i) <= 0) continue;
 
-                LocalDateTime limite = ruta.getSecuenciaPedidos()
-                        .get(i)
-                        .getFechaLimite();
+                Pedido pedido = ruta.getSecuenciaPedidos().get(i);
+                LocalDateTime limite = pedido.getFechaLimite();
+                if (limite.isAfter(finJornada)) continue;
 
-                if (limite.isAfter(finJornada)) {
-                    continue;
-                }
-
-                if (primero == null || limite.isBefore(primero)) {
-                    primero = limite;
+                if (causa == null
+                        || limite.isBefore(causa.getFechaLimite())
+                        || (limite.equals(causa.getFechaLimite())
+                            && pedido.getIdPedido() < causa.getIdPedido())) {
+                    causa = pedido;
                 }
             }
         }
 
-        return primero;
+        return causa == null ? null : new EventoColapso(causa, causa.getFechaLimite());
     }
 
-    /**
-     * Construye la cola de pedidos que deben volver a planificarse en la
-     * siguiente jornada.
-     *
-     * 1) Todo pedido no asignado cuyo deadline todavía está vigente.
-     * 2) Una entrega asignada pero prevista después del cierre de la jornada.
-     * 3) Una entrega que ya se sabe tardía, pero cuyo deadline ocurre después
-     *    del cierre actual; se le da una nueva oportunidad al día siguiente.
-     */
+    /** Construye la cola de pedidos que deben volver a planificarse al día siguiente. */
     private static List<Pedido> pendientesParaSiguienteJornada(
             Solucion solucion,
             ContextoPlanificacion contexto,
@@ -350,10 +362,7 @@ public final class SimuladorColapso {
             LocalDateTime inicio,
             double horas) {
 
-        if (!Double.isFinite(horas) || horas < 0) {
-            return LocalDateTime.MAX;
-        }
-
+        if (!Double.isFinite(horas) || horas < 0) return LocalDateTime.MAX;
         long nanos = Math.round(horas * NANOS_POR_HORA);
         return inicio.plusNanos(nanos);
     }
@@ -366,12 +375,13 @@ public final class SimuladorColapso {
             int evaluacionesTotales,
             int tamanioUltimaJornada,
             LocalDateTime inicioSimulacion,
-            LocalDateTime instanteFallo,
-            int diasCompletados) {
+            EventoColapso evento,
+            int diasCompletados,
+            double lambdaAlColapso) {
 
         double horas = Duration.between(
                 inicioSimulacion,
-                instanteFallo)
+                evento.instante())
                 .toNanos() / NANOS_POR_HORA;
 
         if (horas < 0) {
@@ -379,6 +389,7 @@ public final class SimuladorColapso {
                     "El instante de colapso no puede ser anterior al inicio de la simulación");
         }
 
+        Pedido causa = evento.pedido();
         return new Resultado(
                 solucion,
                 contexto,
@@ -388,7 +399,12 @@ public final class SimuladorColapso {
                 tamanioUltimaJornada,
                 true,
                 horas,
-                instanteFallo,
-                diasCompletados);
+                evento.instante(),
+                diasCompletados,
+                causa.getIdPedido(),
+                causa.getPrioridad().name(),
+                causa.getFechaLimite(),
+                solucion.getPedidosNoAsignados().size(),
+                lambdaAlColapso);
     }
 }

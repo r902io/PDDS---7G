@@ -8,8 +8,9 @@ import java.util.List;
  * Diseño reproducible del experimento numérico:
  * variantes x escenarios x perfiles x instancias x repeticiones x algoritmos.
  *
- * La presión de demanda se obtiene de los datos históricos:
- * NORMAL=P50, ALTA=P75 y CRITICA=P90.
+ * Operación diaria y cinco días usan P50/P75/P90.
+ * En colapso, los tres perfiles parten de P50 y difieren por la tasa de crecimiento:
+ * NORMAL=g, ALTA=2g y CRITICA=3g.
  */
 public record PlanExperimento(String nombre,
                               String perfil,
@@ -19,7 +20,7 @@ public record PlanExperimento(String nombre,
                               int demandaP50Diaria,
                               int demandaP75Diaria,
                               int demandaP90Diaria,
-                              int incrementoColapsoDiario,
+                              double crecimientoColapsoBase,
                               int instancias,
                               int repeticiones,
                               long semillaBase,
@@ -47,8 +48,12 @@ public record PlanExperimento(String nombre,
             throw new IllegalArgumentException("Perfiles de presión vacíos o repetidos");
         if (demandaP50Diaria < 1 || demandaP75Diaria < demandaP50Diaria || demandaP90Diaria < demandaP75Diaria)
             throw new IllegalArgumentException("Percentiles de demanda inválidos");
-        if (incrementoColapsoDiario < 1)
-            throw new IllegalArgumentException("Incremento de colapso inválido");
+        if (!Double.isFinite(crecimientoColapsoBase)
+                || crecimientoColapsoBase <= 0.0
+                || crecimientoColapsoBase * 3.0 >= 1.0) {
+            throw new IllegalArgumentException(
+                    "Crecimiento base de colapso inválido; se requiere 0 < g y 3g < 1");
+        }
         if (instancias < 1 || repeticiones < 1)
             throw new IllegalArgumentException("Instancias y repeticiones deben ser >= 1");
         if (desde == null)
@@ -66,6 +71,24 @@ public record PlanExperimento(String nombre,
             case ALTA -> demandaP75Diaria;
             case CRITICA -> demandaP90Diaria;
         };
+    }
+
+    public double crecimientoColapso(PerfilPresion perfilPresion) {
+        return crecimientoColapsoBase * switch (perfilPresion) {
+            case NORMAL -> 1.0;
+            case ALTA -> 2.0;
+            case CRITICA -> 3.0;
+        };
+    }
+
+    public double lambdaColapso(PerfilPresion perfilPresion, int dia) {
+        if (dia < 0) throw new IllegalArgumentException("El día de colapso no puede ser negativo");
+        return demandaP50Diaria
+                * Math.pow(1.0 + crecimientoColapso(perfilPresion), dia);
+    }
+
+    public double lambdaColapsoMaxima(int dia) {
+        return lambdaColapso(PerfilPresion.CRITICA, dia);
     }
 
     public boolean incluyeColapso() {

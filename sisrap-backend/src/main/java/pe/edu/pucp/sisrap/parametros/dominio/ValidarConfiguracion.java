@@ -29,6 +29,12 @@ public final class ValidarConfiguracion {
             throw new IllegalArgumentException("Máximo de días de colapso inválido");
         }
 
+        double crecimientoColapso = c.numero("experimento.colapso.crecimientoDiario");
+        if (crecimientoColapso <= 0.0 || crecimientoColapso * 3.0 >= 1.0) {
+            throw new IllegalArgumentException(
+                    "Crecimiento diario base de colapso inválido; se requiere 0 < g y 3g < 1");
+        }
+
         try {
             Math.addExact(c.largo("experimento.semillaBase"), repeticiones - 1L);
         } catch (ArithmeticException e) {

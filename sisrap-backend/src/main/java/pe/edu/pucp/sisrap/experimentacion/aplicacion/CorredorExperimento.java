@@ -360,7 +360,12 @@ public final class CorredorExperimento {
                 resultado.tamanioUltimaJornada(),
                 resultado.colapsoAlcanzado(),
                 resultado.tiempoColapsoHoras(),
-                resultado.instanteColapso());
+                resultado.instanteColapso(),
+                resultado.pedidoCausaColapso(),
+                resultado.prioridadCausaColapso(),
+                resultado.deadlineCausaColapso(),
+                resultado.noAsignadosAlColapso(),
+                resultado.lambdaAlColapso());
 
         return new CorridaRegistrada(
                 variante,

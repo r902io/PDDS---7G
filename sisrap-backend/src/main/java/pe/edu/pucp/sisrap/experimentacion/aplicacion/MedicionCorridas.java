@@ -28,7 +28,8 @@ public final class MedicionCorridas {
         return medir(algoritmo, n, semilla, ms, s, c, motor,
                 null, null,
                 null, null, null, null,
-                null, null, null, null);
+                null, null, null, null,
+                null, null, null, null, null);
     }
 
     /** Corrida sin incidencia ni colapso. */
@@ -44,7 +45,8 @@ public final class MedicionCorridas {
         return medir(algoritmo, n, semilla, ms, s, c, motor,
                 escenarioOperativo, perfilPresion,
                 null, null, null, null,
-                null, null, null, null);
+                null, null, null, null,
+                null, null, null, null, null);
     }
 
     /** Corrida con incidencia/replanificación. */
@@ -65,7 +67,8 @@ public final class MedicionCorridas {
                 escenarioOperativo, perfilPresion,
                 pedidosAfectadosIncidencia, vehiculosEnAveriaIncidente,
                 tiempoReplanificacionMs, replanificacionExitosa,
-                null, null, null, null);
+                null, null, null, null,
+                null, null, null, null, null);
     }
 
     /** Corrida completa, incluyendo la métrica exclusiva del escenario de colapso. */
@@ -85,7 +88,12 @@ public final class MedicionCorridas {
                                 Integer tamanioAlColapso,
                                 Boolean colapsoAlcanzado,
                                 Double tiempoColapsoHoras,
-                                LocalDateTime instanteColapso) {
+                                LocalDateTime instanteColapso,
+                                Long pedidoCausaColapso,
+                                String prioridadCausaColapso,
+                                LocalDateTime deadlineCausaColapso,
+                                Integer noAsignadosAlColapso,
+                                Double lambdaAlColapso) {
         int aTiempo = 0;
         int prioritariosATiempo = 0;
         int prioritarios = (int) c.getPedidos().stream()
@@ -151,7 +159,12 @@ public final class MedicionCorridas {
                 tamanioAlColapso,
                 colapsoAlcanzado,
                 tiempoColapsoHoras,
-                instanteColapso);
+                instanteColapso,
+                pedidoCausaColapso,
+                prioridadCausaColapso,
+                deadlineCausaColapso,
+                noAsignadosAlColapso,
+                lambdaAlColapso);
     }
 
     /**
@@ -273,6 +286,11 @@ public final class MedicionCorridas {
                 List.copyOf(idsNoAsignados),
                 escenarioOperativo,
                 perfilPresion,
+                null,
+                null,
+                null,
+                null,
+                null,
                 null,
                 null,
                 null,
