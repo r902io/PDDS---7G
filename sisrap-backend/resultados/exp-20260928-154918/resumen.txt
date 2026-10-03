@@ -1,3 +1,55 @@
+BD: perfil BASE (34 parámetros), ciudad 70x50 km, 3 almacenes, 37 vehículos
+Archivos: 160010 pedidos, 21725 bloqueos, 38 días con mantenimiento preventivo (73 archivos leídos)
+Demanda histórica base 2026-01-01 a 2026-03-31 (90 días): P50=34, P75=46, P90=51; crecimiento colapso base=5.00%
+Bloqueos históricos base 2026-01-01 a 2026-03-31 (90 días): P50=20, P75=26, P90=29 bloqueos/día, 1835 plantillas
+Plan exp-20260928-154918: 1620 corridas (1 variantes x 3 escenarios x 3 perfiles x 5 instancias x 18 repeticiones x 2 algoritmos)
+Validación pre-experimento: OK
+  OPERACION_DIARIA-NORMAL-N01: 28 pedidos (147 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 23 bloqueos programados
+  OPERACION_DIARIA-NORMAL-N02: 27 pedidos (147 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 20 bloqueos programados
+  OPERACION_DIARIA-NORMAL-N03: 34 pedidos (185 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 23 bloqueos programados
+  OPERACION_DIARIA-NORMAL-N04: 27 pedidos (126 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 20 bloqueos programados
+  OPERACION_DIARIA-NORMAL-N05: 44 pedidos (249 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 21 bloqueos programados
+  OPERACION_DIARIA-ALTA-N01: 38 pedidos (188 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 29 bloqueos programados
+  OPERACION_DIARIA-ALTA-N02: 42 pedidos (217 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 25 bloqueos programados
+  OPERACION_DIARIA-ALTA-N03: 46 pedidos (247 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 24 bloqueos programados
+  OPERACION_DIARIA-ALTA-N04: 35 pedidos (177 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 25 bloqueos programados
+  OPERACION_DIARIA-ALTA-N05: 55 pedidos (304 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 26 bloqueos programados
+  OPERACION_DIARIA-CRITICA-N01: 40 pedidos (199 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 30 bloqueos programados
+  OPERACION_DIARIA-CRITICA-N02: 42 pedidos (217 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 30 bloqueos programados
+  OPERACION_DIARIA-CRITICA-N03: 52 pedidos (272 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 28 bloqueos programados
+  OPERACION_DIARIA-CRITICA-N04: 43 pedidos (224 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 26 bloqueos programados
+  OPERACION_DIARIA-CRITICA-N05: 60 pedidos (321 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 29 bloqueos programados
+  SIMULACION_CINCO_DIAS-NORMAL-N01: 196 pedidos (1048 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 96 bloqueos programados
+  SIMULACION_CINCO_DIAS-NORMAL-N02: 151 pedidos (791 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 89 bloqueos programados
+  SIMULACION_CINCO_DIAS-NORMAL-N03: 172 pedidos (877 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 100 bloqueos programados
+  SIMULACION_CINCO_DIAS-NORMAL-N04: 176 pedidos (949 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 103 bloqueos programados
+  SIMULACION_CINCO_DIAS-NORMAL-N05: 144 pedidos (781 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 95 bloqueos programados
+  SIMULACION_CINCO_DIAS-ALTA-N01: 246 pedidos (1289 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 131 bloqueos programados
+  SIMULACION_CINCO_DIAS-ALTA-N02: 210 pedidos (1120 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 119 bloqueos programados
+  SIMULACION_CINCO_DIAS-ALTA-N03: 246 pedidos (1256 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 122 bloqueos programados
+  SIMULACION_CINCO_DIAS-ALTA-N04: 235 pedidos (1282 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 137 bloqueos programados
+  SIMULACION_CINCO_DIAS-ALTA-N05: 194 pedidos (1055 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 114 bloqueos programados
+  SIMULACION_CINCO_DIAS-CRITICA-N01: 270 pedidos (1443 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 150 bloqueos programados
+  SIMULACION_CINCO_DIAS-CRITICA-N02: 233 pedidos (1259 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 135 bloqueos programados
+  SIMULACION_CINCO_DIAS-CRITICA-N03: 278 pedidos (1418 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 138 bloqueos programados
+  SIMULACION_CINCO_DIAS-CRITICA-N04: 257 pedidos (1390 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 153 bloqueos programados
+  SIMULACION_CINCO_DIAS-CRITICA-N05: 223 pedidos (1194 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 134 bloqueos programados
+  COLAPSO_LOGISTICO-NORMAL-N01: 32 pedidos (177 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 20 bloqueos programados
+  COLAPSO_LOGISTICO-NORMAL-N02: 25 pedidos (148 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 19 bloqueos programados
+  COLAPSO_LOGISTICO-NORMAL-N03: 48 pedidos (259 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 15 bloqueos programados
+  COLAPSO_LOGISTICO-NORMAL-N04: 39 pedidos (225 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 23 bloqueos programados
+  COLAPSO_LOGISTICO-NORMAL-N05: 39 pedidos (188 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 12 bloqueos programados
+  COLAPSO_LOGISTICO-ALTA-N01: 32 pedidos (177 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 20 bloqueos programados
+  COLAPSO_LOGISTICO-ALTA-N02: 25 pedidos (148 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 19 bloqueos programados
+  COLAPSO_LOGISTICO-ALTA-N03: 48 pedidos (259 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 15 bloqueos programados
+  COLAPSO_LOGISTICO-ALTA-N04: 39 pedidos (225 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 23 bloqueos programados
+  COLAPSO_LOGISTICO-ALTA-N05: 39 pedidos (188 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 12 bloqueos programados
+  COLAPSO_LOGISTICO-CRITICA-N01: 32 pedidos (177 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 20 bloqueos programados
+  COLAPSO_LOGISTICO-CRITICA-N02: 25 pedidos (148 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 19 bloqueos programados
+  COLAPSO_LOGISTICO-CRITICA-N03: 48 pedidos (259 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 15 bloqueos programados
+  COLAPSO_LOGISTICO-CRITICA-N04: 39 pedidos (225 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 23 bloqueos programados
+  COLAPSO_LOGISTICO-CRITICA-N05: 39 pedidos (188 qq) vs capacidad 408 qq, 0 vehículos en mantenimiento, 12 bloqueos programados
+  
 RESUMEN exp-20260928-154918  (1620 corridas)
 Corridas con verificación fallida: 0
 

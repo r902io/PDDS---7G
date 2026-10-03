@@ -20,7 +20,7 @@ import pe.edu.pucp.sisrap.parametros.dominio.ReglasPlanificacion;
 import pe.edu.pucp.sisrap.pedido.dominio.Pedido;
 import pe.edu.pucp.sisrap.pedido.dominio.TipoPrioridad;
 import pe.edu.pucp.sisrap.planificador.dominio.modelo.ContextoPlanificacion;
-public final class JdbcExperimento implements RepositorioExperimento {
+public class JdbcExperimento implements RepositorioExperimento {
     private final DataSource fuente;
     private final Function<InformeExperimento,String> serializar;
     private final Function<String,InformeExperimento> deserializar;

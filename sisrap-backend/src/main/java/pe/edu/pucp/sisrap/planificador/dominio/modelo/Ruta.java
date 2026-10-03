@@ -17,6 +17,8 @@ public class Ruta {
 
     private final Vehiculo vehiculo;
     private Almacen almacenOrigen;
+    private final Nodo posicionInicio;
+    private final boolean pasarPorAlmacenOrigen;
     private final LocalDateTime inicio;
     private final ReglasPlanificacion reglas;
 
@@ -30,13 +32,49 @@ public class Ruta {
     private List<Almacen> almacenesCandidatos = List.of();
     private boolean intransitable;
 
+    /**
+     * Constructor histórico: conserva exactamente el comportamiento usado por
+     * la experimentación. La ruta se considera iniciada en el almacén origen.
+     */
     public Ruta(
             Vehiculo vehiculo,
             Almacen origen,
             LocalDateTime inicio,
             ReglasPlanificacion reglas) {
+        this(
+                vehiculo,
+                origen,
+                origen.getUbicacion(),
+                false,
+                inicio,
+                reglas);
+    }
+
+    /**
+     * Constructor operativo. Cuando {@code pasarPorAlmacenOrigen=true}, el
+     * vehículo parte desde su posición real y primero viaja al almacén elegido
+     * por el planificador para recoger la carga.
+     */
+    public Ruta(
+            Vehiculo vehiculo,
+            Almacen origen,
+            Nodo posicionInicio,
+            boolean pasarPorAlmacenOrigen,
+            LocalDateTime inicio,
+            ReglasPlanificacion reglas) {
+
+        if (vehiculo == null
+                || origen == null
+                || posicionInicio == null
+                || inicio == null
+                || reglas == null) {
+            throw new IllegalArgumentException("Ruta incompleta");
+        }
+
         this.vehiculo = vehiculo;
         this.almacenOrigen = origen;
+        this.posicionInicio = posicionInicio;
+        this.pasarPorAlmacenOrigen = pasarPorAlmacenOrigen;
         this.inicio = inicio;
         this.reglas = reglas;
     }
@@ -49,7 +87,13 @@ public class Ruta {
     public boolean isIntransitable() { return intransitable; }
 
     public Ruta copiar() {
-        Ruta copia = new Ruta(vehiculo, almacenOrigen, inicio, reglas);
+        Ruta copia = new Ruta(
+                vehiculo,
+                almacenOrigen,
+                posicionInicio,
+                pasarPorAlmacenOrigen,
+                inicio,
+                reglas);
         copia.nodosBloqueados = nodosBloqueados;
         copia.almacenesCandidatos = almacenesCandidatos;
         copia.secuenciaPedidos.addAll(secuenciaPedidos);
@@ -63,16 +107,24 @@ public class Ruta {
                 .sum();
     }
 
-    /**
-     * Recalcula distancia/costo y tiempo operacional. Si una ruta alcanza un
-     * pedido antes de su hora real de llegada, el vehículo espera hasta que el
-     * pedido esté disponible para ser atendido.
-     */
     public void recalcular() {
         intransitable = false;
         double distanciaPasos = 0.0;
-        Nodo posicion = almacenOrigen.getUbicacion();
+        Nodo posicion = posicionInicialPara(almacenOrigen);
         LocalDateTime reloj = inicio;
+
+        if (pasarPorAlmacenOrigen && !secuenciaPedidos.isEmpty()) {
+            int pasosAlmacen = pasosEntre(posicion, almacenOrigen.getUbicacion());
+            if (pasosAlmacen < 0) {
+                intransitable = true;
+                pasosAlmacen = posicion.distanciaManhattan(almacenOrigen.getUbicacion());
+            }
+            distanciaPasos += pasosAlmacen;
+            reloj = sumarHoras(
+                    reloj,
+                    pasosAlmacen * reglas.distanciaNodoKm() / vehiculo.getVelocidadKmh());
+            posicion = almacenOrigen.getUbicacion();
+        }
 
         for (Pedido pedido : secuenciaPedidos) {
             int pasos = pasosEntre(posicion, pedido.getUbicacion());
@@ -82,7 +134,8 @@ public class Ruta {
             }
 
             distanciaPasos += pasos;
-            reloj = sumarHoras(reloj,
+            reloj = sumarHoras(
+                    reloj,
                     pasos * reglas.distanciaNodoKm() / vehiculo.getVelocidadKmh());
 
             if (reloj.isBefore(pedido.getFechaLlegada())) {
@@ -100,7 +153,8 @@ public class Ruta {
                 pasos = posicion.distanciaManhattan(almacenOrigen.getUbicacion());
             }
             distanciaPasos += pasos;
-            reloj = sumarHoras(reloj,
+            reloj = sumarHoras(
+                    reloj,
                     pasos * reglas.distanciaNodoKm() / vehiculo.getVelocidadKmh());
         }
 
@@ -113,24 +167,31 @@ public class Ruta {
         return horasEntre(inicio, fechaLlegadaRutaDe(indice));
     }
 
-    /**
-     * Evalúa la hora relativa de llegada si se agrega un pedido al final de la
-     * ruta usando un almacén candidato. Respeta las horas reales de llegada de
-     * los pedidos y devuelve infinito cuando algún tramo no tiene camino.
-     */
     public double horaLlegadaSiAgrega(Pedido nuevoPedido, Almacen origenCandidato) {
         if (nuevoPedido == null || origenCandidato == null) {
             throw new IllegalArgumentException("Pedido/origen candidato inválido");
         }
 
-        Nodo posicion = origenCandidato.getUbicacion();
+        Nodo posicion = posicionInicialPara(origenCandidato);
         LocalDateTime reloj = inicio;
+
+        if (pasarPorAlmacenOrigen) {
+            int pasosAlmacen = pasosEntre(posicion, origenCandidato.getUbicacion());
+            if (pasosAlmacen < 0) {
+                return Double.POSITIVE_INFINITY;
+            }
+            reloj = sumarHoras(
+                    reloj,
+                    pasosAlmacen * reglas.distanciaNodoKm() / vehiculo.getVelocidadKmh());
+            posicion = origenCandidato.getUbicacion();
+        }
 
         for (Pedido pedido : secuenciaPedidos) {
             int pasos = pasosEntre(posicion, pedido.getUbicacion());
             if (pasos < 0) return Double.POSITIVE_INFINITY;
 
-            reloj = sumarHoras(reloj,
+            reloj = sumarHoras(
+                    reloj,
                     pasos * reglas.distanciaNodoKm() / vehiculo.getVelocidadKmh());
             if (reloj.isBefore(pedido.getFechaLlegada())) {
                 reloj = pedido.getFechaLlegada();
@@ -142,7 +203,8 @@ public class Ruta {
         int pasosFinales = pasosEntre(posicion, nuevoPedido.getUbicacion());
         if (pasosFinales < 0) return Double.POSITIVE_INFINITY;
 
-        reloj = sumarHoras(reloj,
+        reloj = sumarHoras(
+                reloj,
                 pasosFinales * reglas.distanciaNodoKm() / vehiculo.getVelocidadKmh());
         if (reloj.isBefore(nuevoPedido.getFechaLlegada())) {
             reloj = nuevoPedido.getFechaLlegada();
@@ -181,8 +243,19 @@ public class Ruta {
             throw new IndexOutOfBoundsException("Índice de pedido fuera de ruta");
         }
 
-        Nodo posicion = almacenOrigen.getUbicacion();
+        Nodo posicion = posicionInicialPara(almacenOrigen);
         LocalDateTime reloj = inicio;
+
+        if (pasarPorAlmacenOrigen) {
+            int pasosAlmacen = pasosEntre(posicion, almacenOrigen.getUbicacion());
+            if (pasosAlmacen < 0) {
+                pasosAlmacen = posicion.distanciaManhattan(almacenOrigen.getUbicacion());
+            }
+            reloj = sumarHoras(
+                    reloj,
+                    pasosAlmacen * reglas.distanciaNodoKm() / vehiculo.getVelocidadKmh());
+            posicion = almacenOrigen.getUbicacion();
+        }
 
         for (int i = 0; i <= indice; i++) {
             Pedido pedido = secuenciaPedidos.get(i);
@@ -191,7 +264,8 @@ public class Ruta {
                 pasos = posicion.distanciaManhattan(pedido.getUbicacion());
             }
 
-            reloj = sumarHoras(reloj,
+            reloj = sumarHoras(
+                    reloj,
                     pasos * reglas.distanciaNodoKm() / vehiculo.getVelocidadKmh());
 
             if (reloj.isBefore(pedido.getFechaLlegada())) {
@@ -205,6 +279,12 @@ public class Ruta {
         }
 
         throw new IllegalStateException("No se pudo calcular la llegada");
+    }
+
+    private Nodo posicionInicialPara(Almacen origen) {
+        return pasarPorAlmacenOrigen
+                ? posicionInicio
+                : origen.getUbicacion();
     }
 
     private int pasosEntre(Nodo origen, Nodo destino) {
@@ -228,6 +308,8 @@ public class Ruta {
 
     public Vehiculo getVehiculo() { return vehiculo; }
     public Almacen getAlmacenOrigen() { return almacenOrigen; }
+    public Nodo getPosicionInicio() { return posicionInicio; }
+    public boolean isPasarPorAlmacenOrigen() { return pasarPorAlmacenOrigen; }
 
     public void setAlmacenOrigen(Almacen almacenOrigen) {
         if (almacenOrigen == null) {
