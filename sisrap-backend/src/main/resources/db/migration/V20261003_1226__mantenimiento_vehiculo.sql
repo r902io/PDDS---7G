@@ -31,6 +31,3 @@ CREATE TABLE mantenimiento_vehiculo (
 
 CREATE INDEX idx_mantenimiento_vehiculo_intervalo
     ON mantenimiento_vehiculo(id_vehiculo, activo, fecha_inicio, fecha_fin);
-
-ALTER TABLE simulacion
-    DROP COLUMN velocidad_simulacion;

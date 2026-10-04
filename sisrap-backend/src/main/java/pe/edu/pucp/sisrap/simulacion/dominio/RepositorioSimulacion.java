@@ -18,8 +18,7 @@ public interface RepositorioSimulacion {
     void actualizarEjecucion(
             long idSimulacion,
             EstadoSimulacion estado,
-            LocalDateTime reloj,
-            double velocidad);
+            LocalDateTime reloj);
 
     void finalizarEjecucion(
             long idSimulacion,

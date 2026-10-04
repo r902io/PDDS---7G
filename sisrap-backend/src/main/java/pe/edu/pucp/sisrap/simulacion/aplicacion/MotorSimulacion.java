@@ -15,12 +15,14 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
+import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
+
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
-import jakarta.annotation.PostConstruct;
-import jakarta.annotation.PreDestroy;
 import pe.edu.pucp.sisrap.almacen.dominio.Almacen;
+import pe.edu.pucp.sisrap.control.aplicacion.GestionarControlSimulacion;
 import pe.edu.pucp.sisrap.geografia.dominio.Nodo;
 import pe.edu.pucp.sisrap.parametros.dominio.ParametrosAlgoritmo;
 import pe.edu.pucp.sisrap.pedido.dominio.Pedido;
@@ -32,6 +34,7 @@ import pe.edu.pucp.sisrap.planificador.dominio.objetivo.FuncionObjetivo;
 import pe.edu.pucp.sisrap.simulacion.dominio.ConfiguracionSimulacion;
 import pe.edu.pucp.sisrap.simulacion.dominio.ContextoOperativo;
 import pe.edu.pucp.sisrap.simulacion.dominio.EstadoSimulacion;
+import pe.edu.pucp.sisrap.simulacion.dominio.EscenarioSimulacion;
 import pe.edu.pucp.sisrap.simulacion.dominio.PuntoSimulacion;
 import pe.edu.pucp.sisrap.simulacion.dominio.RepositorioSimulacion;
 import pe.edu.pucp.sisrap.simulacion.dominio.SnapshotSimulacion;
@@ -40,13 +43,14 @@ import pe.edu.pucp.sisrap.simulacion.dominio.VehiculoSnapshot;
 import pe.edu.pucp.sisrap.simulacion.infraestructura.SseSimulacion;
 
 @Service
-public final class MotorSimulacion {
+public class MotorSimulacion {
 
     private static final long NANO_SEGUNDO = 1_000_000_000L;
     private static final double NANOS_POR_HORA = 3_600_000_000_000.0;
     private static final String ALGORITMO_OPERATIVO = "GENETICO";
 
     private final RepositorioSimulacion repositorio;
+    private final GestionarControlSimulacion control;
     private final SseSimulacion sse;
     private final String perfil;
     private final long tickMs;
@@ -76,13 +80,22 @@ public final class MotorSimulacion {
     private LocalDateTime proximaPlanificacionVirtual;
     private String mensajeEstado;
 
+    /**
+     * Relación interna entre tiempo simulado y tiempo real.
+     *
+     * <p>No es configurable ni se expone al frontend.</p>
+     */
+    private double factorTemporalInterno = 1.0;
+
     public MotorSimulacion(
             RepositorioSimulacion repositorio,
+            GestionarControlSimulacion control,
             SseSimulacion sse,
             @Value("${sisrap.simulacion.perfil:BASE}") String perfil,
             @Value("${sisrap.simulacion.tick-ms:250}") long tickMs) {
 
         this.repositorio = repositorio;
+        this.control = control;
         this.sse = sse;
         this.perfil = perfil == null || perfil.isBlank() ? "BASE" : perfil.trim();
         if (tickMs < 100 || tickMs > 2000) {
@@ -125,7 +138,18 @@ public final class MotorSimulacion {
         reloj = nuevaConfiguracion.fechaHoraInicio();
         bloqueados = repositorio.cargarNodosBloqueados(reloj);
         estado = EstadoSimulacion.EJECUTANDO;
-        mensajeEstado = "Simulación iniciada";
+
+        factorTemporalInterno =
+                nuevaConfiguracion.factorTemporalInterno();
+
+        mensajeEstado =
+                "Simulación iniciada: "
+                        + nuevaConfiguracion.escenario().name()
+                        + " (duración real objetivo ~"
+                        + nuevaConfiguracion
+                                .duracionRealObjetivo()
+                                .toMinutes()
+                        + " min)";
 
         long ahora = System.nanoTime();
         nanoInicioReal = ahora;
@@ -147,8 +171,7 @@ public final class MotorSimulacion {
         repositorio.actualizarEjecucion(
                 idSimulacion,
                 estado,
-                reloj,
-                configuracion.velocidad());
+                reloj);
         publicarSnapshot(true);
         return snapshotActual;
     }
@@ -161,8 +184,7 @@ public final class MotorSimulacion {
         repositorio.actualizarEjecucion(
                 idSimulacion,
                 estado,
-                reloj,
-                configuracion.velocidad());
+                reloj);
         publicarSnapshot(true);
         return snapshotActual;
     }
@@ -172,27 +194,6 @@ public final class MotorSimulacion {
             throw new ConflictoSimulacionException("No existe una simulación activa");
         }
         finalizar(false, "Simulación detenida por el controlador");
-        return snapshotActual;
-    }
-
-    public synchronized SnapshotSimulacion cambiarVelocidad(double nuevaVelocidad) {
-        if (configuracion == null
-                || (estado != EstadoSimulacion.EJECUTANDO && estado != EstadoSimulacion.PAUSADA)) {
-            throw new ConflictoSimulacionException("No existe una simulación activa");
-        }
-        configuracion = new ConfiguracionSimulacion(
-                configuracion.fechaHoraInicio(),
-                configuracion.fechaHoraFin(),
-                nuevaVelocidad,
-                configuracion.semilla());
-        nanoUltimoTick = System.nanoTime();
-        repositorio.actualizarEjecucion(
-                idSimulacion,
-                estado,
-                reloj,
-                configuracion.velocidad());
-        mensajeEstado = "Velocidad actualizada";
-        publicarSnapshot(true);
         return snapshotActual;
     }
 
@@ -229,9 +230,25 @@ public final class MotorSimulacion {
         long deltaRealNanos = Math.max(0L, ahoraNano - nanoUltimoTick);
         nanoUltimoTick = ahoraNano;
 
+        /*
+         * Compresión temporal automática.
+         *
+         * El usuario no puede modificar este factor. Se calcula una sola vez
+         * al iniciar según el escenario:
+         *
+         * - OPERACION_DIARIA       -> ~15 min reales para 1 día simulado.
+         * - SIMULACION_CINCO_DIAS  -> ~30 min reales para 5 días simulados.
+         * - COLAPSO_LOGISTICO      -> hasta ~45 min reales para el horizonte
+         *                            máximo; termina antes al primer
+         *                            incumplimiento.
+         */
         long deltaVirtualNanos = Math.max(
                 1L,
-                Math.round(deltaRealNanos * configuracion.velocidad()));
+                Math.round(
+                        deltaRealNanos
+                                * factorTemporalInterno
+                )
+        );
 
         LocalDateTime relojAnterior = reloj;
         LocalDateTime nuevoReloj = reloj.plusNanos(deltaVirtualNanos);
@@ -243,8 +260,38 @@ public final class MotorSimulacion {
         }
         reloj = nuevoReloj;
 
-        repositorio.recargarAlmacenesSiCorresponde(relojAnterior, reloj);
+        repositorio.recargarAlmacenesSiCorresponde(
+                relojAnterior,
+                reloj
+        );
+
         repositorio.marcarPedidosRetrasados(reloj);
+
+        /*
+         * En colapso logístico la ejecución termina exactamente cuando el
+         * backend detecta el primer pedido fuera de plazo.
+         */
+        if (configuracion.escenario()
+                == EscenarioSimulacion.COLAPSO_LOGISTICO) {
+
+            var resumenColapso =
+                    repositorio.resumirPedidos(
+                            configuracion.fechaHoraInicio(),
+                            configuracion.fechaHoraFin(),
+                            reloj
+                    );
+
+            if (resumenColapso.retrasados() > 0) {
+
+                finalizar(
+                        true,
+                        "Colapso logístico: se detectó el primer incumplimiento de plazo"
+                );
+
+                return;
+            }
+        }
+
         repositorio.sincronizarDisponibilidad(reloj);
 
         Map<String, VehiculoPersistido> estadosVehiculos =
@@ -269,10 +316,9 @@ public final class MotorSimulacion {
 
         if (ahoraNano - nanoUltimaPersistencia >= NANO_SEGUNDO) {
             repositorio.actualizarEjecucion(
-                    idSimulacion,
-                    estado,
-                    reloj,
-                    configuracion.velocidad());
+                idSimulacion,
+                estado,
+                reloj);
             nanoUltimaPersistencia = ahoraNano;
         }
 
@@ -637,6 +683,12 @@ public final class MotorSimulacion {
                 estado,
                 reloj,
                 tiempoMs);
+
+        /*
+         * El propietario se libera automáticamente al terminar la ejecución.
+         * No existe lease ni endpoint público de liberación.
+         */
+        control.liberarInternamente();
         publicarSnapshot(true);
     }
 
@@ -678,6 +730,12 @@ public final class MotorSimulacion {
             }
         } catch (Exception ignored) {
             // Se conserva el error original en mensajeEstado.
+        } finally {
+            /*
+             * Ante un error, el control también se libera para no bloquear
+             * futuras ejecuciones.
+             */
+            control.liberarInternamente();
         }
 
         publicarSnapshot(true);
@@ -721,10 +779,10 @@ public final class MotorSimulacion {
         snapshotActual = new SnapshotSimulacion(
                 idSimulacion,
                 estado,
+                configuracion.escenario(),
                 reloj,
                 configuracion.fechaHoraInicio(),
                 configuracion.fechaHoraFin(),
-                configuracion.velocidad(),
                 ALGORITMO_OPERATIVO,
                 perfil,
                 resumen,

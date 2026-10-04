@@ -15,6 +15,7 @@ import javax.sql.DataSource;
 import org.springframework.stereotype.Repository;
 
 import pe.edu.pucp.sisrap.pedido.dominio.CargaHistoricaPedidos;
+import pe.edu.pucp.sisrap.pedido.dominio.CargaHistoricaPreparada;
 import pe.edu.pucp.sisrap.pedido.dominio.EstadoPedido;
 import pe.edu.pucp.sisrap.pedido.dominio.PedidoHistoricoImportado;
 import pe.edu.pucp.sisrap.pedido.dominio.PedidoOperativo;
@@ -312,12 +313,15 @@ public class JdbcPedidos implements RepositorioPedidos {
     }
 
     @Override
-    public CargaHistoricaPedidos guardarCargaHistorica(
-            String huella,
-            int anio,
-            int mes,
-            List<PedidoHistoricoImportado> pedidos
+    public List<CargaHistoricaPedidos> guardarCargasHistoricas(
+            List<CargaHistoricaPreparada> cargas
     ) {
+
+        if (cargas == null || cargas.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "Debe existir al menos una carga para guardar"
+            );
+        }
 
         try (Connection cn = fuente.getConnection()) {
 
@@ -326,34 +330,39 @@ public class JdbcPedidos implements RepositorioPedidos {
             try {
 
                 /*
-                 * Un único archivo histórico por mes.
+                 * Los archivos de ventas son mensuales. Antes de insertar,
+                 * bloqueamos/verificamos todos los periodos para evitar que
+                 * exista más de un archivo oficial para el mismo mes.
                  */
-                try (PreparedStatement ps =
-                             cn.prepareStatement("""
-                                     SELECT huella
-                                     FROM carga_pedidos_archivo
-                                     WHERE anio = ?
-                                       AND mes = ?
-                                     LIMIT 1
-                                     FOR UPDATE
-                                     """)) {
+                for (CargaHistoricaPreparada carga : cargas) {
 
-                    ps.setInt(1, anio);
-                    ps.setInt(2, mes);
+                    try (PreparedStatement ps =
+                                 cn.prepareStatement("""
+                                         SELECT huella
+                                         FROM carga_pedidos_archivo
+                                         WHERE anio = ?
+                                           AND mes = ?
+                                         LIMIT 1
+                                         FOR UPDATE
+                                         """)) {
 
-                    try (ResultSet rs = ps.executeQuery()) {
+                        ps.setInt(1, carga.anio());
+                        ps.setInt(2, carga.mes());
 
-                        if (rs.next()) {
-                            throw new IllegalStateException(
-                                    "Ya existen pedidos históricos "
-                                            + "cargados para "
-                                            + anio
-                                            + "-"
-                                            + String.format(
-                                                    "%02d",
-                                                    mes
-                                            )
-                            );
+                        try (ResultSet rs = ps.executeQuery()) {
+
+                            if (rs.next()) {
+                                throw new IllegalArgumentException(
+                                        "Ya existen pedidos históricos "
+                                                + "cargados para "
+                                                + carga.anio()
+                                                + "-"
+                                                + String.format(
+                                                        "%02d",
+                                                        carga.mes()
+                                                )
+                                );
+                            }
                         }
                     }
                 }
@@ -368,22 +377,6 @@ public class JdbcPedidos implements RepositorioPedidos {
                         VALUES (?, ?, ?, ?)
                         """;
 
-                try (PreparedStatement ps =
-                             cn.prepareStatement(
-                                     insertarCarga
-                             )) {
-
-                    ps.setString(1, huella);
-                    ps.setInt(2, anio);
-                    ps.setInt(3, mes);
-                    ps.setInt(
-                            4,
-                            pedidos.size()
-                    );
-
-                    ps.executeUpdate();
-                }
-
                 String insertarPedido = """
                         INSERT INTO pedido(
                             id_cliente,
@@ -397,89 +390,107 @@ public class JdbcPedidos implements RepositorioPedidos {
                         VALUES (?, ?, ?, ?, ?, ?, ?)
                         """;
 
-                try (PreparedStatement ps =
-                             cn.prepareStatement(
-                                     insertarPedido
-                             )) {
+                for (CargaHistoricaPreparada carga : cargas) {
 
-                    for (PedidoHistoricoImportado pedido :
-                            pedidos) {
+                    try (PreparedStatement ps =
+                                 cn.prepareStatement(insertarCarga)) {
 
-                        ps.setString(
-                                1,
-                                pedido.cliente()
-                        );
-
-                        ps.setInt(
-                                2,
-                                pedido.cantidad()
-                        );
-
-                        ps.setString(
-                                3,
-                                pedido.prioridad()
-                                        .name()
-                        );
-
-                        ps.setInt(
-                                4,
-                                pedido.horasLimite()
-                        );
-
-                        ps.setTimestamp(
-                                5,
-                                Timestamp.valueOf(
-                                        pedido.fechaLlegada()
-                                )
-                        );
-
-                        ps.setInt(
-                                6,
-                                pedido.x()
-                        );
-
-                        ps.setInt(
-                                7,
-                                pedido.y()
-                        );
-
-                        ps.addBatch();
+                        ps.setString(1, carga.huella());
+                        ps.setInt(2, carga.anio());
+                        ps.setInt(3, carga.mes());
+                        ps.setInt(4, carga.pedidos().size());
+                        ps.executeUpdate();
                     }
 
-                    ps.executeBatch();
+                    try (PreparedStatement ps =
+                                 cn.prepareStatement(insertarPedido)) {
+
+                        for (PedidoHistoricoImportado pedido :
+                                carga.pedidos()) {
+
+                            ps.setString(
+                                    1,
+                                    pedido.cliente()
+                            );
+
+                            ps.setInt(
+                                    2,
+                                    pedido.cantidad()
+                            );
+
+                            ps.setString(
+                                    3,
+                                    pedido.prioridad().name()
+                            );
+
+                            ps.setInt(
+                                    4,
+                                    pedido.horasLimite()
+                            );
+
+                            ps.setTimestamp(
+                                    5,
+                                    Timestamp.valueOf(
+                                            pedido.fechaLlegada()
+                                    )
+                            );
+
+                            ps.setInt(
+                                    6,
+                                    pedido.x()
+                            );
+
+                            ps.setInt(
+                                    7,
+                                    pedido.y()
+                            );
+
+                            ps.addBatch();
+                        }
+
+                        ps.executeBatch();
+                    }
                 }
 
-                LocalDateTime fechaCarga;
+                List<CargaHistoricaPedidos> resultado =
+                        new ArrayList<>();
 
-                try (PreparedStatement ps =
-                             cn.prepareStatement("""
-                                     SELECT fecha
-                                     FROM carga_pedidos_archivo
-                                     WHERE huella = ?
-                                     """)) {
+                for (CargaHistoricaPreparada carga : cargas) {
 
-                    ps.setString(1, huella);
+                    try (PreparedStatement ps =
+                                 cn.prepareStatement("""
+                                         SELECT fecha
+                                         FROM carga_pedidos_archivo
+                                         WHERE huella = ?
+                                         """)) {
 
-                    try (ResultSet rs =
-                                 ps.executeQuery()) {
+                        ps.setString(1, carga.huella());
 
-                        rs.next();
+                        try (ResultSet rs = ps.executeQuery()) {
 
-                        fechaCarga =
-                                rs.getTimestamp("fecha")
-                                        .toLocalDateTime();
+                            if (!rs.next()) {
+                                throw new IllegalStateException(
+                                        "No se pudo recuperar la carga "
+                                                + carga.nombreArchivo()
+                                );
+                            }
+
+                            resultado.add(
+                                    new CargaHistoricaPedidos(
+                                            carga.huella(),
+                                            carga.anio(),
+                                            carga.mes(),
+                                            carga.pedidos().size(),
+                                            rs.getTimestamp("fecha")
+                                                    .toLocalDateTime()
+                                    )
+                            );
+                        }
                     }
                 }
 
                 cn.commit();
-
-                return new CargaHistoricaPedidos(
-                        huella,
-                        anio,
-                        mes,
-                        pedidos.size(),
-                        fechaCarga
-                );
+                return List.copyOf(resultado);
 
             } catch (RuntimeException | SQLException e) {
 
@@ -490,8 +501,7 @@ public class JdbcPedidos implements RepositorioPedidos {
                 }
 
                 throw new IllegalStateException(
-                        "No se pudo importar "
-                                + "el archivo histórico",
+                        "No se pudieron importar los archivos históricos",
                         e
                 );
             }
@@ -499,8 +509,7 @@ public class JdbcPedidos implements RepositorioPedidos {
         } catch (SQLException e) {
 
             throw new IllegalStateException(
-                    "No se pudo importar "
-                            + "el archivo histórico",
+                    "No se pudieron importar los archivos históricos",
                     e
             );
         }

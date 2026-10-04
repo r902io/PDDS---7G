@@ -10,13 +10,16 @@ import java.sql.Timestamp;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.Set;
 
 import javax.sql.DataSource;
@@ -29,12 +32,14 @@ import pe.edu.pucp.sisrap.geografia.dominio.Nodo;
 import pe.edu.pucp.sisrap.parametros.dominio.Configuracion;
 import pe.edu.pucp.sisrap.parametros.dominio.ReglasPlanificacion;
 import pe.edu.pucp.sisrap.parametros.infraestructura.JdbcParametros;
+import pe.edu.pucp.sisrap.pedido.dominio.EstadoPedido;
 import pe.edu.pucp.sisrap.pedido.dominio.Pedido;
 import pe.edu.pucp.sisrap.pedido.dominio.TipoPrioridad;
 import pe.edu.pucp.sisrap.planificador.dominio.modelo.ContextoPlanificacion;
 import pe.edu.pucp.sisrap.simulacion.dominio.ConfiguracionSimulacion;
 import pe.edu.pucp.sisrap.simulacion.dominio.ContextoOperativo;
 import pe.edu.pucp.sisrap.simulacion.dominio.EstadoSimulacion;
+import pe.edu.pucp.sisrap.simulacion.dominio.EscenarioSimulacion;
 import pe.edu.pucp.sisrap.simulacion.dominio.PuntoSimulacion;
 import pe.edu.pucp.sisrap.simulacion.dominio.RepositorioSimulacion;
 import pe.edu.pucp.sisrap.simulacion.dominio.ResumenPedidosSimulacion;
@@ -44,30 +49,35 @@ import pe.edu.pucp.sisrap.simulacion.dominio.VehiculoSnapshot;
 @Repository
 public class JdbcSimulacion implements RepositorioSimulacion {
 
+    private static final int INCREMENTO_COLAPSO_POR_DIA = 12;
+    private static final long BLOQUE_IDS_SINTETICOS = 1_000_000L;
+
     private final DataSource fuente;
+
+    /** Pedidos de la ejecución activa. Nunca se persisten en la tabla histórica. */
+    private final Map<Long, PedidoSimulado> pedidosSimulados = new LinkedHashMap<>();
+    private List<PlantillaHistorica> plantillasHistoricas = List.of();
+    private Map<LocalDate, List<PlantillaHistorica>> plantillasPorDia = Map.of();
+    private ConfiguracionSimulacion configuracionDemanda;
+    private LocalDate ultimoDiaGenerado;
+    private int medianaPedidosDiarios;
 
     public JdbcSimulacion(DataSource fuente) {
         this.fuente = fuente;
     }
 
     @Override
-    public void prepararEjecucion(ConfiguracionSimulacion configuracion) {
+    public synchronized void prepararEjecucion(ConfiguracionSimulacion configuracion) {
+        if (configuracion == null) {
+            throw new IllegalArgumentException("La configuración de simulación es obligatoria");
+        }
+
         try (Connection cn = fuente.getConnection()) {
             cn.setAutoCommit(false);
             try {
                 int[] central = leerCentral(cn);
 
-                try (PreparedStatement ps = cn.prepareStatement("""
-                        UPDATE pedido
-                        SET estado = 'PENDIENTE',
-                            fecha_entrega_real = NULL
-                        WHERE fecha_llegada >= ?
-                          AND fecha_llegada < ?
-                        """)) {
-                    ps.setTimestamp(1, Timestamp.valueOf(configuracion.fechaHoraInicio()));
-                    ps.setTimestamp(2, Timestamp.valueOf(configuracion.fechaHoraFin()));
-                    ps.executeUpdate();
-                }
+                inicializarModeloDemanda(cn, configuracion);
 
                 try (PreparedStatement ps = cn.prepareStatement("""
                         UPDATE almacen
@@ -91,12 +101,14 @@ public class JdbcSimulacion implements RepositorioSimulacion {
                 cn.commit();
             } catch (RuntimeException | SQLException e) {
                 cn.rollback();
+                limpiarDemandaSimulada();
                 if (e instanceof RuntimeException runtime) {
                     throw runtime;
                 }
                 throw new IllegalStateException("No se pudo preparar la simulación", e);
             }
         } catch (SQLException e) {
+            limpiarDemandaSimulada();
             throw new IllegalStateException("No se pudo preparar la simulación", e);
         }
     }
@@ -116,24 +128,51 @@ public class JdbcSimulacion implements RepositorioSimulacion {
                     fecha_fin_programada,
                     estado,
                     reloj_simulado,
-                    velocidad_simulacion,
                     perfil
                 )
                 VALUES (
-                    'OPERACION_TIEMPO_REAL', ?, ?, ?, ?,
-                    'EJECUTANDO', ?, ?, ?
+                    ?, ?, ?, ?, ?,
+                    'EJECUTANDO', ?, ?
                 )
                 """;
 
         try (Connection cn = fuente.getConnection();
-             PreparedStatement ps = cn.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
+             PreparedStatement ps = cn.prepareStatement(
+                     sql,
+                     Statement.RETURN_GENERATED_KEYS
+             )) {
 
-            ps.setString(1, algoritmo);
-            ps.setLong(2, configuracion.semilla());
-            ps.setTimestamp(3, Timestamp.valueOf(configuracion.fechaHoraInicio()));
-            ps.setTimestamp(4, Timestamp.valueOf(configuracion.fechaHoraFin()));
-            ps.setTimestamp(5, Timestamp.valueOf(configuracion.fechaHoraInicio()));
-            ps.setDouble(6, configuracion.velocidad());
+            ps.setString(
+                    1,
+                    configuracion
+                            .escenario()
+                            .valorBaseDatos()
+            );
+
+            ps.setString(2, algoritmo);
+            ps.setLong(3, configuracion.semilla());
+
+            ps.setTimestamp(
+                    4,
+                    Timestamp.valueOf(
+                            configuracion.fechaHoraInicio()
+                    )
+            );
+
+            ps.setTimestamp(
+                    5,
+                    Timestamp.valueOf(
+                            configuracion.fechaHoraFin()
+                    )
+            );
+
+            ps.setTimestamp(
+                    6,
+                    Timestamp.valueOf(
+                            configuracion.fechaHoraInicio()
+                    )
+            );
+
             ps.setString(7, perfil);
             ps.executeUpdate();
 
@@ -152,22 +191,19 @@ public class JdbcSimulacion implements RepositorioSimulacion {
     public void actualizarEjecucion(
             long idSimulacion,
             EstadoSimulacion estado,
-            LocalDateTime reloj,
-            double velocidad) {
+            LocalDateTime reloj) {
 
         try (Connection cn = fuente.getConnection();
              PreparedStatement ps = cn.prepareStatement("""
                      UPDATE simulacion
                      SET estado = ?,
-                         reloj_simulado = ?,
-                         velocidad_simulacion = ?
+                         reloj_simulado = ?
                      WHERE id_simulacion = ?
                      """)) {
 
             ps.setString(1, estado.name());
             ps.setTimestamp(2, reloj == null ? null : Timestamp.valueOf(reloj));
-            ps.setDouble(3, velocidad);
-            ps.setLong(4, idSimulacion);
+            ps.setLong(3, idSimulacion);
             ps.executeUpdate();
         } catch (SQLException e) {
             throw new IllegalStateException("No se pudo actualizar la simulación", e);
@@ -208,6 +244,8 @@ public class JdbcSimulacion implements RepositorioSimulacion {
             LocalDateTime reloj,
             LocalDateTime finVentana) {
 
+        asegurarDemandaGeneradaHasta(reloj.toLocalDate());
+
         try (Connection cn = fuente.getConnection()) {
             cn.setTransactionIsolation(Connection.TRANSACTION_REPEATABLE_READ);
             cn.setAutoCommit(false);
@@ -221,7 +259,7 @@ public class JdbcSimulacion implements RepositorioSimulacion {
 
                 List<Almacen> almacenes = leerAlmacenes(cn, ancho, alto);
                 List<Vehiculo> vehiculos = leerVehiculos(cn, ancho, alto);
-                List<Pedido> pedidos = leerPedidosPlanificables(cn, reloj, finVentana, ancho, alto);
+                List<Pedido> pedidos = leerPedidosSimuladosPlanificables(reloj, finVentana, ancho, alto);
                 Set<String> bloqueados = leerNodosBloqueados(cn, reloj);
 
                 ReglasPlanificacion reglas = ReglasPlanificacion.desde(
@@ -406,63 +444,65 @@ public class JdbcSimulacion implements RepositorioSimulacion {
     }
 
     @Override
-    public void marcarPedidosEnRuta(Collection<Long> idsPedidos) {
-        ejecutarSobreIds(idsPedidos, """
-                UPDATE pedido
-                SET estado = 'EN_RUTA'
-                WHERE id_pedido IN (%s)
-                  AND estado IN ('PENDIENTE', 'REASIGNADO', 'RETRASADO')
-                """, null);
-    }
-
-    @Override
-    public void reencolarPedidos(Collection<Long> idsPedidos, LocalDateTime reloj) {
-        ejecutarSobreIds(idsPedidos, """
-                UPDATE pedido
-                SET estado = CASE
-                    WHEN DATE_ADD(fecha_llegada, INTERVAL horas_limite HOUR) < ?
-                        THEN 'RETRASADO'
-                    ELSE 'REASIGNADO'
-                END
-                WHERE id_pedido IN (%s)
-                  AND estado = 'EN_RUTA'
-                """, reloj);
-    }
-
-    @Override
-    public void entregarPedido(long idPedido, LocalDateTime fechaEntrega) {
-        try (Connection cn = fuente.getConnection();
-             PreparedStatement ps = cn.prepareStatement("""
-                     UPDATE pedido
-                     SET estado = 'ENTREGADO',
-                         fecha_entrega_real = ?
-                     WHERE id_pedido = ?
-                       AND estado = 'EN_RUTA'
-                     """)) {
-            ps.setTimestamp(1, Timestamp.valueOf(fechaEntrega));
-            ps.setLong(2, idPedido);
-            ps.executeUpdate();
-        } catch (SQLException e) {
-            throw new IllegalStateException("No se pudo entregar el pedido " + idPedido, e);
+    public synchronized void marcarPedidosEnRuta(Collection<Long> idsPedidos) {
+        if (idsPedidos == null || idsPedidos.isEmpty()) {
+            return;
+        }
+        for (Long id : idsPedidos) {
+            PedidoSimulado pedido = pedidosSimulados.get(id);
+            if (pedido != null
+                    && (pedido.estado == EstadoPedido.PENDIENTE
+                    || pedido.estado == EstadoPedido.REASIGNADO
+                    || pedido.estado == EstadoPedido.RETRASADO)) {
+                pedido.estado = EstadoPedido.EN_RUTA;
+            }
         }
     }
 
     @Override
-    public void marcarPedidosRetrasados(LocalDateTime reloj) {
-        try (Connection cn = fuente.getConnection();
-             PreparedStatement ps = cn.prepareStatement("""
-                     UPDATE pedido
-                     SET estado = 'RETRASADO'
-                     WHERE estado IN ('PENDIENTE', 'REASIGNADO')
-                       AND fecha_llegada <= ?
-                       AND DATE_ADD(fecha_llegada, INTERVAL horas_limite HOUR) < ?
-                     """)) {
-            Timestamp t = Timestamp.valueOf(reloj);
-            ps.setTimestamp(1, t);
-            ps.setTimestamp(2, t);
-            ps.executeUpdate();
-        } catch (SQLException e) {
-            throw new IllegalStateException("No se pudieron actualizar pedidos retrasados", e);
+    public synchronized void reencolarPedidos(
+            Collection<Long> idsPedidos,
+            LocalDateTime reloj) {
+
+        if (idsPedidos == null || idsPedidos.isEmpty()) {
+            return;
+        }
+
+        for (Long id : idsPedidos) {
+            PedidoSimulado pedido = pedidosSimulados.get(id);
+            if (pedido == null || pedido.estado != EstadoPedido.EN_RUTA) {
+                continue;
+            }
+            pedido.estado = pedido.fechaLimite().isBefore(reloj)
+                    ? EstadoPedido.RETRASADO
+                    : EstadoPedido.REASIGNADO;
+        }
+    }
+
+    @Override
+    public synchronized void entregarPedido(
+            long idPedido,
+            LocalDateTime fechaEntrega) {
+
+        PedidoSimulado pedido = pedidosSimulados.get(idPedido);
+        if (pedido == null) {
+            throw new IllegalArgumentException("Pedido simulado inexistente: " + idPedido);
+        }
+        if (pedido.estado == EstadoPedido.EN_RUTA) {
+            pedido.estado = EstadoPedido.ENTREGADO;
+            pedido.fechaEntregaReal = fechaEntrega;
+        }
+    }
+
+    @Override
+    public synchronized void marcarPedidosRetrasados(LocalDateTime reloj) {
+        for (PedidoSimulado pedido : pedidosSimulados.values()) {
+            if ((pedido.estado == EstadoPedido.PENDIENTE
+                    || pedido.estado == EstadoPedido.REASIGNADO)
+                    && !pedido.fechaLlegada.isAfter(reloj)
+                    && pedido.fechaLimite().isBefore(reloj)) {
+                pedido.estado = EstadoPedido.RETRASADO;
+            }
         }
     }
 
@@ -630,47 +670,50 @@ public class JdbcSimulacion implements RepositorioSimulacion {
     }
 
     @Override
-    public ResumenPedidosSimulacion resumirPedidos(
+    public synchronized ResumenPedidosSimulacion resumirPedidos(
             LocalDateTime inicio,
             LocalDateTime fin,
             LocalDateTime reloj) {
 
-        String sql = """
-                SELECT
-                    COUNT(*) AS total,
-                    SUM(CASE WHEN fecha_llegada > ? THEN 1 ELSE 0 END) AS futuros,
-                    SUM(CASE WHEN fecha_llegada <= ? AND estado = 'PENDIENTE' THEN 1 ELSE 0 END) AS pendientes,
-                    SUM(CASE WHEN estado = 'EN_RUTA' THEN 1 ELSE 0 END) AS en_ruta,
-                    SUM(CASE WHEN estado = 'REASIGNADO' THEN 1 ELSE 0 END) AS reasignados,
-                    SUM(CASE WHEN estado = 'RETRASADO' THEN 1 ELSE 0 END) AS retrasados,
-                    SUM(CASE WHEN estado = 'ENTREGADO' THEN 1 ELSE 0 END) AS entregados
-                FROM pedido
-                WHERE fecha_llegada >= ?
-                  AND fecha_llegada < ?
-                """;
+        int total = 0;
+        int futuros = 0;
+        int pendientes = 0;
+        int enRuta = 0;
+        int reasignados = 0;
+        int retrasados = 0;
+        int entregados = 0;
 
-        try (Connection cn = fuente.getConnection();
-             PreparedStatement ps = cn.prepareStatement(sql)) {
-            Timestamp r = Timestamp.valueOf(reloj);
-            ps.setTimestamp(1, r);
-            ps.setTimestamp(2, r);
-            ps.setTimestamp(3, Timestamp.valueOf(inicio));
-            ps.setTimestamp(4, Timestamp.valueOf(fin));
-
-            try (ResultSet rs = ps.executeQuery()) {
-                rs.next();
-                return new ResumenPedidosSimulacion(
-                        rs.getInt("total"),
-                        rs.getInt("futuros"),
-                        rs.getInt("pendientes"),
-                        rs.getInt("en_ruta"),
-                        rs.getInt("reasignados"),
-                        rs.getInt("retrasados"),
-                        rs.getInt("entregados"));
+        for (PedidoSimulado pedido : pedidosSimulados.values()) {
+            if (pedido.fechaLlegada.isBefore(inicio)
+                    || !pedido.fechaLlegada.isBefore(fin)) {
+                continue;
             }
-        } catch (SQLException e) {
-            throw new IllegalStateException("No se pudo resumir pedidos", e);
+
+            total++;
+
+            if (pedido.fechaLlegada.isAfter(reloj)) {
+                futuros++;
+                continue;
+            }
+
+            switch (pedido.estado) {
+                case PENDIENTE -> pendientes++;
+                case EN_RUTA -> enRuta++;
+                case REASIGNADO -> reasignados++;
+                case RETRASADO -> retrasados++;
+                case ENTREGADO -> entregados++;
+            }
         }
+
+        return new ResumenPedidosSimulacion(
+                total,
+                futuros,
+                pendientes,
+                enRuta,
+                reasignados,
+                retrasados,
+                entregados
+        );
     }
 
     private List<Almacen> leerAlmacenes(Connection cn, int ancho, int alto) throws SQLException {
@@ -727,40 +770,299 @@ public class JdbcSimulacion implements RepositorioSimulacion {
         return List.copyOf(salida);
     }
 
-    private List<Pedido> leerPedidosPlanificables(
-            Connection cn,
+    private synchronized List<Pedido> leerPedidosSimuladosPlanificables(
             LocalDateTime reloj,
             LocalDateTime finVentana,
             int ancho,
-            int alto) throws SQLException {
+            int alto) {
 
         List<Pedido> salida = new ArrayList<>();
-        try (PreparedStatement ps = cn.prepareStatement("""
-                SELECT id_pedido, id_cliente, cantidad_qq, prioridad, horas_limite,
-                       fecha_llegada, ubicacion_x, ubicacion_y
-                FROM pedido
-                WHERE fecha_llegada <= ?
-                  AND fecha_llegada < ?
-                  AND estado IN ('PENDIENTE', 'REASIGNADO', 'RETRASADO')
-                ORDER BY fecha_llegada, id_pedido
-                """)) {
-            ps.setTimestamp(1, Timestamp.valueOf(reloj));
-            ps.setTimestamp(2, Timestamp.valueOf(finVentana));
 
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    salida.add(new Pedido(
-                            rs.getLong("id_pedido"),
-                            rs.getString("id_cliente"),
-                            rs.getInt("cantidad_qq"),
-                            TipoPrioridad.valueOf(rs.getString("prioridad")),
-                            nodo(rs.getInt("ubicacion_x"), rs.getInt("ubicacion_y"), ancho, alto),
-                            rs.getTimestamp("fecha_llegada").toLocalDateTime(),
-                            rs.getInt("horas_limite")));
-                }
+        for (PedidoSimulado pedido : pedidosSimulados.values()) {
+            if (pedido.fechaLlegada.isAfter(reloj)
+                    || !pedido.fechaLlegada.isBefore(finVentana)) {
+                continue;
+            }
+
+            if (pedido.estado != EstadoPedido.PENDIENTE
+                    && pedido.estado != EstadoPedido.REASIGNADO
+                    && pedido.estado != EstadoPedido.RETRASADO) {
+                continue;
+            }
+
+            salida.add(pedido.aPedido(ancho, alto));
+        }
+
+        salida.sort(
+                Comparator.comparing(Pedido::getFechaLlegada)
+                        .thenComparing(Pedido::getIdPedido)
+        );
+
+        return List.copyOf(salida);
+    }
+
+    /**
+     * Carga el histórico persistido y lo deja únicamente como fuente estadística.
+     * Los pedidos de la simulación se mantienen separados, en memoria.
+     */
+    private void inicializarModeloDemanda(
+            Connection cn,
+            ConfiguracionSimulacion configuracion) throws SQLException {
+
+        Map<LocalDate, List<PlantillaHistorica>> porDia = new LinkedHashMap<>();
+        List<PlantillaHistorica> todas = new ArrayList<>();
+
+        try (PreparedStatement ps = cn.prepareStatement("""
+                SELECT id_cliente,
+                       cantidad_qq,
+                       prioridad,
+                       horas_limite,
+                       fecha_llegada,
+                       ubicacion_x,
+                       ubicacion_y
+                FROM pedido
+                ORDER BY fecha_llegada, id_pedido
+                """);
+             ResultSet rs = ps.executeQuery()) {
+
+            while (rs.next()) {
+                LocalDateTime llegada =
+                        rs.getTimestamp("fecha_llegada").toLocalDateTime();
+
+                PlantillaHistorica plantilla = new PlantillaHistorica(
+                        rs.getString("id_cliente"),
+                        rs.getInt("cantidad_qq"),
+                        TipoPrioridad.valueOf(rs.getString("prioridad")),
+                        rs.getInt("horas_limite"),
+                        llegada.toLocalTime(),
+                        rs.getInt("ubicacion_x"),
+                        rs.getInt("ubicacion_y")
+                );
+
+                todas.add(plantilla);
+                porDia.computeIfAbsent(
+                                llegada.toLocalDate(),
+                                ignorado -> new ArrayList<>()
+                        )
+                        .add(plantilla);
             }
         }
-        return List.copyOf(salida);
+
+        if (todas.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "No existen pedidos históricos. Cargue al menos un archivo de ventas antes de simular"
+            );
+        }
+
+        List<Integer> cantidadesDiarias = porDia.values().stream()
+                .map(List::size)
+                .sorted()
+                .toList();
+
+        int mediana = cantidadesDiarias.get(cantidadesDiarias.size() / 2);
+        if (cantidadesDiarias.size() % 2 == 0) {
+            int inferior = cantidadesDiarias.get(cantidadesDiarias.size() / 2 - 1);
+            mediana = Math.max(1, (inferior + mediana) / 2);
+        }
+
+        Map<LocalDate, List<PlantillaHistorica>> inmutable = new LinkedHashMap<>();
+        porDia.forEach((fecha, pedidos) ->
+                inmutable.put(fecha, List.copyOf(pedidos))
+        );
+
+        pedidosSimulados.clear();
+        plantillasHistoricas = List.copyOf(todas);
+        plantillasPorDia = new LinkedHashMap<>(inmutable);
+        configuracionDemanda = configuracion;
+        ultimoDiaGenerado = null;
+        medianaPedidosDiarios = Math.max(1, mediana);
+    }
+
+    private synchronized void limpiarDemandaSimulada() {
+        pedidosSimulados.clear();
+        plantillasHistoricas = List.of();
+        plantillasPorDia = Map.of();
+        configuracionDemanda = null;
+        ultimoDiaGenerado = null;
+        medianaPedidosDiarios = 0;
+    }
+
+    /** Genera, de forma determinista, los días que el reloj ya alcanzó. */
+    private synchronized void asegurarDemandaGeneradaHasta(LocalDate fechaObjetivo) {
+        if (configuracionDemanda == null || fechaObjetivo == null) {
+            return;
+        }
+
+        LocalDate inicio = configuracionDemanda.fechaInicio();
+        LocalDate ultimoPermitido =
+                configuracionDemanda.fechaHoraFin().toLocalDate().minusDays(1);
+
+        if (fechaObjetivo.isBefore(inicio)) {
+            return;
+        }
+
+        LocalDate limite = fechaObjetivo.isAfter(ultimoPermitido)
+                ? ultimoPermitido
+                : fechaObjetivo;
+
+        LocalDate siguiente = ultimoDiaGenerado == null
+                ? inicio
+                : ultimoDiaGenerado.plusDays(1);
+
+        while (!siguiente.isAfter(limite)) {
+            generarDiaSimulado(siguiente);
+            ultimoDiaGenerado = siguiente;
+            siguiente = siguiente.plusDays(1);
+        }
+    }
+
+    private void generarDiaSimulado(LocalDate fecha) {
+        long indiceDia = ChronoUnit.DAYS.between(
+                configuracionDemanda.fechaInicio(),
+                fecha
+        );
+
+        Random random = new Random(
+                mezclarSemilla(configuracionDemanda.semilla(), fecha.toEpochDay())
+        );
+
+        List<PlantillaHistorica> seleccionadas;
+
+        if (configuracionDemanda.escenario()
+                == EscenarioSimulacion.COLAPSO_LOGISTICO) {
+
+            long cantidadObjetivoLong = Math.addExact(
+                    medianaPedidosDiarios,
+                    Math.multiplyExact(indiceDia, INCREMENTO_COLAPSO_POR_DIA)
+            );
+
+            if (cantidadObjetivoLong > Integer.MAX_VALUE) {
+                throw new IllegalStateException("La demanda de colapso excede el límite soportado");
+            }
+
+            int cantidadObjetivo = (int) cantidadObjetivoLong;
+            List<PlantillaHistorica> muestras = new ArrayList<>(cantidadObjetivo);
+
+            for (int i = 0; i < cantidadObjetivo; i++) {
+                muestras.add(
+                        plantillasHistoricas.get(
+                                random.nextInt(plantillasHistoricas.size())
+                        )
+                );
+            }
+            seleccionadas = muestras;
+
+        } else {
+            List<Map.Entry<LocalDate, List<PlantillaHistorica>>> mismoDiaSemana =
+                    plantillasPorDia.entrySet().stream()
+                            .filter(entry -> entry.getKey().getDayOfWeek() == fecha.getDayOfWeek())
+                            .toList();
+
+            List<Map.Entry<LocalDate, List<PlantillaHistorica>>> candidatos =
+                    mismoDiaSemana.isEmpty()
+                            ? new ArrayList<>(plantillasPorDia.entrySet())
+                            : mismoDiaSemana;
+
+            Map.Entry<LocalDate, List<PlantillaHistorica>> diaPlantilla =
+                    candidatos.get(random.nextInt(candidatos.size()));
+
+            seleccionadas = diaPlantilla.getValue();
+        }
+
+        for (int i = 0; i < seleccionadas.size(); i++) {
+            PlantillaHistorica plantilla = seleccionadas.get(i);
+            LocalTime hora = plantilla.horaLlegada();
+
+            // La ejecución comienza vacía exactamente a las 00:00:00.
+            if (hora.equals(LocalTime.MIDNIGHT)) {
+                hora = LocalTime.of(0, 0, 1);
+            }
+
+            long id = -Math.addExact(
+                    Math.multiplyExact(indiceDia + 1L, BLOQUE_IDS_SINTETICOS),
+                    i + 1L
+            );
+
+            PedidoSimulado simulado = new PedidoSimulado(
+                    id,
+                    plantilla.cliente(),
+                    plantilla.cantidad(),
+                    plantilla.prioridad(),
+                    plantilla.horasLimite(),
+                    fecha.atTime(hora),
+                    plantilla.x(),
+                    plantilla.y()
+            );
+
+            pedidosSimulados.put(id, simulado);
+        }
+    }
+
+    private static long mezclarSemilla(long semilla, long valor) {
+        long z = semilla ^ (valor + 0x9E3779B97F4A7C15L);
+        z = (z ^ (z >>> 30)) * 0xBF58476D1CE4E5B9L;
+        z = (z ^ (z >>> 27)) * 0x94D049BB133111EBL;
+        return z ^ (z >>> 31);
+    }
+
+    private record PlantillaHistorica(
+            String cliente,
+            int cantidad,
+            TipoPrioridad prioridad,
+            int horasLimite,
+            LocalTime horaLlegada,
+            int x,
+            int y
+    ) {
+    }
+
+    private static final class PedidoSimulado {
+        private final long id;
+        private final String cliente;
+        private final int cantidad;
+        private final TipoPrioridad prioridad;
+        private final int horasLimite;
+        private final LocalDateTime fechaLlegada;
+        private final int x;
+        private final int y;
+        private EstadoPedido estado = EstadoPedido.PENDIENTE;
+        private LocalDateTime fechaEntregaReal;
+
+        private PedidoSimulado(
+                long id,
+                String cliente,
+                int cantidad,
+                TipoPrioridad prioridad,
+                int horasLimite,
+                LocalDateTime fechaLlegada,
+                int x,
+                int y
+        ) {
+            this.id = id;
+            this.cliente = cliente;
+            this.cantidad = cantidad;
+            this.prioridad = prioridad;
+            this.horasLimite = horasLimite;
+            this.fechaLlegada = fechaLlegada;
+            this.x = x;
+            this.y = y;
+        }
+
+        private LocalDateTime fechaLimite() {
+            return fechaLlegada.plusHours(horasLimite);
+        }
+
+        private Pedido aPedido(int ancho, int alto) {
+            return new Pedido(
+                    id,
+                    cliente,
+                    cantidad,
+                    prioridad,
+                    nodo(x, y, ancho, alto),
+                    fechaLlegada,
+                    horasLimite
+            );
+        }
     }
 
     private Set<String> leerNodosBloqueados(Connection cn, LocalDateTime reloj) throws SQLException {
@@ -957,33 +1259,6 @@ public class JdbcSimulacion implements RepositorioSimulacion {
         return nodo.getX() + "," + nodo.getY();
     }
 
-    private void ejecutarSobreIds(
-            Collection<Long> ids,
-            String plantillaSql,
-            LocalDateTime reloj) {
-
-        if (ids == null || ids.isEmpty()) {
-            return;
-        }
-
-        String placeholders = String.join(",", java.util.Collections.nCopies(ids.size(), "?"));
-        String sql = plantillaSql.formatted(placeholders);
-
-        try (Connection cn = fuente.getConnection();
-             PreparedStatement ps = cn.prepareStatement(sql)) {
-
-            int indice = 1;
-            if (reloj != null) {
-                ps.setTimestamp(indice++, Timestamp.valueOf(reloj));
-            }
-            for (Long id : ids) {
-                ps.setLong(indice++, id);
-            }
-            ps.executeUpdate();
-        } catch (SQLException e) {
-            throw new IllegalStateException("No se pudieron actualizar pedidos", e);
-        }
-    }
 
     private static boolean cruzaHora(
             LocalDateTime desde,

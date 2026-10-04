@@ -31,10 +31,11 @@ public interface RepositorioPedidos {
             int mes
     );
 
-    CargaHistoricaPedidos guardarCargaHistorica(
-            String huella,
-            int anio,
-            int mes,
-            List<PedidoHistoricoImportado> pedidos
+    /**
+     * Guarda todos los archivos de una carga múltiple en una sola transacción.
+     * Si uno falla, no se persiste ninguno.
+     */
+    List<CargaHistoricaPedidos> guardarCargasHistoricas(
+            List<CargaHistoricaPreparada> cargas
     );
 }

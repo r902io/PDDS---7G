@@ -16,17 +16,19 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
-import pe.edu.pucp.sisrap.control.aplicacion.GestionarControlSimulacion.ControlNoAutorizadoException;
 import pe.edu.pucp.sisrap.pedido.aplicacion.GestionarPedidos;
+import pe.edu.pucp.sisrap.pedido.aplicacion.GestionarPedidos.CargaDuranteSimulacionException;
 import pe.edu.pucp.sisrap.pedido.aplicacion.GestionarPedidos.PeriodoYaCargadoException;
+import pe.edu.pucp.sisrap.pedido.aplicacion.GestionarPedidos.SesionNoValidaException;
 import pe.edu.pucp.sisrap.pedido.dominio.CargaHistoricaPedidos;
 import pe.edu.pucp.sisrap.pedido.dominio.EstadoPedido;
 import pe.edu.pucp.sisrap.pedido.dominio.PaginaPedidos;
 import pe.edu.pucp.sisrap.pedido.dominio.PedidoOperativo;
+import pe.edu.pucp.sisrap.pedido.dominio.ResultadoCargaHistorica;
 
 @RestController
 @RequestMapping("/api/pedidos")
-public final class PedidoController {
+public class PedidoController {
 
     private final GestionarPedidos servicio;
 
@@ -105,20 +107,16 @@ public final class PedidoController {
             value = "/cargas-historicas",
             consumes = "multipart/form-data"
     )
-    public ResponseEntity<CargaHistoricaPedidos>
-    cargarHistorico(
+    public ResponseEntity<ResultadoCargaHistorica>
+    cargarHistoricos(
             @RequestHeader(
                     value = "Authorization",
                     required = false
             )
             String authorization,
 
-            @RequestParam int anio,
-
-            @RequestParam int mes,
-
-            @RequestPart("archivo")
-            MultipartFile archivo
+            @RequestPart("archivos")
+            List<MultipartFile> archivos
     ) {
 
         String token =
@@ -128,22 +126,27 @@ public final class PedidoController {
 
         try {
 
-            CargaHistoricaPedidos resultado =
-                    servicio.importarHistorico(
+            ResultadoCargaHistorica resultado =
+                    servicio.importarHistoricos(
                             token,
-                            anio,
-                            mes,
-                            archivo
+                            archivos
                     );
 
             return ResponseEntity
                     .status(HttpStatus.CREATED)
                     .body(resultado);
 
-        } catch (ControlNoAutorizadoException e) {
+        } catch (SesionNoValidaException e) {
 
             throw new ResponseStatusException(
-                    HttpStatus.FORBIDDEN,
+                    HttpStatus.UNAUTHORIZED,
+                    e.getMessage()
+            );
+
+        } catch (CargaDuranteSimulacionException e) {
+
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
                     e.getMessage()
             );
 

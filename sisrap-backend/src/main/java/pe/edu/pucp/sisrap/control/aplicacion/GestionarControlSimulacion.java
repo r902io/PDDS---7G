@@ -1,6 +1,5 @@
 package pe.edu.pucp.sisrap.control.aplicacion;
 
-import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
 
@@ -11,15 +10,14 @@ import pe.edu.pucp.sisrap.control.dominio.RepositorioControlSimulacion;
 import pe.edu.pucp.sisrap.sesion.aplicacion.GestionarSesiones;
 import pe.edu.pucp.sisrap.sesion.dominio.Sesion;
 
+/**
+ * Control exclusivo interno de la simulación.
+ *
+ * <p>No se expone mediante una API REST. La primera sesión que inicia una
+ * simulación adquiere el control y lo conserva durante toda la ejecución.</p>
+ */
 @Service
-public final class GestionarControlSimulacion {
-
-    /*
-     * El navegador controlador debe renovar su control
-     * antes de que transcurran estos 30 segundos.
-     */
-    private static final Duration DURACION_CONTROL =
-            Duration.ofSeconds(30);
+public class GestionarControlSimulacion {
 
     private final RepositorioControlSimulacion repositorio;
     private final GestionarSesiones gestionarSesiones;
@@ -33,156 +31,62 @@ public final class GestionarControlSimulacion {
     }
 
     /**
-     * Devuelve el control actual.
+     * Adquiere automáticamente el control al intentar iniciar una simulación.
      *
-     * Si ya expiró, lo elimina automáticamente.
+     * <p>Si otra sesión ya controla la ejecución, la operación se rechaza.
+     * Si la misma sesión ya es la propietaria, la operación es idempotente.</p>
      */
-    public synchronized Optional<ControlSimulacion> obtenerActual() {
-
-        Instant ahora = Instant.now();
-
-        Optional<ControlSimulacion> actual =
-                repositorio.obtener();
-
-        if (actual.isEmpty()) {
-            return Optional.empty();
-        }
-
-        if (actual.get().expirado(ahora)) {
-            repositorio.liberar();
-            return Optional.empty();
-        }
-
-        return actual;
-    }
-
-    /**
-     * Una sesión intenta convertirse en controladora.
-     */
-    public synchronized ControlSimulacion adquirir(
+    public synchronized AdquisicionControl adquirirParaSimulacion(
             String tokenSesion
     ) {
 
         Sesion sesion = gestionarSesiones.validar(tokenSesion);
 
-        Instant ahora = Instant.now();
+        Optional<ControlSimulacion> actual = repositorio.obtener();
 
-        Optional<ControlSimulacion> actual =
-                obtenerActual();
-
-        /*
-         * No existe controlador.
-         */
         if (actual.isEmpty()) {
-
-            ControlSimulacion nuevo =
-                    new ControlSimulacion(
-                            sesion.id(),
-                            ahora,
-                            ahora,
-                            ahora.plus(DURACION_CONTROL)
-                    );
-
+            ControlSimulacion nuevo = new ControlSimulacion(
+                    sesion.id(),
+                    Instant.now()
+            );
             repositorio.guardar(nuevo);
-
-            return nuevo;
+            return new AdquisicionControl(nuevo, true);
         }
 
         ControlSimulacion control = actual.get();
 
-        /*
-         * La misma sesión ya tenía el control.
-         *
-         * Hacemos la operación idempotente:
-         * simplemente renovamos su lease.
-         */
         if (control.perteneceA(sesion.id())) {
-
-            ControlSimulacion renovado =
-                    control.renovar(
-                            ahora,
-                            DURACION_CONTROL
-                    );
-
-            repositorio.guardar(renovado);
-
-            return renovado;
+            return new AdquisicionControl(control, false);
         }
 
-        /*
-         * Otra sesión tiene actualmente el control.
-         */
-        throw new ControlOcupadoException(
-                control.expiraEn()
-        );
+        throw new ControlOcupadoException();
     }
 
     /**
-     * Mantiene vivo el control.
+     * Exige que exista una simulación controlada por esta sesión.
+     * Se usa para pausar, reanudar y detener.
      */
-    public synchronized ControlSimulacion renovar(
+    public void verificarControladorActivo(
             String tokenSesion
     ) {
 
         Sesion sesion = gestionarSesiones.validar(tokenSesion);
 
-        Instant ahora = Instant.now();
-
-        ControlSimulacion control = obtenerActual()
-                .orElseThrow(
-                        () -> new SinControlException(
-                                "No existe un controlador activo"
-                        )
-                );
+        ControlSimulacion control = repositorio.obtener()
+                .orElseThrow(ControlNoAutorizadoException::new);
 
         if (!control.perteneceA(sesion.id())) {
             throw new ControlNoAutorizadoException();
         }
-
-        ControlSimulacion renovado =
-                control.renovar(
-                        ahora,
-                        DURACION_CONTROL
-                );
-
-        repositorio.guardar(renovado);
-
-        return renovado;
     }
 
     /**
-     * Libera voluntariamente el control.
-     */
-    public synchronized void liberar(
-            String tokenSesion
-    ) {
-
-        Sesion sesion = gestionarSesiones.validar(tokenSesion);
-
-        ControlSimulacion control = obtenerActual()
-                .orElseThrow(
-                        () -> new SinControlException(
-                                "No existe un controlador activo"
-                        )
-                );
-
-        if (!control.perteneceA(sesion.id())) {
-            throw new ControlNoAutorizadoException();
-        }
-
-        repositorio.liberar();
-    }
-
-    /**
-     * Se utilizará después desde:
+     * Verificación usada por operaciones estructurales existentes
+     * (mapa, almacenes y carga histórica).
      *
-     * - ParametrosController
-     * - iniciar simulación
-     * - pausar simulación
-     * - detener simulación
-     *
-     * para comprobar que el usuario realmente
-     * posee el control.
+     * <p>Antes de que exista una simulación activa, cualquier sesión válida
+     * puede preparar los datos. Una vez que una sesión inicia la simulación,
+     * solo esa sesión puede ejecutar estas operaciones mientras dure.</p>
      */
     public void verificarControlador(
             String tokenSesion
@@ -190,30 +94,39 @@ public final class GestionarControlSimulacion {
 
         Sesion sesion = gestionarSesiones.validar(tokenSesion);
 
-        ControlSimulacion control = obtenerActual()
-                .orElseThrow(
-                        () -> new ControlNoAutorizadoException()
-                );
+        Optional<ControlSimulacion> actual = repositorio.obtener();
 
-        if (!control.perteneceA(sesion.id())) {
+        if (actual.isPresent()
+                && !actual.get().perteneceA(sesion.id())) {
             throw new ControlNoAutorizadoException();
         }
+    }
+
+    /**
+     * Liberación exclusiva para la lógica interna del backend.
+     * No existe endpoint público para realizar esta operación.
+     */
+    public synchronized void liberarInternamente() {
+        repositorio.liberar();
+    }
+
+    public Optional<ControlSimulacion> obtenerActual() {
+        return repositorio.obtener();
+    }
+
+    public record AdquisicionControl(
+            ControlSimulacion control,
+            boolean adquiridoAhora
+    ) {
     }
 
     public static final class ControlOcupadoException
             extends RuntimeException {
 
-        private final Instant expiraEn;
-
-        public ControlOcupadoException(
-                Instant expiraEn
-        ) {
-            super("Otra sesión tiene el control de la simulación");
-            this.expiraEn = expiraEn;
-        }
-
-        public Instant getExpiraEn() {
-            return expiraEn;
+        public ControlOcupadoException() {
+            super(
+                    "Otra sesión ya controla la simulación activa"
+            );
         }
     }
 
@@ -224,14 +137,6 @@ public final class GestionarControlSimulacion {
             super(
                     "La sesión actual no controla la simulación"
             );
-        }
-    }
-
-    public static final class SinControlException
-            extends RuntimeException {
-
-        public SinControlException(String mensaje) {
-            super(mensaje);
         }
     }
 }

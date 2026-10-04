@@ -1,26 +1,52 @@
 package pe.edu.pucp.sisrap.simulacion.dominio;
 
 import java.time.Duration;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 
+
 public record ConfiguracionSimulacion(
-        LocalDateTime fechaHoraInicio,
-        LocalDateTime fechaHoraFin,
-        double velocidad,
-        long semilla) {
+        EscenarioSimulacion escenario,
+        LocalDate fechaInicio,
+        long semilla
+) {
 
     public ConfiguracionSimulacion {
-        if (fechaHoraInicio == null || fechaHoraFin == null) {
-            throw new IllegalArgumentException("Debe indicar inicio y fin de la simulación");
+        if (escenario == null) {
+            throw new IllegalArgumentException("El escenario es obligatorio");
         }
-        if (!fechaHoraFin.isAfter(fechaHoraInicio)) {
-            throw new IllegalArgumentException("La fecha fin debe ser posterior a la fecha inicio");
+        if (fechaInicio == null) {
+            throw new IllegalArgumentException("La fecha de inicio es obligatoria");
         }
-        if (Duration.between(fechaHoraInicio, fechaHoraFin).toDays() > 31) {
-            throw new IllegalArgumentException("La simulación operativa no puede superar 31 días por ejecución");
+    }
+
+    public LocalDateTime fechaHoraInicio() {
+        return fechaInicio.atStartOfDay();
+    }
+
+    public LocalDateTime fechaHoraFin() {
+        return escenario.calcularFechaFin(fechaHoraInicio());
+    }
+
+    public Duration duracionSimuladaMaxima() {
+        return Duration.between(fechaHoraInicio(), fechaHoraFin());
+    }
+
+    public Duration duracionRealObjetivo() {
+        return escenario.duracionRealObjetivo();
+    }
+
+    public double factorTemporalInterno() {
+        double nanosSimuladosReferencia =
+                escenario.duracionSimuladaReferencia().toNanos();
+        double nanosReales = duracionRealObjetivo().toNanos();
+
+        if (nanosReales <= 0.0) {
+            throw new IllegalStateException(
+                    "La duración real objetivo debe ser mayor que cero"
+            );
         }
-        if (!Double.isFinite(velocidad) || velocidad < 1.0 || velocidad > 600.0) {
-            throw new IllegalArgumentException("La velocidad debe estar entre 1 y 600 segundos simulados por segundo real");
-        }
+
+        return nanosSimuladosReferencia / nanosReales;
     }
 }
