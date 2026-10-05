@@ -40,7 +40,7 @@ import pe.edu.pucp.sisrap.pedido.dominio.TipoPrioridad;
  .\mvnw.cmd spring-boot:run "-Dspring-boot.run.main-class=pe.edu.pucp.sisrap.experimentacion.ExperimentacionMain" "-Dspring-boot.run.arguments=--perfil=BASE --datos=datos --salida=resultados --solo-datos"
 
  - ejecutar la experimenación completa:
- .\mvnw.cmd spring-boot:run "-Dspring-boot.run.main-class=pe.edu.pucp.sisrap.experimentacion.ExperimentacionMain" "-Dspring-boot.run.arguments=--perfil=BASE --datos=datos --salida=resultados --instancias=3 --repeticiones=30"
+ .\mvnw.cmd spring-boot:run "-Dspring-boot.run.main-class=pe.edu.pucp.sisrap.experimentacion.ExperimentacionMain" "-Dspring-boot.run.arguments=--perfil=BASE --datos=datos --salida=resultados --instancias=5 --repeticiones=18"
  */
 public final class ExperimentacionMain {
     static final String AYUDA = """
@@ -51,8 +51,8 @@ public final class ExperimentacionMain {
               --salida=resultados      carpeta donde se crea resultados/<nombre>/
               --desde=AAAA-MM-DD       primer día del periodo histórico de calibración (por defecto, primer día disponible)
               --algoritmos=GENETICO,RECOCIDO_SIMULADO
-              --instancias=3           instancias distintas N01/N02/N03 por escenario y perfil
-              --repeticiones=30        por defecto experimento.repeticiones de la BD
+              --instancias=3           cantidad de instancias base; para el diseño mejorado usar 5
+              --repeticiones=30        por defecto experimento.repeticiones de la BD; para el diseño mejorado usar 20
               --semilla=42             por defecto experimento.semillaBase de la BD
               --variante=NOMBRE:clave=valor;clave=valor   (repetible) además de BASE, prueba parámetros sobrescritos
               --sin-mantenimiento      no marcar vehículos en mantenimiento preventivo
@@ -107,8 +107,10 @@ public final class ExperimentacionMain {
 
         System.out.printf("Archivos: %d pedidos, %d bloqueos, %d días con mantenimiento preventivo (%d archivos leídos)%n",
                 datos.pedidos().size(), datos.bloqueos().size(), datos.mantenimiento().size(), datos.archivosLeidos().size());
-        System.out.printf("Demanda histórica base %s a %s (%d días): P50=%d, P75=%d, P90=%d, incremento colapso=%d pedidos/día%n",
-                demanda.desde(), demanda.hasta(), demanda.dias(), demanda.p50(), demanda.p75(), demanda.p90(), demanda.incrementoColapso());
+        double crecimientoColapsoBase = base.configuracion().numero("experimento.colapso.crecimientoDiario");
+        System.out.printf("Demanda histórica base %s a %s (%d días): P50=%d, P75=%d, P90=%d; crecimiento colapso base=%.2f%%%n",
+                demanda.desde(), demanda.hasta(), demanda.dias(), demanda.p50(), demanda.p75(), demanda.p90(),
+                100.0 * crecimientoColapsoBase);
         System.out.printf("Bloqueos históricos base %s a %s (%d días): P50=%d, P75=%d, P90=%d bloqueos/día, %d plantillas%n",
                 bloqueosHistoricos.desde(), bloqueosHistoricos.hasta(), bloqueosHistoricos.dias(),
                 bloqueosHistoricos.p50(), bloqueosHistoricos.p75(), bloqueosHistoricos.p90(),
@@ -187,7 +189,7 @@ public final class ExperimentacionMain {
                 demanda.p50(),
                 demanda.p75(),
                 demanda.p90(),
-                demanda.incrementoColapso(),
+                cfg.numero("experimento.colapso.crecimientoDiario"),
                 instancias,
                 repeticiones,
                 o.tieneValor("semilla")
@@ -226,7 +228,8 @@ public final class ExperimentacionMain {
         limites.add("Los tres escenarios usan una aproximación batch diaria: una salida por vehículo por jornada, pedidos indivisibles y sin modelado explícito de turnos o alimentación.");
         limites.add("La experimentación usa planificación batch diaria con información completa de la demanda sintética del día; se conservan las horas reales de llegada y deadlines, y una ruta espera si alcanza un pedido antes de su llegada.");
         limites.add("La demanda de NORMAL, ALTA y CRITICA se deriva de P50, P75 y P90 del periodo histórico base; no se usan tamaños 25/38/55 fijados manualmente.");
-        limites.add("COLAPSO_LOGISTICO aumenta la cantidad esperada de pedidos cada día usando el incremento histórico P75-P50 y termina en el primer deadline que el planificador no logra mantener.");
+        limites.add("COLAPSO_LOGISTICO inicia los tres perfiles desde la misma demanda P50 y los mismos bloqueos P50; la demanda crece de forma compuesta con tasas 5%/10%/15% cuando el parámetro base es 0.05.");
+        limites.add("En operación diaria y cinco días, Nxx-NORMAL es subconjunto de Nxx-ALTA y este de Nxx-CRITICA para pedidos y bloqueos; así el perfil aumenta presión sobre la misma realización base.");
         limites.add("V penaliza restricciones duras representables por el modelo: capacidad, disponibilidad de vehículo, duplicidad, almacén/stock y rutas intransitables por bloqueos.");
         limites.add("La prioridad se expresa mediante deadlines 4/8/12/18h frente a 36h; no existe un beta adicional por prioridad para no cambiar la F documentada.");
         limites.add("Turnos y alimentación aún no forman parte de V porque Ruta/ContextoPlanificacion no modelan esas restricciones temporalmente.");

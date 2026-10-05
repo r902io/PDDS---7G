@@ -13,7 +13,7 @@ import pe.edu.pucp.sisrap.carga.dominio.ReglasCarga;
 import pe.edu.pucp.sisrap.carga.dominio.RepositorioCarga;
 import pe.edu.pucp.sisrap.parametros.infraestructura.JdbcParametros;
 import pe.edu.pucp.sisrap.pedido.dominio.TipoPrioridad;
-public final class JdbcCarga implements RepositorioCarga {
+public class JdbcCarga implements RepositorioCarga {
     private final DataSource fuente;
     public JdbcCarga(DataSource fuente){this.fuente=fuente;}
     public ReglasCarga reglas(String perfil){

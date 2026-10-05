@@ -19,17 +19,9 @@ import pe.edu.pucp.sisrap.geografia.dominio.Nodo;
 /**
  * Modelo simple para generar bloqueos sintéticos a partir del histórico entregado.
  *
- * La cantidad diaria se calibra con la misma ventana histórica usada para la demanda:
- * NORMAL=P50, ALTA=P75 y CRITICA=P90 de bloqueos que comienzan por día.
- *
- * Cada bloqueo sintético toma una plantilla histórica y conserva:
- * - hora de inicio dentro del día;
- * - duración;
- * - forma de la poligonal abierta.
- *
- * La poligonal se traslada a una ubicación aleatoria válida dentro de la retícula de
- * PaqRap. De esta forma no se reutilizan necesariamente las mismas calles históricas,
- * pero sí se conserva el patrón geométrico observado.
+ * En el diseño pareado, NORMAL, ALTA y CRITICA de una misma instancia comparten
+ * el mismo conjunto máximo de bloqueos candidatos. Mediante thinning de Poisson:
+ * bloqueos NORMAL ⊆ ALTA ⊆ CRITICA.
  */
 public final class ModeloBloqueosHistoricos {
     private ModeloBloqueosHistoricos() {}
@@ -157,22 +149,84 @@ public final class ModeloBloqueosHistoricos {
         List<Bloqueo> salida = new ArrayList<>(cantidad);
 
         for (int i = 0; i < cantidad; i++) {
-            Plantilla plantilla = resumen.plantillas().get(
-                    random.nextInt(resumen.plantillas().size()));
-
-            LocalDateTime inicio = fecha.atStartOfDay().plusMinutes(plantilla.minutoInicio());
-            LocalDateTime fin = inicio.plusMinutes(plantilla.duracionMinutos());
-            List<Nodo> vertices = trasladar(
-                    plantilla.verticesRelativos(),
-                    random,
-                    anchoKm,
-                    altoKm);
-
-            salida.add(new Bloqueo(inicio, fin, vertices));
+            salida.add(generarBloqueo(resumen, fecha, random, anchoKm, altoKm));
         }
 
         salida.sort(Comparator.comparing(Bloqueo::inicio).thenComparing(Bloqueo::fin));
         return List.copyOf(salida);
+    }
+
+    /** Genera bloqueos pareados: NORMAL ⊆ ALTA ⊆ CRITICA. */
+    public static List<Bloqueo> generarDiaPareado(Resumen resumen,
+                                                   PerfilPresion perfil,
+                                                   LocalDate fecha,
+                                                   Random random,
+                                                   int anchoKm,
+                                                   int altoKm) {
+        return generarDiaAcoplado(
+                resumen,
+                resumen.lambda(perfil),
+                resumen.p90(),
+                fecha,
+                random,
+                anchoKm,
+                altoKm);
+    }
+
+    /** Generación acoplada con lambda objetivo respecto de un lambda máximo. */
+    public static List<Bloqueo> generarDiaAcoplado(Resumen resumen,
+                                                    double lambdaObjetivo,
+                                                    double lambdaMaxima,
+                                                    LocalDate fecha,
+                                                    Random random,
+                                                    int anchoKm,
+                                                    int altoKm) {
+        if (resumen == null || fecha == null || random == null)
+            throw new IllegalArgumentException("Generación acoplada de bloqueos incompleta");
+        if (!Double.isFinite(lambdaObjetivo) || !Double.isFinite(lambdaMaxima)
+                || lambdaObjetivo < 0 || lambdaMaxima < 0 || lambdaObjetivo > lambdaMaxima) {
+            throw new IllegalArgumentException("Lambdas inválidos para generación acoplada de bloqueos");
+        }
+        if (anchoKm < 1 || altoKm < 1)
+            throw new IllegalArgumentException("Dimensiones de ciudad inválidas");
+        if (lambdaMaxima == 0.0) return List.of();
+
+        int cantidadMaxima = poisson(random, lambdaMaxima);
+        double probabilidad = lambdaObjetivo / lambdaMaxima;
+        List<Bloqueo> candidatos = new ArrayList<>(cantidadMaxima);
+        List<Double> marcas = new ArrayList<>(cantidadMaxima);
+
+        for (int i = 0; i < cantidadMaxima; i++) {
+            candidatos.add(generarBloqueo(resumen, fecha, random, anchoKm, altoKm));
+            marcas.add(random.nextDouble());
+        }
+
+        List<Bloqueo> salida = new ArrayList<>();
+        for (int i = 0; i < candidatos.size(); i++) {
+            if (marcas.get(i) <= probabilidad) salida.add(candidatos.get(i));
+        }
+
+        salida.sort(Comparator.comparing(Bloqueo::inicio).thenComparing(Bloqueo::fin));
+        return List.copyOf(salida);
+    }
+
+    private static Bloqueo generarBloqueo(Resumen resumen,
+                                           LocalDate fecha,
+                                           Random random,
+                                           int anchoKm,
+                                           int altoKm) {
+        Plantilla plantilla = resumen.plantillas().get(
+                random.nextInt(resumen.plantillas().size()));
+
+        LocalDateTime inicio = fecha.atStartOfDay().plusMinutes(plantilla.minutoInicio());
+        LocalDateTime fin = inicio.plusMinutes(plantilla.duracionMinutos());
+        List<Nodo> vertices = trasladar(
+                plantilla.verticesRelativos(),
+                random,
+                anchoKm,
+                altoKm);
+
+        return new Bloqueo(inicio, fin, vertices);
     }
 
     private static Plantilla aPlantilla(Bloqueo bloqueo) {
@@ -242,9 +296,7 @@ public final class ModeloBloqueosHistoricos {
         int partes = Math.max(1, (int) Math.ceil(lambda / 30.0));
         double lambdaParte = lambda / partes;
         int total = 0;
-        for (int i = 0; i < partes; i++) {
-            total += poissonKnuth(random, lambdaParte);
-        }
+        for (int i = 0; i < partes; i++) total += poissonKnuth(random, lambdaParte);
         return total;
     }
 

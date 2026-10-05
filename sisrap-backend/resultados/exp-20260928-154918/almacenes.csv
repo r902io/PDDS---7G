@@ -1,0 +1,4 @@
+id_almacen,x,y,capacidad_maxima,stock_actual
+ALM-CENTRAL,27,14,,
+ALM-ESTE,57,27,1000,1000
+ALM-NOROESTE,12,38,1000,1000

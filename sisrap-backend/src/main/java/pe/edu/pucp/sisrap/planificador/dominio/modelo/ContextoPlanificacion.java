@@ -16,7 +16,8 @@ public record ContextoPlanificacion(
         List<Almacen> almacenes,
         LocalDateTime instante,
         ReglasPlanificacion reglas,
-        Set<String> nodosBloqueados) {
+        Set<String> nodosBloqueados,
+        boolean respetarPosicionVehiculo) {
 
     public ContextoPlanificacion {
         pedidos = List.copyOf(pedidos);
@@ -37,12 +38,6 @@ public record ContextoPlanificacion(
                 throw new IllegalArgumentException("Pedido duplicado");
             }
 
-            /*
-             * Se valida cuándo el planificador conoce el pedido, no la hora real
-             * de llegada. En producción ambas coinciden. En la simulación batch
-             * diaria el conjunto sintético del día puede conocerse desde las 00:00,
-             * conservando la hora real para espera, SLA y deadline.
-             */
             if (p.getFechaDisponiblePlanificacion().isAfter(instante)) {
                 throw new IllegalArgumentException("No se pueden anticipar pedidos futuros");
             }
@@ -56,13 +51,39 @@ public record ContextoPlanificacion(
         }
     }
 
+    /** Compatibilidad total con la experimentación existente. */
+    public ContextoPlanificacion(
+            List<Pedido> pedidos,
+            List<Vehiculo> vehiculos,
+            List<Almacen> almacenes,
+            LocalDateTime instante,
+            ReglasPlanificacion reglas,
+            Set<String> nodosBloqueados) {
+        this(
+                pedidos,
+                vehiculos,
+                almacenes,
+                instante,
+                reglas,
+                nodosBloqueados,
+                false);
+    }
+
+    /** Compatibilidad total con la experimentación existente. */
     public ContextoPlanificacion(
             List<Pedido> pedidos,
             List<Vehiculo> vehiculos,
             List<Almacen> almacenes,
             LocalDateTime instante,
             ReglasPlanificacion reglas) {
-        this(pedidos, vehiculos, almacenes, instante, reglas, Set.of());
+        this(
+                pedidos,
+                vehiculos,
+                almacenes,
+                instante,
+                reglas,
+                Set.of(),
+                false);
     }
 
     public List<Pedido> getPedidos() { return pedidos; }

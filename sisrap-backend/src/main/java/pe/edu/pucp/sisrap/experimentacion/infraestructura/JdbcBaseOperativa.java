@@ -15,8 +15,7 @@ import pe.edu.pucp.sisrap.parametros.dominio.Configuracion;
 import pe.edu.pucp.sisrap.parametros.dominio.ValidarConfiguracion;
 import pe.edu.pucp.sisrap.parametros.infraestructura.JdbcParametros;
 
-/** Lee de la BD el perfil de parámetros, la ciudad, los almacenes y la flota. */
-public final class JdbcBaseOperativa {
+public class JdbcBaseOperativa {
     private final DataSource fuente;
 
     public JdbcBaseOperativa(DataSource fuente) {

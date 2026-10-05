@@ -78,8 +78,12 @@ public final class ExportadorResultados {
         sb.append("  demanda histórica P50 (NORMAL): ").append(p.demandaP50Diaria()).append(" pedidos/día\n");
         sb.append("  demanda histórica P75 (ALTA): ").append(p.demandaP75Diaria()).append(" pedidos/día\n");
         sb.append("  demanda histórica P90 (CRITICA): ").append(p.demandaP90Diaria()).append(" pedidos/día\n");
-        sb.append("  incremento diario en COLAPSO_LOGISTICO (P75-P50): ")
-                .append(p.incrementoColapsoDiario()).append(" pedidos/día\n");
+        sb.append("  crecimiento base diario en COLAPSO_LOGISTICO: ")
+                .append(numero(100.0 * p.crecimientoColapsoBase())).append("%\n");
+        sb.append("  crecimiento NORMAL/ALTA/CRITICA: ")
+                .append(numero(100.0 * p.crecimientoColapso(pe.edu.pucp.sisrap.experimentacion.dominio.PerfilPresion.NORMAL))).append("% / ")
+                .append(numero(100.0 * p.crecimientoColapso(pe.edu.pucp.sisrap.experimentacion.dominio.PerfilPresion.ALTA))).append("% / ")
+                .append(numero(100.0 * p.crecimientoColapso(pe.edu.pucp.sisrap.experimentacion.dominio.PerfilPresion.CRITICA))).append("%\n");
         sb.append("  instancias por combinación: ").append(p.instancias()).append('\n');
         sb.append("  repeticiones por instancia: ").append(p.repeticiones()).append('\n');
         sb.append("  semilla base: ").append(p.semillaBase()).append('\n');
@@ -87,8 +91,9 @@ public final class ExportadorResultados {
         sb.append("  mantenimiento preventivo aplicado: ").append(p.aplicarMantenimiento()).append('\n');
         sb.append("  calentamiento JVM: ").append(p.calentamiento()).append('\n');
         sb.append("  total de ejecuciones experimentales: ").append(p.totalCorridas()).append('\n');
-        sb.append("  N01/N02/N03 son instancias independientes, no niveles de presión.\n");
-        sb.append("  En COLAPSO_LOGISTICO la presión aumenta dentro de cada corrida usando el incremento histórico P75-P50.\n");
+        sb.append("  N01/N02/... son realizaciones base; dentro de cada N, NORMAL/ALTA/CRITICA son versiones pareadas de presión creciente.\n");
+        sb.append("  En operación diaria y cinco días: pedidos y bloqueos NORMAL son subconjunto de ALTA, y ALTA de CRITICA.\n");
+        sb.append("  En COLAPSO_LOGISTICO los tres perfiles comienzan con P50 y los mismos bloqueos P50; solo cambia la tasa de crecimiento de demanda.\n");
         sb.append("  La corrida de colapso termina cuando aparece el primer pedido que el planificador no logra mantener dentro de su deadline.\n");
 
         for (Variante v : p.variantes()) {
@@ -196,7 +201,9 @@ public final class ExportadorResultados {
             "cumplimiento_pct,cumplimiento_prioritarios_pct,costo,distancia_km,utilizacion_pct," +
             "temperatura_inicial,pedidos_afectados_incidencia,vehiculos_averia_incidente," +
             "tiempo_replanificacion_ms,replanificacion_exitosa,tamanio_al_colapso,colapso_alcanzado," +
-            "tiempo_colapso_horas,tiempo_colapso_formato,instante_colapso\n";
+            "tiempo_colapso_horas,tiempo_colapso_formato,instante_colapso," +
+            "pedido_causa_colapso,prioridad_causa_colapso,deadline_causa_colapso," +
+            "no_asignados_al_colapso,lambda_al_colapso\n";
 
     public void abrirCorridas() {
         crearCarpeta();
@@ -232,7 +239,9 @@ public final class ExportadorResultados {
                 k.pedidosAfectadosIncidencia(), k.vehiculosEnAveriaIncidente(),
                 k.tiempoReplanificacionMs(), k.replanificacionExitosa(),
                 k.tamanioAlColapso(), k.colapsoAlcanzado(), k.tiempoColapsoHoras(),
-                formatoHoras(k.tiempoColapsoHoras()), k.instanteColapso());
+                formatoHoras(k.tiempoColapsoHoras()), k.instanteColapso(),
+                k.pedidoCausaColapso(), k.prioridadCausaColapso(), k.deadlineCausaColapso(),
+                k.noAsignadosAlColapso(), k.lambdaAlColapso());
     }
 
     private String resumen(ResultadoExperimento r) {
@@ -255,13 +264,15 @@ public final class ExportadorResultados {
         var sb = new StringBuilder(
                 "variante,escenario,escenario_operativo,perfil_presion,instancia,tamanio,algoritmo_A,algoritmo_B," +
                 "pares,media_F_A,media_F_B,victorias_A,victorias_B,empates,p_wilcoxon,tamano_efecto_r," +
-                "interpretacion_efecto,veredicto,media_evaluaciones_A,media_evaluaciones_B,media_tiempo_ms_A," +
+                "pares_no_cero_F,diferencia_relativa_F_pct,interpretacion_efecto,veredicto," +
+                "media_evaluaciones_A,media_evaluaciones_B,media_tiempo_ms_A," +
                 "media_tiempo_ms_B,p_wilcoxon_presupuesto_igual,veredicto_presupuesto_igual\n");
         for (Comparacion c : r.comparaciones()) {
             sb.append(fila(
                     c.variante(), c.escenario(), c.escenarioOperativo(), c.perfilPresion(), c.instancia(), c.tamanio(),
                     c.algoritmoA(), c.algoritmoB(), c.pares(), c.mediaObjetivoA(), c.mediaObjetivoB(),
                     c.victoriasA(), c.victoriasB(), c.empates(), c.pValor(), c.tamanoEfecto(),
+                    c.paresNoCeroObjetivo(), c.diferenciaRelativaObjetivoPct(),
                     c.interpretacionEfecto(), c.veredicto(), c.mediaEvaluacionesA(), c.mediaEvaluacionesB(),
                     c.mediaTiempoMsA(), c.mediaTiempoMsB(), c.pValorPresupuestoIgual(), c.veredictoPresupuestoIgual()));
         }
@@ -271,14 +282,16 @@ public final class ExportadorResultados {
     private String comparacionMetricas(ResultadoExperimento r) {
         var sb = new StringBuilder(
                 "variante,escenario,escenario_operativo,perfil_presion,instancia,tamanio,algoritmo_A,algoritmo_B," +
-                "metrica,p_wilcoxon,p_decision_holm_si_aplica,tamano_efecto_r,veredicto\n");
+                "metrica,p_wilcoxon,p_decision_holm_si_aplica,tamano_efecto_r," +
+                "pares_totales,pares_no_cero,media_A,media_B,diferencia_relativa_pct,veredicto\n");
         for (Comparacion c : r.comparaciones()) {
             for (Map.Entry<String, MetricaSecundaria> m : c.metricasSecundarias().entrySet()) {
                 MetricaSecundaria v = m.getValue();
                 sb.append(fila(
                         c.variante(), c.escenario(), c.escenarioOperativo(), c.perfilPresion(), c.instancia(), c.tamanio(),
                         c.algoritmoA(), c.algoritmoB(), m.getKey(), v.pValor(), v.pValorHolm(),
-                        v.tamanoEfecto(), v.veredicto()));
+                        v.tamanoEfecto(), v.paresTotales(), v.paresNoCero(), v.mediaA(), v.mediaB(),
+                        v.diferenciaRelativaPct(), v.veredicto()));
             }
         }
         return sb.toString();
@@ -287,14 +300,18 @@ public final class ExportadorResultados {
     private String colapso(ResultadoExperimento r) {
         var sb = new StringBuilder(
                 "variante,escenario,perfil_presion,instancia,repeticion,algoritmo,colapso_alcanzado," +
-                "tiempo_colapso_horas,tiempo_colapso_formato,instante_colapso,tamanio_ultima_jornada\n");
+                "tiempo_colapso_horas,tiempo_colapso_formato,instante_colapso,tamanio_ultima_jornada," +
+                "pedido_causa_colapso,prioridad_causa_colapso,deadline_causa_colapso," +
+                "no_asignados_al_colapso,lambda_al_colapso\n");
         for (var c : r.corridas()) {
             var k = c.corrida();
             if (!EscenarioOperativo.COLAPSO_LOGISTICO.name().equals(k.escenarioOperativo())) continue;
             sb.append(fila(
                     c.variante(), c.escenario(), k.perfilPresion(), c.instancia(), c.repeticion(),
                     k.algoritmo(), k.colapsoAlcanzado(), k.tiempoColapsoHoras(),
-                    formatoHoras(k.tiempoColapsoHoras()), k.instanteColapso(), k.tamanioAlColapso()));
+                    formatoHoras(k.tiempoColapsoHoras()), k.instanteColapso(), k.tamanioAlColapso(),
+                    k.pedidoCausaColapso(), k.prioridadCausaColapso(), k.deadlineCausaColapso(),
+                    k.noAsignadosAlColapso(), k.lambdaAlColapso()));
         }
         return sb.toString();
     }
@@ -377,21 +394,24 @@ public final class ExportadorResultados {
                 for (Comparacion c : r.comparaciones()) {
                     if (!c.variante().equals(v.nombre()) || !c.escenario().equals(escenario)) continue;
                     sb.append(String.format(java.util.Locale.ROOT,
-                            "    %s vs %s: F p=%s r=%s (%s) -> %s%n",
+                            "    %s vs %s: F p=%s r=%s n0=%d delta=%.4f%% (%s) -> %s%n",
                             c.algoritmoA(), c.algoritmoB(), p(c.pValor()), p(c.tamanoEfecto()),
+                            c.paresNoCeroObjetivo(), c.diferenciaRelativaObjetivoPct(),
                             c.interpretacionEfecto(), c.veredicto()));
 
                     var sla = c.metricasSecundarias().get("cumplimientoPlazosPct");
                     if (sla != null) {
                         sb.append(String.format(java.util.Locale.ROOT,
-                                "      SLA: p=%s r=%s -> %s%n",
-                                p(sla.pValor()), p(sla.tamanoEfecto()), sla.veredicto()));
+                                "      SLA: p=%s r=%s n0=%d delta=%.4f%% -> %s%n",
+                                p(sla.pValor()), p(sla.tamanoEfecto()), sla.paresNoCero(),
+                                sla.diferenciaRelativaPct(), sla.veredicto()));
                     }
                     var col = c.metricasSecundarias().get("tiempoColapsoHoras");
                     if (col != null) {
                         sb.append(String.format(java.util.Locale.ROOT,
-                                "      tiempo hasta colapso: p=%s r=%s -> %s%n",
-                                p(col.pValor()), p(col.tamanoEfecto()), col.veredicto()));
+                                "      tiempo hasta colapso: p=%s r=%s n0=%d delta=%.4f%% -> %s%n",
+                                p(col.pValor()), p(col.tamanoEfecto()), col.paresNoCero(),
+                                col.diferenciaRelativaPct(), col.veredicto()));
                     }
                 }
             }

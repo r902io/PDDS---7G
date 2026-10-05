@@ -23,9 +23,13 @@ import pe.edu.pucp.sisrap.pedido.dominio.Pedido;
 /**
  * Genera N01, N02, N03, ... como realizaciones sintéticas reproducibles.
  *
- * Presión logística utilizada:
- * - demanda: P50/P75/P90 de pedidos diarios históricos;
- * - bloqueos: P50/P75/P90 de bloqueos diarios históricos;
+ * Diseño pareado mejorado:
+ * - para una misma combinación escenario/instancia, NORMAL, ALTA y CRITICA comparten
+ *   la misma realización base;
+ * - demanda NORMAL ⊆ ALTA ⊆ CRITICA;
+ * - bloqueos NORMAL ⊆ ALTA ⊆ CRITICA en operación diaria y cinco días;
+ * - en COLAPSO los tres perfiles comienzan con la misma demanda P50 y los mismos
+ *   bloqueos P50; solo cambia la tasa de crecimiento de demanda dentro de la corrida;
  * - mantenimiento: calendario preventivo entregado, repetido bimestralmente;
  * - averías: deshabilitadas por ahora.
  */
@@ -33,7 +37,6 @@ public final class GeneradorEscenarios {
     private static final long SALTO_ESCENARIO = 10_000_019L;
     private static final long SALTO_INSTANCIA = 100_003L;
     private static final long SALTO_BLOQUEOS = 700_000_003L;
-    private static final long SALTO_PERFIL_BLOQUEOS = 1_000_003L;
     private static final long ID_BASE_SINTETICO = 1_000_000_000_000L;
 
     private GeneradorEscenarios() {}
@@ -47,9 +50,16 @@ public final class GeneradorEscenarios {
         validarMantenimiento(datos, base, advertencias);
 
         advertencias.add(String.format(
-                "Demanda histórica calibrada con %d días (%s a %s): P50=%d, P75=%d, P90=%d; incremento diario de colapso=%d.",
+                "Demanda histórica calibrada con %d días (%s a %s): P50=%d, P75=%d, P90=%d. Operación diaria y cinco días usan instancias anidadas NORMAL⊆ALTA⊆CRITICA.",
                 demanda.dias(), demanda.desde(), demanda.hasta(),
-                demanda.p50(), demanda.p75(), demanda.p90(), demanda.incrementoColapso()));
+                demanda.p50(), demanda.p75(), demanda.p90()));
+
+        advertencias.add(String.format(
+                "COLAPSO_LOGISTICO parte de P50=%d para los tres perfiles y usa crecimiento diario compuesto NORMAL=%.2f%%, ALTA=%.2f%%, CRITICA=%.2f%%.",
+                plan.demandaP50Diaria(),
+                100.0 * plan.crecimientoColapso(PerfilPresion.NORMAL),
+                100.0 * plan.crecimientoColapso(PerfilPresion.ALTA),
+                100.0 * plan.crecimientoColapso(PerfilPresion.CRITICA)));
 
         advertencias.add(String.format(
                 "Bloqueos históricos calibrados con %d días (%s a %s): P50=%d, P75=%d, P90=%d bloqueos/día; %d plantillas geométricas disponibles.",
@@ -86,22 +96,21 @@ public final class GeneradorEscenarios {
         Random randomDemanda = new Random(
                 semillaDemanda(plan, EscenarioOperativo.OPERACION_DIARIA, instancia));
         Random randomBloqueos = new Random(
-                semillaBloqueos(plan, EscenarioOperativo.OPERACION_DIARIA, perfil, instancia));
+                semillaBloqueos(plan, EscenarioOperativo.OPERACION_DIARIA, instancia));
 
         long idInicial = idInicial(
                 EscenarioOperativo.OPERACION_DIARIA,
-                perfil,
                 instancia,
                 0);
 
-        List<Pedido> pedidos = ModeloDemandaHistorica.generarDia(
+        List<Pedido> pedidos = ModeloDemandaHistorica.generarDiaPareado(
                 demanda,
                 perfil,
                 dia,
                 randomDemanda,
                 idInicial);
 
-        List<Bloqueo> bloqueosProgramados = ModeloBloqueosHistoricos.generarDia(
+        List<Bloqueo> bloqueosProgramados = ModeloBloqueosHistoricos.generarDiaPareado(
                 bloqueos,
                 perfil,
                 dia,
@@ -110,7 +119,6 @@ public final class GeneradorEscenarios {
                 base.altoKm());
 
         var instante = dia.atStartOfDay();
-
         Set<String> mantenimiento = mantenimientoEn(plan, datos, dia);
         Set<String> bajaPerfil = bajasPorPerfil(base, perfil);
         List<Vehiculo> flota = copiarFlota(base, mantenimiento, bajaPerfil);
@@ -141,7 +149,7 @@ public final class GeneradorEscenarios {
         Random randomDemanda = new Random(
                 semillaDemanda(plan, EscenarioOperativo.SIMULACION_CINCO_DIAS, instancia));
         Random randomBloqueos = new Random(
-                semillaBloqueos(plan, EscenarioOperativo.SIMULACION_CINCO_DIAS, perfil, instancia));
+                semillaBloqueos(plan, EscenarioOperativo.SIMULACION_CINCO_DIAS, instancia));
 
         List<Pedido> pedidos = new ArrayList<>();
         List<Bloqueo> bloqueosProgramados = new ArrayList<>();
@@ -150,18 +158,17 @@ public final class GeneradorEscenarios {
             LocalDate fecha = inicio.plusDays(dia);
             long idInicial = idInicial(
                     EscenarioOperativo.SIMULACION_CINCO_DIAS,
-                    perfil,
                     instancia,
                     dia);
 
-            pedidos.addAll(ModeloDemandaHistorica.generarDia(
+            pedidos.addAll(ModeloDemandaHistorica.generarDiaPareado(
                     demanda,
                     perfil,
                     fecha,
                     randomDemanda,
                     idInicial));
 
-            bloqueosProgramados.addAll(ModeloBloqueosHistoricos.generarDia(
+            bloqueosProgramados.addAll(ModeloBloqueosHistoricos.generarDiaPareado(
                     bloqueos,
                     perfil,
                     fecha,
@@ -176,9 +183,7 @@ public final class GeneradorEscenarios {
         bloqueosProgramados.sort(java.util.Comparator.comparing(Bloqueo::inicio));
 
         var instante = inicio.atStartOfDay();
-        LocalDate diaPlanificacion = inicio;
-
-        Set<String> mantenimiento = mantenimientoEn(plan, datos, diaPlanificacion);
+        Set<String> mantenimiento = mantenimientoEn(plan, datos, inicio);
         Set<String> bajaPerfil = bajasPorPerfil(base, perfil);
         List<Vehiculo> flota = copiarFlota(base, mantenimiento, bajaPerfil);
 
@@ -197,8 +202,9 @@ public final class GeneradorEscenarios {
     }
 
     /**
-     * Para COLAPSO_LOGISTICO se exporta la primera jornada sintética.
-     * SimuladorColapso vuelve a generarla con las mismas semillas y continúa día a día.
+     * Para COLAPSO_LOGISTICO las tres presiones comienzan en exactamente la misma
+     * primera jornada P50. SimuladorColapso continúa posteriormente con crecimiento
+     * 5/10/15% (si g=0.05) y mantiene los mismos bloqueos externos entre perfiles.
      */
     private static Escenario construirColapso(PlanExperimento plan,
                                               BaseOperativa base,
@@ -212,24 +218,27 @@ public final class GeneradorEscenarios {
         Random randomDemanda = new Random(
                 semillaDemanda(plan, EscenarioOperativo.COLAPSO_LOGISTICO, instancia));
         Random randomBloqueos = new Random(
-                semillaBloqueos(plan, EscenarioOperativo.COLAPSO_LOGISTICO, perfil, instancia));
+                semillaBloqueos(plan, EscenarioOperativo.COLAPSO_LOGISTICO, instancia));
 
         long idInicial = idInicial(
                 EscenarioOperativo.COLAPSO_LOGISTICO,
-                perfil,
                 instancia,
                 0);
 
-        List<Pedido> primeraJornada = ModeloDemandaHistorica.generarDia(
+        // Día 0: todos los perfiles usan exactamente P50.
+        List<Pedido> primeraJornada = ModeloDemandaHistorica.generarDiaAcoplado(
                 demanda,
-                plan.lambdaPedidos(perfil),
+                plan.demandaP50Diaria(),
+                plan.demandaP50Diaria(),
                 inicio,
                 randomDemanda,
                 idInicial);
 
+        // Los bloqueos de colapso se mantienen en presión vial NORMAL/P50 para
+        // aislar el efecto del crecimiento de la demanda.
         List<Bloqueo> bloqueosProgramados = ModeloBloqueosHistoricos.generarDia(
                 bloqueos,
-                perfil,
+                bloqueos.p50(),
                 inicio,
                 randomBloqueos,
                 base.anchoKm(),
@@ -254,10 +263,7 @@ public final class GeneradorEscenarios {
                 bloqueosProgramados);
     }
 
-    /**
-     * La semilla de demanda depende de escenario e instancia, no de algoritmo ni repetición.
-     * GA y SA reciben exactamente la misma demanda de una instancia.
-     */
+    /** La semilla externa depende de escenario e instancia, no de perfil, algoritmo o repetición. */
     static long semillaDemanda(PlanExperimento plan,
                                EscenarioOperativo escenario,
                                int instancia) {
@@ -272,39 +278,26 @@ public final class GeneradorEscenarios {
                 Math.addExact(desplazamientoEscenario, desplazamientoInstancia));
     }
 
-    /** Semilla independiente para no correlacionar la demanda con los bloqueos. */
+    /** Semilla independiente de demanda, pero compartida por los tres perfiles. */
     static long semillaBloqueos(PlanExperimento plan,
                                 EscenarioOperativo escenario,
-                                PerfilPresion perfil,
                                 int instancia) {
-        long base = semillaDemanda(plan, escenario, instancia);
-        long desplazamientoPerfil = Math.multiplyExact(
-                (long) perfil.ordinal(),
-                SALTO_PERFIL_BLOQUEOS);
         return Math.addExact(
-                base,
-                Math.addExact(SALTO_BLOQUEOS, desplazamientoPerfil));
+                semillaDemanda(plan, escenario, instancia),
+                SALTO_BLOQUEOS);
     }
 
+    /** Los IDs no contienen el perfil: un pedido compartido conserva el mismo ID. */
     static long idInicial(EscenarioOperativo escenario,
-                          PerfilPresion perfil,
                           int instancia,
                           int dia) {
         return ID_BASE_SINTETICO
                 + escenario.ordinal() * 100_000_000_000L
-                + perfil.ordinal() * 10_000_000_000L
                 + instancia * 100_000_000L
                 + dia * 100_000L;
     }
 
-    /**
-     * Aplica el mantenimiento preventivo como calendario bimestral.
-     * El archivo entregado 09.10 sirve como plantilla del ciclo de dos meses;
-     * la misma asignación se repite cada dos meses hacia adelante o atrás.
-     *
-     * El lector ya extiende un día adicional a los autos (TA), por lo que esa
-     * duración también se replica automáticamente.
-     */
+    /** Aplica el mantenimiento preventivo como calendario bimestral. */
     static Set<String> mantenimientoEn(PlanExperimento plan,
                                        DatosArchivos datos,
                                        LocalDate dia) {
@@ -328,10 +321,7 @@ public final class GeneradorEscenarios {
         return Set.copyOf(resultado);
     }
 
-    /**
-     * No se reducen vehículos artificialmente por perfil. La única indisponibilidad
-     * automática de esta versión proviene del mantenimiento preventivo.
-     */
+    /** No se reducen vehículos artificialmente por perfil. */
     static Set<String> bajasPorPerfil(BaseOperativa base, PerfilPresion perfil) {
         return Set.of();
     }

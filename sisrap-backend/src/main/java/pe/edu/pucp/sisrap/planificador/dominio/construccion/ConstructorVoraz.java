@@ -50,11 +50,19 @@ public final class ConstructorVoraz {
 
         List<Ruta> rutas = new ArrayList<>();
         for (var vehiculo : c.getVehiculos()) {
-            Ruta ruta = new Ruta(
-                    vehiculo,
-                    central,
-                    c.instante(),
-                    c.reglas());
+            Ruta ruta = c.respetarPosicionVehiculo()
+                    ? new Ruta(
+                            vehiculo,
+                            central,
+                            vehiculo.getPosicionActual(),
+                            true,
+                            c.instante(),
+                            c.reglas())
+                    : new Ruta(
+                            vehiculo,
+                            central,
+                            c.instante(),
+                            c.reglas());
 
             ruta.setNodosBloqueados(c.nodosBloqueados());
             ruta.setAlmacenesCandidatos(c.getAlmacenes());
