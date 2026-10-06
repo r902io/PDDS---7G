@@ -32,6 +32,8 @@ function MainApp() {
     isLoading,
     startSimulationAsync,
     resetSimulation,
+    pauseSimulation,
+    resumeSimulation,
     reportIncident,
   } = useSimulation();
 
@@ -84,6 +86,8 @@ function MainApp() {
           onReset={handleReset}
           onBackToSelector={() => setCurrentView('SELECTOR')}
           onReportIncident={reportIncident}
+          onPause={pauseSimulation}
+          onResume={resumeSimulation}
         />
       )}
     </div>

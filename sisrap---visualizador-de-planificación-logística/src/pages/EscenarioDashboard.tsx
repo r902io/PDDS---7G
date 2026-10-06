@@ -6,6 +6,7 @@ import {
   Incident,
 } from '../types/logistics';
 import { useMapCanvas } from '../hooks/useMapCanvas';
+import { useMasterData } from '../hooks/useMasterData';
 import { Boton } from '../components/ui/Boton';
 import { Tarjeta } from '../components/ui/Tarjeta';
 import { IndicadorDesglosado } from '../components/ui/Indicador';
@@ -28,6 +29,8 @@ import {
   Info,
   ExternalLink,
   Flame,
+  Pause,
+  Play,
 } from 'lucide-react';
 
 interface EscenarioDashboardProps {
@@ -35,6 +38,46 @@ interface EscenarioDashboardProps {
   onReset: () => void;
   onBackToSelector: () => void;
   onReportIncident: (incidentReq: any) => void;
+  onPause: () => void;
+  onResume: () => void;
+}
+
+function UploadHistoricosBox() {
+  const { uploadHistoricosAsync, isUploadingHistoricos, uploadHistoricosError } = useMasterData();
+  const [status, setStatus] = useState<string | null>(null);
+
+  const handleFiles = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setStatus(null);
+    try {
+      await uploadHistoricosAsync(files);
+      setStatus(`Subidos ${files.length} archivo(s) correctamente`);
+    } catch (e: any) {
+      setStatus(`Error al subir: ${e?.message ?? 'fallo de red'}`);
+    }
+  };
+
+  return (
+    <div className="pt-1 space-y-1.5">
+      <label className="flex items-center gap-1.5 text-[11px] px-2 py-1.5 rounded bg-panel border border-borde/60 text-texto2 hover:text-texto hover:border-texto2/50 cursor-pointer transition-colors">
+        <Upload className="w-3.5 h-3.5 text-mint" />
+        <span>{isUploadingHistoricos ? 'Subiendo...' : 'Subir ventas/bloqueos (.txt)'}</span>
+        <input
+          type="file"
+          multiple
+          accept=".txt"
+          className="hidden"
+          disabled={isUploadingHistoricos}
+          onChange={(e) => handleFiles(e.target.files)}
+        />
+      </label>
+      {(status || uploadHistoricosError) && (
+        <div className="text-[10px] font-mono px-1 text-texto2">
+          {status ?? `Error al subir: ${(uploadHistoricosError as Error)?.message ?? 'fallo de red'}`}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export const EscenarioDashboard: React.FC<EscenarioDashboardProps> = ({
@@ -42,6 +85,8 @@ export const EscenarioDashboard: React.FC<EscenarioDashboardProps> = ({
   onReset,
   onBackToSelector,
   onReportIncident,
+  onPause,
+  onResume,
 }) => {
   // Collapsible panels state
   const [leftPanelCollapsed, setLeftPanelCollapsed] = useState(false);
@@ -182,6 +227,30 @@ export const EscenarioDashboard: React.FC<EscenarioDashboardProps> = ({
           >
             Reiniciar Escenario
           </Boton>
+
+          {state.isRunning && !state.isPaused && (
+            <Boton
+              variant="secundario"
+              icono={<Pause className="w-3.5 h-3.5" />}
+              onClick={onPause}
+              className="text-xs py-1 px-3"
+              title="Pausar la simulación"
+            >
+              Pausar
+            </Boton>
+          )}
+
+          {state.isPaused && (
+            <Boton
+              variant="primario"
+              icono={<Play className="w-3.5 h-3.5" />}
+              onClick={onResume}
+              className="text-xs py-1 px-3"
+              title="Reanudar la simulación"
+            >
+              Reanudar
+            </Boton>
+          )}
         </div>
       </header>
 
@@ -244,6 +313,8 @@ export const EscenarioDashboard: React.FC<EscenarioDashboardProps> = ({
                     </div>
                   ))}
                 </div>
+
+                <UploadHistoricosBox />
               </div>
 
               {/* Traffic Light Config Summary */}

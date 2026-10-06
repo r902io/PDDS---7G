@@ -59,6 +59,14 @@ export function useMasterData() {
     },
   });
 
+  const uploadHistoricosMutation = useMutation({
+    mutationFn: (files: FileList | File[]) => masterDataService.uploadHistoricos(files),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['masterOrders'] });
+      queryClient.invalidateQueries({ queryKey: ['simulationState'] });
+    },
+  });
+
   return {
     orders,
     isLoadingOrders,
@@ -73,5 +81,9 @@ export function useMasterData() {
     roadBlocks,
     isLoadingRoadBlocks,
     createRoadBlock: createRoadBlockMutation.mutate,
+    uploadHistoricos: uploadHistoricosMutation.mutate,
+    uploadHistoricosAsync: uploadHistoricosMutation.mutateAsync,
+    isUploadingHistoricos: uploadHistoricosMutation.isPending,
+    uploadHistoricosError: uploadHistoricosMutation.error,
   };
 }

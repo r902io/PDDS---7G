@@ -62,6 +62,24 @@ export function useSimulation(initialScenario: ScenarioType = 'DIA_A_DIA') {
     },
   });
 
+  const pauseMutation = useMutation({
+    mutationFn: () => simulationService.pause(),
+    onSuccess: async () => {
+      const fresh = await simulationService.getState();
+      setLocalState(fresh);
+      queryClient.setQueryData(['simulationState'], fresh);
+    },
+  });
+
+  const resumeMutation = useMutation({
+    mutationFn: () => simulationService.resume(),
+    onSuccess: async () => {
+      const fresh = await simulationService.getState();
+      setLocalState(fresh);
+      queryClient.setQueryData(['simulationState'], fresh);
+    },
+  });
+
   const updateThresholdsMutation = useMutation({
     mutationFn: (thresholds: CriticalityThresholds) =>
       simulationService.updateThresholds(thresholds),
@@ -79,6 +97,10 @@ export function useSimulation(initialScenario: ScenarioType = 'DIA_A_DIA') {
     startSimulation: startMutation.mutate,
     startSimulationAsync: startMutation.mutateAsync,
     resetSimulation: resetMutation.mutate,
+    pauseSimulation: pauseMutation.mutate,
+    resumeSimulation: resumeMutation.mutate,
+    isPausing: pauseMutation.isPending,
+    isResuming: resumeMutation.isPending,
     updateThresholds: updateThresholdsMutation.mutate,
     reportIncident: reportIncidentMutation.mutate,
   };
