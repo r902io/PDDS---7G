@@ -34,6 +34,8 @@ function MainApp() {
     resetSimulation,
     pauseSimulation,
     resumeSimulation,
+    pauseErrorMsg,
+    resumeErrorMsg,
     reportIncident,
   } = useSimulation();
 
@@ -88,6 +90,7 @@ function MainApp() {
           onReportIncident={reportIncident}
           onPause={pauseSimulation}
           onResume={resumeSimulation}
+          controlErrorMsg={pauseErrorMsg ?? resumeErrorMsg ?? null}
         />
       )}
     </div>

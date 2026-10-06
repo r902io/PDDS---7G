@@ -40,21 +40,34 @@ interface EscenarioDashboardProps {
   onReportIncident: (incidentReq: any) => void;
   onPause: () => void;
   onResume: () => void;
+  controlErrorMsg?: string | null;
 }
 
 function UploadHistoricosBox() {
-  const { uploadHistoricosAsync, isUploadingHistoricos, uploadHistoricosError } = useMasterData();
+  const { uploadHistoricosAsync, isUploadingHistoricos } = useMasterData();
   const [status, setStatus] = useState<string | null>(null);
+  const [lastFiles, setLastFiles] = useState<File[] | null>(null);
 
-  const handleFiles = async (files: FileList | null) => {
-    if (!files || files.length === 0) return;
+  const doUpload = async (files: File[]) => {
     setStatus(null);
     try {
       await uploadHistoricosAsync(files);
       setStatus(`Subidos ${files.length} archivo(s) correctamente`);
+      setLastFiles(null);
     } catch (e: any) {
-      setStatus(`Error al subir: ${e?.message ?? 'fallo de red'}`);
+      // ponytail: 409 = sim en curso; se guarda el lote para reintentar sin re-elegir
+      setLastFiles(files);
+      setStatus(
+        e?.status === 409
+          ? 'Backend ocupado (409): hay simulación en curso. Detén la corrida o espera a que termine y reintenta.'
+          : `Error al subir: ${e?.message ?? 'fallo de red'}`
+      );
     }
+  };
+
+  const handleFiles = (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    void doUpload(Array.from(files));
   };
 
   return (
@@ -71,9 +84,17 @@ function UploadHistoricosBox() {
           onChange={(e) => handleFiles(e.target.files)}
         />
       </label>
-      {(status || uploadHistoricosError) && (
-        <div className="text-[10px] font-mono px-1 text-texto2">
-          {status ?? `Error al subir: ${(uploadHistoricosError as Error)?.message ?? 'fallo de red'}`}
+      {status && (
+        <div className="space-y-1">
+          <div className="text-[10px] font-mono px-1 text-texto2">{status}</div>
+          {lastFiles && !isUploadingHistoricos && (
+            <button
+              onClick={() => void doUpload(lastFiles)}
+              className="text-[10px] text-azul hover:underline px-1"
+            >
+              Reintentar subida
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -87,6 +108,7 @@ export const EscenarioDashboard: React.FC<EscenarioDashboardProps> = ({
   onReportIncident,
   onPause,
   onResume,
+  controlErrorMsg,
 }) => {
   // Collapsible panels state
   const [leftPanelCollapsed, setLeftPanelCollapsed] = useState(false);
@@ -250,6 +272,12 @@ export const EscenarioDashboard: React.FC<EscenarioDashboardProps> = ({
             >
               Reanudar
             </Boton>
+          )}
+
+          {controlErrorMsg && (
+            <span className="text-[10px] font-mono text-ambar max-w-48" title={controlErrorMsg}>
+              {controlErrorMsg}
+            </span>
           )}
         </div>
       </header>

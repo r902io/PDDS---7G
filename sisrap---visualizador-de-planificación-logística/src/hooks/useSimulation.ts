@@ -7,6 +7,16 @@ import {
   MetaheuristicParams,
 } from '../types/logistics';
 import { simulationService } from '../services/simulationService';
+import { ApiError } from '../services/apiClient';
+
+// ponytail: 403 = sim ajena; mensaje accionable en vez de "Forbidden" crudo
+function controlErrorMsg(e: unknown): string | null {
+  if (!e) return null;
+  if (e instanceof ApiError && e.status === 403) {
+    return 'Solo el dueño de la corrida puede pausarla/reanudarla';
+  }
+  return (e as Error)?.message ?? 'Error de red';
+}
 
 export function useSimulation(initialScenario: ScenarioType = 'DIA_A_DIA') {
   const queryClient = useQueryClient();
@@ -101,6 +111,8 @@ export function useSimulation(initialScenario: ScenarioType = 'DIA_A_DIA') {
     resumeSimulation: resumeMutation.mutate,
     isPausing: pauseMutation.isPending,
     isResuming: resumeMutation.isPending,
+    pauseErrorMsg: controlErrorMsg(pauseMutation.error),
+    resumeErrorMsg: controlErrorMsg(resumeMutation.error),
     updateThresholds: updateThresholdsMutation.mutate,
     reportIncident: reportIncidentMutation.mutate,
   };
