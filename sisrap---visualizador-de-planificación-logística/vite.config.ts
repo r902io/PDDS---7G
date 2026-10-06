@@ -17,6 +17,13 @@ export default defineConfig(() => {
       hmr: process.env.DISABLE_HMR !== 'true',
       // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
+      // ponytail: mismo origen para esquivar el CORS del backend de pruebas
+      proxy: {
+        '/api': {
+          target: 'http://1inf54-981-7g.inf.pucp.edu.pe',
+          changeOrigin: true,
+        },
+      },
     },
   };
 });

@@ -326,7 +326,10 @@ export const EscenarioDashboard: React.FC<EscenarioDashboardProps> = ({
                     <Boton
                       variant="peligro"
                       className="text-[10px] py-1 px-2.5"
+                      disabled={!quickIncidentVehicle}
+                      title={!quickIncidentVehicle ? 'Sin vehículos en flota' : 'Reportar avería'}
                       onClick={() =>
+                        quickIncidentVehicle &&
                         onReportIncident({
                           type: 'AVERIA_UNIDAD',
                           vehicleId: quickIncidentVehicle,
@@ -479,24 +482,32 @@ export const EscenarioDashboard: React.FC<EscenarioDashboardProps> = ({
                   <span className="text-[11px] uppercase tracking-wider text-texto2 block">
                     Holgura Mínima Vigente (LE-075)
                   </span>
-                  <div className="flex items-center justify-between mt-1">
-                    <span className="text-xl font-mono font-bold text-texto">
-                      +{state.kpis.minSlackHours.toFixed(1)}h
-                    </span>
-                    <SemaforoBadge
-                      nivel={
-                        state.kpis.minSlackHours >= state.thresholds.greenMinHours
-                          ? 'VERDE'
-                          : state.kpis.minSlackHours >= state.thresholds.amberMinHours
-                          ? 'AMBAR'
-                          : 'ROJO'
-                      }
-                      slackHours={state.kpis.minSlackHours}
-                    />
-                  </div>
-                  <div className="text-[10px] text-texto2 mt-1">
-                    Pedido más crítico: <span className="font-mono text-texto font-medium">{state.kpis.minSlackOrderId}</span> (Cliente {state.kpis.minSlackClientCode})
-                  </div>
+                  {state.kpis.minSlackOrderId ? (
+                    <>
+                      <div className="flex items-center justify-between mt-1">
+                        <span className="text-xl font-mono font-bold text-texto">
+                          +{state.kpis.minSlackHours.toFixed(1)}h
+                        </span>
+                        <SemaforoBadge
+                          nivel={
+                            state.kpis.minSlackHours >= state.thresholds.greenMinHours
+                              ? 'VERDE'
+                              : state.kpis.minSlackHours >= state.thresholds.amberMinHours
+                              ? 'AMBAR'
+                              : 'ROJO'
+                          }
+                          slackHours={state.kpis.minSlackHours}
+                        />
+                      </div>
+                      <div className="text-[10px] text-texto2 mt-1">
+                        Pedido más crítico: <span className="font-mono text-texto font-medium">{state.kpis.minSlackOrderId}</span> (Cliente {state.kpis.minSlackClientCode})
+                      </div>
+                    </>
+                  ) : (
+                    <div className="text-[11px] text-texto2 mt-1 italic">
+                      Sin datos de holgura del backend (—)
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -648,6 +659,30 @@ export const EscenarioDashboard: React.FC<EscenarioDashboardProps> = ({
         </div>
       )}
 
+      {/* Selected Order Floating Inspector */}
+      {selectedOrder && !selectedVehicle && (
+        <div className="absolute bottom-12 left-1/2 -translate-x-1/2 z-30 bg-panel2 border border-ambar rounded-lg p-3 shadow-2xl flex items-center gap-4 text-xs">
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-ambar" />
+            <span className="font-mono font-bold text-texto">{selectedOrder.id}</span>
+            <span className="text-texto2 font-mono">({selectedOrder.clientCode})</span>
+          </div>
+          <div className="border-l border-borde/60 pl-3 font-mono">
+            <span className="text-texto2">Cant: </span>
+            <span className="text-texto font-semibold">{selectedOrder.deliveredQuantity} / {selectedOrder.quantity} pkgs</span>
+          </div>
+          <div className="border-l border-borde/60 pl-3">
+            <SemaforoBadge nivel={selectedOrder.criticality} slackHours={selectedOrder.slackHours} />
+          </div>
+          <button
+            onClick={() => setSelectedOrder(null)}
+            className="text-texto2 hover:text-texto ml-2 px-1 text-sm font-bold"
+          >
+            ×
+          </button>
+        </div>
+      )}
+
       {/* Modals */}
       <DetalleIncidenciaModal
         incident={activeIncidentModal}
@@ -657,7 +692,7 @@ export const EscenarioDashboard: React.FC<EscenarioDashboardProps> = ({
       />
 
       <ColapsoModal
-        report={state.collapseReport || null}
+        report={showCollapseModal ? state.collapseReport || null : null}
         onClose={() => setShowCollapseModal(false)}
         onReset={onReset}
       />

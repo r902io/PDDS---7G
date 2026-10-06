@@ -5,7 +5,18 @@ import {
   RoadBlock,
 } from '../types/logistics';
 import { simulationEngine } from './mockBackendEngine';
-import { apiRequest } from './apiClient';
+import { apiFetch } from './apiClient';
+import { ensureSession } from './sessionService';
+import {
+  AlmacenOperativo,
+  BloqueoRespuesta,
+  PedidoOperativo,
+  VehiculoOperativo,
+  mapOrders,
+  mapRoadBlocks,
+  mapVehicles,
+  mapWarehouses,
+} from './backendMappers';
 
 export interface Customer {
   id: string;
@@ -29,25 +40,32 @@ const INITIAL_CUSTOMERS: Customer[] = [
 let localCustomers = [...INITIAL_CUSTOMERS];
 
 export const masterDataService = {
-  // Pedidos
   async getOrders(): Promise<Order[]> {
-    const res = await apiRequest<Order[]>('/orders');
-    if (res.success && res.data) return res.data;
-    return simulationEngine.getState().orders;
+    try {
+      const pag = await apiFetch<{ contenido: PedidoOperativo[] }>(
+        '/api/pedidos?pagina=0&tamanio=200', {}, false
+      );
+      return mapOrders(pag.contenido);
+    } catch {
+      return simulationEngine.getState().orders;
+    }
   },
 
   async createOrder(order: Partial<Order>): Promise<Order> {
+    // ponytail: sin POST /pedidos individual; alta masiva va por cargas-historicas
+    const now = new Date();
+    const dlHours = order.deadlineHours || 36;
     const newOrder: Order = {
       id: `ord-${Date.now()}`,
       clientCode: order.clientCode || 'c9999',
       clientName: order.clientName || 'Cliente Nuevo',
       coord: order.coord || { x: 20, y: 20 },
       quantity: order.quantity || 1,
-      registeredAt: new Date().toLocaleString(),
-      deadlineHours: order.deadlineHours || 36,
-      deadlineTimestamp: new Date(Date.now() + (order.deadlineHours || 36) * 3600000).toLocaleString(),
+      registeredAt: now.toISOString(),
+      deadlineHours: dlHours,
+      deadlineTimestamp: new Date(now.getTime() + dlHours * 3600000).toISOString(),
       status: 'REGISTRADO',
-      slackHours: order.deadlineHours || 36,
+      slackHours: dlHours,
       criticality: 'VERDE',
       deliveredQuantity: 0,
       partials: order.quantity && order.quantity > 24 ? [
@@ -55,54 +73,71 @@ export const masterDataService = {
         { vehicleId: 'Pendiente', quantity: order.quantity - 24, delivered: false },
       ] : undefined,
     };
-
     simulationEngine.addOrder(newOrder);
     return newOrder;
   },
 
-  // Clientes
+  // ponytail: el .txt local se sube tal cual; el backend parsea el formato ventas
+  async uploadHistoricos(files: FileList | File[]): Promise<void> {
+    await ensureSession();
+    const form = new FormData();
+    Array.from(files).forEach((f) => form.append('archivos', f));
+    await apiFetch('/api/pedidos/cargas-historicas', { method: 'POST', body: form });
+  },
+
   async getCustomers(): Promise<Customer[]> {
-    const res = await apiRequest<Customer[]>('/customers');
-    if (res.success && res.data) return res.data;
     return localCustomers;
   },
 
   async createCustomer(cust: Omit<Customer, 'id' | 'activeOrdersCount'>): Promise<Customer> {
-    const created: Customer = {
-      ...cust,
-      id: `cli-${Date.now()}`,
-      activeOrdersCount: 0,
-    };
+    const created: Customer = { ...cust, id: `cli-${Date.now()}`, activeOrdersCount: 0 };
     localCustomers.push(created);
     return created;
   },
 
-  // Vehículos
   async getVehicles(): Promise<Vehicle[]> {
-    const res = await apiRequest<Vehicle[]>('/vehicles');
-    if (res.success && res.data) return res.data;
-    return simulationEngine.getState().vehicles;
+    try {
+      const ops = await apiFetch<VehiculoOperativo[]>('/api/vehiculos', {}, false);
+      return mapVehicles(ops, []);
+    } catch {
+      return simulationEngine.getState().vehicles;
+    }
   },
 
-  // Almacenes
   async getWarehouses(): Promise<Warehouse[]> {
-    const res = await apiRequest<Warehouse[]>('/warehouses');
-    if (res.success && res.data) return res.data;
-    return simulationEngine.getState().warehouses;
+    try {
+      const list = await apiFetch<AlmacenOperativo[]>('/api/almacenes', {}, false);
+      return mapWarehouses(list);
+    } catch {
+      return simulationEngine.getState().warehouses;
+    }
   },
 
-  // Tramos bloqueados
   async getRoadBlocks(): Promise<RoadBlock[]> {
-    const res = await apiRequest<RoadBlock[]>('/roadblocks');
-    if (res.success && res.data) return res.data;
-    return simulationEngine.getState().roadBlocks;
+    try {
+      const list = await apiFetch<BloqueoRespuesta[]>('/api/bloqueos', {}, false);
+      return mapRoadBlocks(list);
+    } catch {
+      return simulationEngine.getState().roadBlocks;
+    }
   },
 
   async createRoadBlock(block: Omit<RoadBlock, 'id'>): Promise<RoadBlock> {
-    const newBlock: RoadBlock = {
-      ...block,
-      id: `blk-${Date.now()}`,
-    };
+    await ensureSession();
+    const now = new Date().toISOString().slice(0, 19);
+    const fin = new Date(Date.now() + 2 * 3600000).toISOString().slice(0, 19);
+    await apiFetch('/api/bloqueos', {
+      method: 'POST',
+      body: JSON.stringify({
+        inicio: now,
+        fin,
+        vertices: [
+          { x: block.from.x, y: block.from.y },
+          { x: block.to.x, y: block.to.y },
+        ],
+      }),
+    });
+    const newBlock: RoadBlock = { ...block, id: `blk-${Date.now()}` };
     simulationEngine.addRoadBlock(block.from, block.to, block.description);
     return newBlock;
   },

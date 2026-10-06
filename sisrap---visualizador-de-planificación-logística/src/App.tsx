@@ -3,9 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useSimulation } from './hooks/useSimulation';
+import { ensureSession } from './services/sessionService';
 import { SelectorEscenario } from './pages/SelectorEscenario';
 import { EscenarioDashboard } from './pages/EscenarioDashboard';
 import { ScenarioType, CriticalityThresholds, MetaheuristicParams } from './types/logistics';
@@ -23,28 +24,35 @@ type AppView = 'SELECTOR' | 'DASHBOARD';
 
 function MainApp() {
   const [currentView, setCurrentView] = useState<AppView>('SELECTOR');
+  useEffect(() => {
+    ensureSession().catch(() => {});
+  }, []);
   const {
     state,
     isLoading,
-    startSimulation,
+    startSimulationAsync,
     resetSimulation,
     reportIncident,
   } = useSimulation();
 
-  const handleStartScenario = (
+  const handleStartScenario = async (
     scenario: ScenarioType,
     thresholds: CriticalityThresholds,
     metaheuristic: MetaheuristicParams,
     initialMonth: string
   ) => {
-    startSimulation({
-      scenario,
-      startDateTime: '2026-09-01T08:30:00Z',
-      initialMonth,
-      thresholds,
-      metaheuristic,
-    });
-    setCurrentView('DASHBOARD');
+    // ponytail: navegar con el estado ya arrancado, no con el anterior
+    try {
+      await startSimulationAsync({
+        scenario,
+        startDateTime: '2026-09-01T08:30:00Z',
+        initialMonth,
+        thresholds,
+        metaheuristic,
+      });
+    } finally {
+      setCurrentView('DASHBOARD');
+    }
   };
 
   const handleReset = () => {

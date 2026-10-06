@@ -59,6 +59,11 @@ export function parseSalesFile(content: string, monthYear: string = '202609'): {
       return;
     }
 
+    if (day < 1 || day > 31 || hour > 23 || minute > 59) {
+      errors.push(`Línea ${index + 1}: Fecha/hora fuera de rango (día 1-31, hora 0-23, min 0-59)`);
+      return;
+    }
+
     if (![4, 8, 12, 18, 36].includes(deadlineHours)) {
       errors.push(`Línea ${index + 1}: Plazo no permitido "${deadlineHours}h". Solo se admiten 4, 8, 12, 18 o 36 horas.`);
       return;
@@ -114,6 +119,12 @@ export function parseRoadBlocksFile(content: string, monthYear: string = '202609
 
     if (x1 < 0 || x1 > 70 || y1 < 0 || y1 > 50 || x2 < 0 || x2 > 70 || y2 < 0 || y2 > 50) {
       errors.push(`Línea ${index + 1}: Coordenadas del tramo fuera de la retícula 70x50 km`);
+      return;
+    }
+
+    if (startDay < 1 || startDay > 31 || endDay < 1 || endDay > 31
+      || startHour > 23 || endHour > 23 || startMinute > 59 || endMinute > 59) {
+      errors.push(`Línea ${index + 1}: Fecha/hora fuera de rango (día 1-31, hora 0-23, min 0-59)`);
       return;
     }
 

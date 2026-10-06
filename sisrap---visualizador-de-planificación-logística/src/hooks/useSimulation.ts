@@ -19,21 +19,23 @@ export function useSimulation(initialScenario: ScenarioType = 'DIA_A_DIA') {
     refetchOnWindowFocus: false,
   });
 
-  // Subscribe to real-time simulation updates
+  // Subscribe once to real-time simulation updates (no re-suscribir por update)
   useEffect(() => {
-    if (serverState && !localState) {
-      setLocalState(serverState);
-    }
-
     const unsubscribe = simulationService.subscribe((updatedState) => {
       setLocalState(updatedState);
       queryClient.setQueryData(['simulationState'], updatedState);
     });
-
     return () => {
       unsubscribe();
     };
-  }, [serverState, queryClient]);
+  }, [queryClient]);
+
+  // Hidratacion inicial desde el servidor solo si aun no hay estado local
+  useEffect(() => {
+    if (serverState && !localState) {
+      setLocalState(serverState);
+    }
+  }, [serverState]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const currentState = localState || serverState;
 
@@ -75,6 +77,7 @@ export function useSimulation(initialScenario: ScenarioType = 'DIA_A_DIA') {
     isLoading: isLoading && !currentState,
     error,
     startSimulation: startMutation.mutate,
+    startSimulationAsync: startMutation.mutateAsync,
     resetSimulation: resetMutation.mutate,
     updateThresholds: updateThresholdsMutation.mutate,
     reportIncident: reportIncidentMutation.mutate,

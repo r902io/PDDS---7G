@@ -945,7 +945,17 @@ export class SimulationEngine {
   }
 
   private getNearestWarehouse(coord: Coordinate): Warehouse {
-    let nearest = this.state.warehouses[0];
+    // ponytail: backend puede venir sin almacenes; fallback al central por defecto
+    const fallback: Warehouse = {
+      id: 'wh-ac',
+      name: 'Almacén Central',
+      code: 'AC',
+      coord: { x: 27, y: 14 },
+      capacityMax: Infinity,
+      currentStock: 999999,
+      isCentral: true,
+    };
+    let nearest = this.state.warehouses[0] ?? fallback;
     let minD = Infinity;
     for (const wh of this.state.warehouses) {
       const d = getManhattanDistance(coord, wh.coord);
