@@ -1,716 +1,677 @@
-import React, { useState } from 'react';
-import {
-  SimulationState,
-  Order,
-  Vehicle,
-  Incident,
-} from '../types/logistics';
-import { useMapCanvas } from '../hooks/useMapCanvas';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import type { AlmacenOperativo, SnapshotSimulacion, VehiculoOperativo, VehiculoSnapshot } from '../types/api';
+import { useSimulacion } from '../estado/SimulacionContext';
+import { navegar } from '../estado/navegacion';
+import { catalogoService } from '../services/catalogoService';
+import { useConsulta } from '../hooks/useConsulta';
+import type { Seleccion } from '../hooks/useMapCanvas';
+import { MapaCiudad } from '../components/mapa/MapaCiudad';
+import { PanelDetalle } from '../components/mapa/PanelDetalle';
 import { Boton } from '../components/ui/Boton';
-import { Tarjeta } from '../components/ui/Tarjeta';
-import { IndicadorDesglosado } from '../components/ui/Indicador';
-import { SemaforoBadge } from '../components/ui/SemaforoBadge';
-import { DetalleIncidenciaModal } from './DetalleIncidenciaModal';
-import { ColapsoModal } from './ColapsoModal';
-import { CierreSimulacionModal } from './CierreSimulacionModal';
+import { Modal } from '../components/ui/Modal';
+import { Cargando, ErrorCarga, Nota } from '../components/ui/Avisos';
 import {
-  Clock,
-  Layers,
-  ChevronLeft,
-  ChevronRight,
-  Maximize2,
-  AlertTriangle,
-  ShieldAlert,
-  Truck,
-  RotateCcw,
-  FileText,
-  Upload,
-  Info,
-  ExternalLink,
-  Flame,
-} from 'lucide-react';
+  IconoAlerta,
+  IconoCerrar,
+  IconoChevronDer,
+  IconoChevronIzq,
+  IconoColapso,
+  IconoCorrecto,
+  IconoDetener,
+  IconoInfo,
+  IconoMapaSvg,
+} from '../components/iconos';
+import {
+  ESCENARIOS,
+  corridaActiva,
+  enColapso,
+  hayCorrida,
+  tipoResultado,
+} from '../utilitarios/escenarios';
+import {
+  diaSimulado,
+  formatoCoordenada,
+  formatoEntero,
+  formatoFechaHora,
+  formatoHora,
+  formatoSoles,
+  horaNavegador,
+  NO_DISPONIBLE,
+} from '../utilitarios/formato';
+import {
+  COLOR_TIPO,
+  ETIQUETA_TIPO_PLURAL,
+  ORDEN_TIPOS,
+  estaAveriado,
+  estaEnMantenimiento,
+  tipoDesdeCodigo,
+  type TipoVehiculo,
+} from '../utilitarios/vehiculos';
 
-interface EscenarioDashboardProps {
-  state: SimulationState;
-  onReset: () => void;
-  onBackToSelector: () => void;
-  onReportIncident: (incidentReq: any) => void;
-}
+/** Dimensiones del enunciado; se reemplazan por las de /api/mapa cuando responde. */
+const CIUDAD_ENUNCIADO = { anchoKm: 70, altoKm: 50 };
 
-export const EscenarioDashboard: React.FC<EscenarioDashboardProps> = ({
-  state,
-  onReset,
-  onBackToSelector,
-  onReportIncident,
-}) => {
-  // Collapsible panels state
-  const [leftPanelCollapsed, setLeftPanelCollapsed] = useState(false);
-  const [rightPanelCollapsed, setRightPanelCollapsed] = useState(false);
+export function EscenarioDashboard() {
+  const sim = useSimulacion();
+  const { snapshot, datosVigentes, recibidoEn, errorEstado } = sim;
+  const activa = corridaActiva(snapshot);
+  const corrida = hayCorrida(snapshot);
 
-  // Selected item state for detail inspection
-  const [selectedVehicleId, setSelectedVehicleId] = useState<string | null>(null);
-  const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
-  const [activeIncidentModal, setActiveIncidentModal] = useState<Incident | null>(null);
+  const angosta = typeof window !== 'undefined' && window.innerWidth < 1024;
+  const [izqColapsado, setIzqColapsado] = useState(angosta);
+  const [derColapsado, setDerColapsado] = useState(angosta);
+  const [seleccion, setSeleccion] = useState<Seleccion>(null);
+  const [confirmarDetener, setConfirmarDetener] = useState(false);
 
-  // Format help modal
-  const [showFileFormatModal, setShowFileFormatModal] = useState(false);
-
-  // Simulation closure and collapse modals
-  const [showClosureModal, setShowClosureModal] = useState(false);
-  const [showCollapseModal, setShowCollapseModal] = useState(false);
-
-  // Quick incident injection form inside parameters panel
-  const [quickIncidentVehicle, setQuickIncidentVehicle] = useState(state.vehicles[0]?.id || '');
-  const [quickRoadBlockDesc, setQuickRoadBlockDesc] = useState('Obras de emergencia en calzada');
-
-  // Map Canvas Hook
-  const { canvasRef, hoveredCoord, hoveredVehicle, fitToView, handlers } = useMapCanvas(
-    state.warehouses,
-    state.vehicles,
-    state.orders,
-    state.roadBlocks,
-    selectedVehicleId,
-    setSelectedVehicleId,
-    setSelectedOrder
+  // Datos complementarios del backend.
+  const mapa = useConsulta((s) => catalogoService.mapa(s), 'mapa');
+  const almacenes = useConsulta((s) => catalogoService.almacenes(s), `almacenes-${snapshot?.estado}`, activa ? 15_000 : null);
+  const flota = useConsulta((s) => catalogoService.vehiculos(s), 'vehiculos');
+  const reloj = useRef<string | null>(null);
+  reloj.current = snapshot?.relojSimulado ?? null;
+  const bloqueos = useConsulta(
+    (s) => catalogoService.bloqueos(reloj.current ? reloj.current.slice(0, 19) : null, s),
+    `bloqueos-${snapshot?.idSimulacion}-${snapshot?.estado}`,
+    activa ? 10_000 : null
+  );
+  const bloqueosActivos = useMemo(
+    () => (corrida ? (bloqueos.datos ?? []).filter((b) => b.estado === 'ACTIVO') : []),
+    [bloqueos.datos, corrida]
   );
 
-  const selectedVehicle = selectedVehicleId
-    ? state.vehicles.find((v) => v.id === selectedVehicleId)
-    : null;
+  // Esc cancela la selección.
+  useEffect(() => {
+    const alTeclear = (e: KeyboardEvent) => e.key === 'Escape' && setSeleccion(null);
+    window.addEventListener('keydown', alTeclear);
+    return () => window.removeEventListener('keydown', alTeclear);
+  }, []);
 
-  const scenarioTitles = {
-    DIA_A_DIA: 'Escenario: Operación Día a Día (Tiempo Real)',
-    SIMULACION_5D: 'Escenario: Simulación de Cinco Días (120 Horas)',
-    COLAPSO_LOGISTICO: 'Escenario: Simulación hasta Colapso Logístico',
-  };
+  // Si la unidad seleccionada desaparece del snapshot, se mantiene: el panel lo explica.
+  const vehiculos: VehiculoSnapshot[] = snapshot?.vehiculos ?? [];
 
-  const shiftLabels = {
-    MANANA: 'Turno Mañana (07:00 - 15:00)',
-    TARDE: 'Turno Tarde (15:00 - 23:00)',
-    NOCHE: 'Turno Noche (23:00 - 07:00)',
-  };
+  if (!snapshot) {
+    return (
+      <div className="flex-1 flex items-center justify-center p-6">
+        {errorEstado ? (
+          <div className="max-w-lg w-full space-y-3">
+            <ErrorCarga
+              titulo="No se pudo obtener el estado de la simulación"
+              error={errorEstado}
+              reintentar={() => window.location.reload()}
+            />
+            <Nota>
+              La interfaz no muestra datos simulados: hasta que el backend responda en <span className="font-mono">/api/simulacion/estado</span> o
+              por el flujo en tiempo real, el mapa queda vacío.
+            </Nota>
+          </div>
+        ) : (
+          <Cargando texto="Conectando con el backend de SisRap…" />
+        )}
+      </div>
+    );
+  }
+
+  const dimensiones = mapa.datos ? { anchoKm: mapa.datos.anchoKm, altoKm: mapa.datos.altoKm } : CIUDAD_ENUNCIADO;
 
   return (
-    <div className="h-screen w-screen bg-bg text-texto flex flex-col overflow-hidden select-none">
-      {/* 1. Cabecera Superior (Estándar GUI v01) */}
-      <header className="h-14 bg-panel2 border-b border-borde px-4 flex items-center justify-between shrink-0 z-20">
-        <div className="flex items-center gap-4">
-          <button
-            onClick={onBackToSelector}
-            className="text-xs text-texto2 hover:text-texto flex items-center gap-1.5 px-2.5 py-1 rounded border border-borde/70 hover:bg-panel transition-colors"
-          >
-            <ChevronLeft className="w-4 h-4" />
-            <span>Selector</span>
-          </button>
+    <div className="flex-1 flex min-h-0 relative">
+      {/* Panel izquierdo: parámetros */}
+      <PanelLateral
+        lado="izq"
+        titulo="Parámetros de la corrida"
+        colapsado={izqColapsado}
+        alternar={() => setIzqColapsado((v) => !v)}
+      >
+        <PanelParametros
+          snapshot={snapshot}
+          flota={flota.datos}
+          errorFlota={flota.error}
+          recargarFlota={flota.recargar}
+          almacenes={almacenes.datos}
+          errorAlmacenes={almacenes.error}
+          recargarAlmacenes={almacenes.recargar}
+          pedirDetener={() => setConfirmarDetener(true)}
+        />
+      </PanelLateral>
 
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-semibold uppercase tracking-wider text-mint">
-                {scenarioTitles[state.scenario]}
-              </span>
-              <span className="w-1.5 h-1.5 rounded-full bg-mint animate-pulse" />
-            </div>
-            <div className="text-[11px] text-texto2 font-mono flex items-center gap-2">
-              <span>{shiftLabels[state.clock.currentShift]}</span>
-              <span>•</span>
-              <span>{state.clock.formattedDate}</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Central Clock */}
-        <div className="flex items-center gap-6">
-          <div className="text-center">
-            <span className="text-[10px] text-texto2 uppercase tracking-wider block">Reloj Simulado</span>
-            <div className="text-2xl font-mono font-bold text-texto tracking-wider">
-              {state.clock.formattedTime}
-            </div>
-          </div>
-
-          <div className="border-l border-borde/60 pl-4 text-left">
-            <span className="text-[10px] text-texto2 uppercase tracking-wider block">
-              {state.scenario === 'DIA_A_DIA'
-                ? 'Tiempo Transcurrido'
-                : state.scenario === 'SIMULACION_5D'
-                ? 'Avance de Corrida'
-                : 'Día de Estrés'}
-            </span>
-            <div className="text-sm font-mono font-semibold text-mint">
-              {state.scenario === 'DIA_A_DIA' && (
-                <span>Día {state.clock.simulatedDay} (+{state.clock.elapsedSimulatedHours.toFixed(1)}h)</span>
-              )}
-              {state.scenario === 'SIMULACION_5D' && (
-                <span>Día {state.clock.simulatedDay} / 5 ({Math.min(100, (state.clock.elapsedSimulatedHours / 120) * 100).toFixed(1)}%)</span>
-              )}
-              {state.scenario === 'COLAPSO_LOGISTICO' && (
-                <span>Día {state.clock.simulatedDay} (Bajo Presión)</span>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* Header Right Actions */}
-        <div className="flex items-center gap-2">
-          {state.hasCollapsed && (
-            <Boton
-              variant="peligro"
-              icono={<Flame className="w-4 h-4" />}
-              onClick={() => setShowCollapseModal(true)}
-              className="text-xs py-1.5"
-            >
-              Ver Colapso Declarado
-            </Boton>
+      {/* Mapa */}
+      <main className="flex-1 min-w-0 flex flex-col relative">
+        <Banners
+          snapshot={snapshot}
+          datosVigentes={datosVigentes}
+          recibidoEn={recibidoEn}
+          errorMapa={mapa.error}
+          errorBloqueos={bloqueos.error}
+        />
+        <div className="relative flex-1 min-h-0">
+          <MapaCiudad
+            dimensiones={dimensiones}
+            almacenes={almacenes.datos ?? []}
+            vehiculos={vehiculos}
+            bloqueos={bloqueosActivos}
+            seleccion={seleccion}
+            alSeleccionar={setSeleccion}
+            atenuado={corrida && !datosVigentes}
+          />
+          {seleccion && (
+            <PanelDetalle
+              seleccion={seleccion}
+              vehiculos={vehiculos}
+              catalogo={flota.datos}
+              almacenes={almacenes.datos ?? []}
+              alSeleccionar={setSeleccion}
+            />
           )}
+        </div>
+      </main>
 
-          {state.isFinished && state.scenario === 'SIMULACION_5D' && (
-            <Boton
-              variant="primario"
-              icono={<Info className="w-4 h-4" />}
-              onClick={() => setShowClosureModal(true)}
-              className="text-xs py-1.5"
-            >
-              Ver Cierre 5D
-            </Boton>
-          )}
+      {/* Panel derecho: indicadores */}
+      <PanelLateral
+        lado="der"
+        titulo="Indicadores"
+        colapsado={derColapsado}
+        alternar={() => setDerColapsado((v) => !v)}
+      >
+        <PanelIndicadores snapshot={snapshot} bloqueosCargados={bloqueos.datos != null} />
+      </PanelLateral>
 
+      <Modal isOpen={confirmarDetener} onClose={() => setConfirmarDetener(false)} titulo="Detener la corrida">
+        <p className="text-sm text-texto">
+          La corrida terminará para todos los dispositivos que la están viendo. Esta acción no se puede deshacer.
+        </p>
+        <div className="flex justify-end gap-2">
+          <Boton variant="secundario" onClick={() => setConfirmarDetener(false)}>
+            Cancelar
+          </Boton>
           <Boton
-            variant="secundario"
-            icono={<RotateCcw className="w-3.5 h-3.5" />}
-            onClick={onReset}
-            className="text-xs py-1 px-3"
-            title="Reiniciar escenario a su estado inicial (LE-099)"
+            variant="peligro"
+            icono={<IconoDetener tamano={14} />}
+            disabled={sim.accionEnCurso === 'DETENER'}
+            disabledReason="Solicitud de detención en curso."
+            onClick={async () => {
+              await sim.detener();
+              setConfirmarDetener(false);
+            }}
           >
-            Reiniciar Escenario
+            Detener corrida
           </Boton>
         </div>
-      </header>
+      </Modal>
+    </div>
+  );
+}
 
-      {/* Main Workspace: 3 Columns (Left Params, Center Canvas Map, Right KPIs) */}
-      <div className="flex-1 flex overflow-hidden relative">
-        {/* 2. Columna Izquierda: Parámetros y Archivos */}
-        <div
-          className={`bg-panel border-r border-borde flex flex-col transition-all duration-300 z-10 ${
-            leftPanelCollapsed ? 'w-10' : 'w-80'
-          }`}
+// ---------------------------------------------------------------------------
+// Estructura
+// ---------------------------------------------------------------------------
+
+function PanelLateral({
+  lado,
+  titulo,
+  colapsado,
+  alternar,
+  children,
+}: {
+  lado: 'izq' | 'der';
+  titulo: string;
+  colapsado: boolean;
+  alternar: () => void;
+  children: ReactNode;
+}) {
+  const borde = lado === 'izq' ? 'border-r' : 'border-l';
+  const ancho = lado === 'izq' ? 'w-[314px]' : 'w-[338px]';
+  const Flecha = (lado === 'izq') !== colapsado ? IconoChevronIzq : IconoChevronDer;
+  return (
+    <aside
+      className={`bg-panel border-borde ${borde} flex flex-col min-h-0 shrink-0 ${colapsado ? 'w-[34px]' : `${ancho} max-w-[85vw]`}`}
+      aria-label={titulo}
+    >
+      <div className={`flex items-center px-2 py-2 border-b border-borde ${colapsado ? 'justify-center border-b-0' : 'justify-between'}`}>
+        {!colapsado && <h2 className="text-xs uppercase tracking-wider text-texto2 font-semibold pl-1">{titulo}</h2>}
+        <button
+          onClick={alternar}
+          className={`w-6 h-6 flex items-center justify-center rounded border ${colapsado ? 'border-mint text-mint' : 'border-borde text-texto2 hover:text-texto'}`}
+          aria-label={colapsado ? `Mostrar ${titulo.toLowerCase()}` : `Ocultar ${titulo.toLowerCase()}`}
+          aria-expanded={!colapsado}
+          title={colapsado ? `Mostrar ${titulo.toLowerCase()}` : `Ocultar ${titulo.toLowerCase()}`}
         >
-          {/* Collapse toggle */}
-          <div className="h-9 border-b border-borde/70 flex items-center justify-between px-2.5 bg-panel2">
-            {!leftPanelCollapsed && (
-              <span className="text-xs font-semibold uppercase tracking-wider text-texto">
-                Parámetros y Archivos
-              </span>
-            )}
-            <button
-              onClick={() => setLeftPanelCollapsed(!leftPanelCollapsed)}
-              className="p-1 hover:bg-panel rounded text-texto2 hover:text-texto ml-auto"
-              title={leftPanelCollapsed ? 'Expandir panel izquierdo' : 'Colapsar panel izquierdo'}
-            >
-              {leftPanelCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
-            </button>
-          </div>
-
-          {!leftPanelCollapsed && (
-            <div className="flex-1 overflow-y-auto p-3 space-y-4 text-xs">
-              {/* Monthly Files Library */}
-              <div className="bg-panel2 border border-borde rounded-md p-3 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="font-semibold uppercase tracking-wider text-texto text-[11px] flex items-center gap-1.5">
-                    <FileText className="w-3.5 h-3.5 text-mint" />
-                    <span>Archivos Mensuales (LE-006, LE-085)</span>
-                  </span>
-                  <button
-                    onClick={() => setShowFileFormatModal(true)}
-                    className="text-[10px] text-azul hover:underline flex items-center gap-0.5"
-                  >
-                    Formato
-                  </button>
-                </div>
-
-                <div className="space-y-1.5 pt-1">
-                  {state.monthlyFiles.map((file, idx) => (
-                    <div
-                      key={idx}
-                      className="p-2 rounded bg-panel border border-borde/60 flex items-center justify-between text-[11px]"
-                    >
-                      <div>
-                        <div className="font-mono text-texto font-medium">{file.filename}</div>
-                        <div className="text-[10px] text-texto2">
-                          {file.type === 'PEDIDOS' ? 'Demanda Mensual' : 'Bloqueos Viales'} • {file.recordCount} registros
-                        </div>
-                      </div>
-                      <span className="px-1.5 py-0.5 rounded bg-mint/15 text-mint font-mono text-[10px]">
-                        OK
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Traffic Light Config Summary */}
-              <div className="bg-panel2 border border-borde rounded-md p-3 space-y-2">
-                <span className="font-semibold uppercase tracking-wider text-texto text-[11px]">
-                  Semáforo de Criticidad (LE-062)
-                </span>
-                <div className="space-y-1 text-[11px]">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sem-verde flex items-center gap-1.5">
-                      <span className="w-2 h-2 rounded-full bg-sem-verde" />
-                      <span>Verde (Conforme):</span>
-                    </span>
-                    <span className="font-mono text-texto">&gt; {state.thresholds.greenMinHours.toFixed(1)}h</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sem-ambar flex items-center gap-1.5">
-                      <span className="w-2 h-2 rounded-full bg-sem-ambar" />
-                      <span>Ámbar (Alerta):</span>
-                    </span>
-                    <span className="font-mono text-texto">
-                      {state.thresholds.amberMinHours.toFixed(1)}h a {state.thresholds.greenMinHours.toFixed(1)}h
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sem-rojo flex items-center gap-1.5">
-                      <span className="w-2 h-2 rounded-full bg-sem-rojo" />
-                      <span>Rojo (Crítico):</span>
-                    </span>
-                    <span className="font-mono text-texto">&lt; {state.thresholds.amberMinHours.toFixed(1)}h</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Fleet Specs */}
-              <div className="bg-panel2 border border-borde rounded-md p-3 space-y-2">
-                <span className="font-semibold uppercase tracking-wider text-texto text-[11px] flex items-center gap-1.5">
-                  <Truck className="w-3.5 h-3.5 text-azul" />
-                  <span>Composición de Flota y Parámetros</span>
-                </span>
-                <div className="space-y-1.5 text-[11px]">
-                  <div className="p-1.5 rounded bg-panel border border-borde/50 flex justify-between">
-                    <span className="text-azul font-medium">Autos (3 unidades):</span>
-                    <span className="font-mono text-texto">24 u. • 40 km/h • S/ 8/km</span>
-                  </div>
-                  <div className="p-1.5 rounded bg-panel border border-borde/50 flex justify-between">
-                    <span className="text-violeta font-medium">Motos (3 unidades):</span>
-                    <span className="font-mono text-texto">8 u. • 25 km/h • S/ 6/km</span>
-                  </div>
-                  <div className="p-1.5 rounded bg-panel border border-borde/50 flex justify-between">
-                    <span className="text-mint font-medium">Bicicletas (2 unidades):</span>
-                    <span className="font-mono text-texto">4 u. • 12 km/h • S/ 3/km</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Quick Incident Simulation Injector (LE-079, LE-083) */}
-              <div className="bg-panel2 border border-borde rounded-md p-3 space-y-2.5">
-                <span className="font-semibold uppercase tracking-wider text-texto text-[11px] flex items-center gap-1.5">
-                  <AlertTriangle className="w-3.5 h-3.5 text-rojo" />
-                  <span>Inyectar Incidencia de Prueba</span>
-                </span>
-                <p className="text-[10px] text-texto2">
-                  Prueba la replanificación inmediata metaheurística ante avería de unidad o bloqueo vial.
-                </p>
-
-                <div className="space-y-2">
-                  <div className="flex gap-1">
-                    <select
-                      value={quickIncidentVehicle}
-                      onChange={(e) => setQuickIncidentVehicle(e.target.value)}
-                      className="bg-bg border border-borde text-texto font-mono text-[11px] rounded px-2 py-1 flex-1"
-                    >
-                      {state.vehicles.map((v) => (
-                        <option key={v.id} value={v.id}>
-                          {v.plate} ({v.type})
-                        </option>
-                      ))}
-                    </select>
-                    <Boton
-                      variant="peligro"
-                      className="text-[10px] py-1 px-2.5"
-                      onClick={() =>
-                        onReportIncident({
-                          type: 'AVERIA_UNIDAD',
-                          vehicleId: quickIncidentVehicle,
-                          description: 'Falla mecánica imprevista en ruta',
-                        })
-                      }
-                    >
-                      Averiar
-                    </Boton>
-                  </div>
-
-                  <div className="flex gap-1">
-                    <input
-                      type="text"
-                      placeholder="Motivo bloqueo"
-                      value={quickRoadBlockDesc}
-                      onChange={(e) => setQuickRoadBlockDesc(e.target.value)}
-                      className="bg-bg border border-borde text-texto text-[11px] rounded px-2 py-1 flex-1"
-                    />
-                    <Boton
-                      variant="secundario"
-                      className="text-[10px] py-1 px-2.5"
-                      onClick={() =>
-                        onReportIncident({
-                          type: 'BLOQUEO_VIA',
-                          roadSegment: { fromX: 25, fromY: 20, toX: 28, toY: 20 },
-                          description: quickRoadBlockDesc,
-                        })
-                      }
-                    >
-                      Bloquear
-                    </Boton>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* 3. Área Central: Mapa Canvas 2D (70x50 km) */}
-        <div className="flex-1 relative bg-bg flex flex-col overflow-hidden">
-          {/* Canvas Viewport Controls */}
-          <div className="absolute top-3 right-3 z-10 flex items-center gap-2">
-            <button
-              onClick={fitToView}
-              className="bg-panel2/90 border border-borde px-2.5 py-1.5 rounded-md text-xs text-texto hover:bg-panel flex items-center gap-1.5 backdrop-blur-sm shadow-md transition-colors"
-              title="Ajustar y centrar cuadrícula"
-            >
-              <Maximize2 className="w-3.5 h-3.5 text-mint" />
-              <span>Centrar Mapa</span>
-            </button>
-          </div>
-
-          {/* Interactive Canvas Container (flex-grow: 1, min-h-0, overflow: hidden) */}
-          <div className="flex-1 min-h-0 w-full relative overflow-hidden cursor-crosshair">
-            <canvas
-              ref={canvasRef}
-              className="w-full h-full block"
-              {...handlers}
-            />
-          </div>
-
-          {/* Map Legend (flex-shrink: 0, fixed height, permanently visible at bottom border) */}
-          <div className="h-11 shrink-0 w-full bg-panel2/95 border-t border-borde px-4 flex items-center justify-between text-xs text-texto2 z-10 overflow-x-auto whitespace-nowrap">
-            <div className="flex items-center gap-4 overflow-x-auto py-1">
-              <span className="text-[10px] uppercase font-bold text-texto tracking-wider">Leyenda:</span>
-
-              <div className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-azul inline-block" />
-                <span className="text-[11px]">Auto (40 km/h)</span>
-              </div>
-
-              <div className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-violeta inline-block" />
-                <span className="text-[11px]">Moto (25 km/h)</span>
-              </div>
-
-              <div className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-mint inline-block" />
-                <span className="text-[11px]">Bicicleta (12 km/h)</span>
-              </div>
-
-              <div className="flex items-center gap-1.5">
-                <span className="w-3 h-3 bg-sky-400 border border-white inline-block shadow-sm" />
-                <span className="text-[11px] text-white font-medium">AC Central (27,14) [Cian/Blanco • No rojo]</span>
-              </div>
-
-              <div className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 bg-mint inline-block" />
-                <span className="text-[11px]">A1 (12,38) • A2 (57,27) [Mint]</span>
-              </div>
-
-              <div className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-sem-verde inline-block" />
-                <span className="text-[11px]">Cliente (Semáforo)</span>
-              </div>
-
-              <div className="flex items-center gap-1.5">
-                <span className="w-4 h-1 border-t-2 border-dashed border-rojo inline-block" />
-                <span className="text-[11px]">Bloqueo Vial</span>
-              </div>
-
-              <div className="flex items-center gap-1.5">
-                <span className="w-4 h-1 border-t-2 border-ambar inline-block" />
-                <span className="text-[11px]">Ruta Alternativa</span>
-              </div>
-            </div>
-
-            <div className="font-mono text-[11px] text-texto2">
-              Retícula 70 × 50 km • Calles Doble Sentido
-            </div>
-          </div>
-        </div>
-
-        {/* 4. Columna Derecha: Indicadores y Monitoreo */}
-        <div
-          className={`bg-panel border-l border-borde flex flex-col transition-all duration-300 z-10 ${
-            rightPanelCollapsed ? 'w-10' : 'w-84'
-          }`}
-        >
-          {/* Collapse toggle */}
-          <div className="h-9 border-b border-borde/70 flex items-center justify-between px-2.5 bg-panel2">
-            <button
-              onClick={() => setRightPanelCollapsed(!rightPanelCollapsed)}
-              className="p-1 hover:bg-panel rounded text-texto2 hover:text-texto mr-auto"
-              title={rightPanelCollapsed ? 'Expandir panel derecho' : 'Colapsar panel derecho'}
-            >
-              {rightPanelCollapsed ? <ChevronLeft className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-            </button>
-            {!rightPanelCollapsed && (
-              <span className="text-xs font-semibold uppercase tracking-wider text-texto">
-                Dashboard de Indicadores
-              </span>
-            )}
-          </div>
-
-          {!rightPanelCollapsed && (
-            <div className="flex-1 overflow-y-auto p-3 space-y-3 text-xs">
-              {/* Compliance & Minimum Slack Card (LE-066, LE-075) */}
-              <div className="space-y-2">
-                <Tarjeta
-                  titulo="Cumplimiento de Plazos (LE-066)"
-                  valor={`${state.kpis.totalDeliveredOnTime} pedidos`}
-                  contexto="Política estricta PaqRap de cero demoras en reparto"
-                  alerta="conforme"
-                  porcentaje={100}
-                />
-
-                <div className="bg-panel border border-borde rounded-md p-3">
-                  <span className="text-[11px] uppercase tracking-wider text-texto2 block">
-                    Holgura Mínima Vigente (LE-075)
-                  </span>
-                  <div className="flex items-center justify-between mt-1">
-                    <span className="text-xl font-mono font-bold text-texto">
-                      +{state.kpis.minSlackHours.toFixed(1)}h
-                    </span>
-                    <SemaforoBadge
-                      nivel={
-                        state.kpis.minSlackHours >= state.thresholds.greenMinHours
-                          ? 'VERDE'
-                          : state.kpis.minSlackHours >= state.thresholds.amberMinHours
-                          ? 'AMBAR'
-                          : 'ROJO'
-                      }
-                      slackHours={state.kpis.minSlackHours}
-                    />
-                  </div>
-                  <div className="text-[10px] text-texto2 mt-1">
-                    Pedido más crítico: <span className="font-mono text-texto font-medium">{state.kpis.minSlackOrderId}</span> (Cliente {state.kpis.minSlackClientCode})
-                  </div>
-                </div>
-              </div>
-
-              {/* Fleet Utilization (LE-070) */}
-              <div className="bg-panel border border-borde rounded-md p-3 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs uppercase font-medium tracking-wider text-texto2">
-                    Utilización de Flota (LE-070)
-                  </span>
-                  <span className="font-mono font-bold text-texto">
-                    {state.kpis.overallUtilizationPercentage}%
-                  </span>
-                </div>
-
-                <div className="space-y-2 pt-1 text-[11px]">
-                  <div>
-                    <div className="flex justify-between text-texto2">
-                      <span className="text-azul font-medium">Autos:</span>
-                      <span className="font-mono">{state.kpis.utilizationByType.AUTO.active} / {state.kpis.utilizationByType.AUTO.total} activos</span>
-                    </div>
-                    <div className="w-full bg-panel2 h-1.5 rounded-full overflow-hidden mt-1 border border-borde/40">
-                      <div
-                        className="h-full bg-azul"
-                        style={{ width: `${state.kpis.utilizationByType.AUTO.percentage}%` }}
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="flex justify-between text-texto2">
-                      <span className="text-violeta font-medium">Motos:</span>
-                      <span className="font-mono">{state.kpis.utilizationByType.MOTO.active} / {state.kpis.utilizationByType.MOTO.total} activos</span>
-                    </div>
-                    <div className="w-full bg-panel2 h-1.5 rounded-full overflow-hidden mt-1 border border-borde/40">
-                      <div
-                        className="h-full bg-violeta"
-                        style={{ width: `${state.kpis.utilizationByType.MOTO.percentage}%` }}
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="flex justify-between text-texto2">
-                      <span className="text-mint font-medium">Bicicletas:</span>
-                      <span className="font-mono">{state.kpis.utilizationByType.BICICLETA.active} / {state.kpis.utilizationByType.BICICLETA.total} activos</span>
-                    </div>
-                    <div className="w-full bg-panel2 h-1.5 rounded-full overflow-hidden mt-1 border border-borde/40">
-                      <div
-                        className="h-full bg-mint"
-                        style={{ width: `${state.kpis.utilizationByType.BICICLETA.percentage}%` }}
-                      />
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Distance and Cost Breakdown (LE-068, LE-069) */}
-              <IndicadorDesglosado
-                titulo="Distancia Recorrida (LE-069)"
-                valorConsolidado={`${state.kpis.totalDistanceKm.toFixed(1)}`}
-                unidad="km"
-                filas={[
-                  { label: 'Autos (40 km/h)', value: `${state.kpis.distanceByType.AUTO.toFixed(1)} km`, colorClass: 'text-azul' },
-                  { label: 'Motos (25 km/h)', value: `${state.kpis.distanceByType.MOTO.toFixed(1)} km`, colorClass: 'text-violeta' },
-                  { label: 'Bicicletas (12 km/h)', value: `${state.kpis.distanceByType.BICICLETA.toFixed(1)} km`, colorClass: 'text-mint' },
-                ]}
-                contexto="Suma de trayectos ortogonales en la retícula"
-              />
-
-              <IndicadorDesglosado
-                titulo="Costo Operativo Acumulado (LE-068)"
-                valorConsolidado={`S/ ${state.kpis.totalCostSoles.toFixed(2)}`}
-                filas={[
-                  { label: 'Autos (S/ 8.00/km)', value: `S/ ${state.kpis.costByType.AUTO.toFixed(2)}`, colorClass: 'text-azul' },
-                  { label: 'Motos (S/ 6.00/km)', value: `S/ ${state.kpis.costByType.MOTO.toFixed(2)}`, colorClass: 'text-violeta' },
-                  { label: 'Bicicletas (S/ 3.00/km)', value: `S/ ${state.kpis.costByType.BICICLETA.toFixed(2)}`, colorClass: 'text-mint' },
-                ]}
-                contexto="Evaluación de la función objetivo metaheurística"
-              />
-
-              {/* Active Incidents List (LE-065) */}
-              <div className="bg-panel border border-borde rounded-md p-3 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs uppercase font-medium tracking-wider text-texto2">
-                    Incidencias Activas (LE-065)
-                  </span>
-                  <span className="font-mono text-rojo font-bold">
-                    {state.incidents.filter((i) => i.active).length}
-                  </span>
-                </div>
-
-                <div className="space-y-1.5 pt-1">
-                  {state.incidents.map((inc) => (
-                    <div
-                      key={inc.id}
-                      onClick={() => setActiveIncidentModal(inc)}
-                      className="p-2 rounded bg-panel2 border border-borde/70 hover:border-texto2/60 cursor-pointer transition-colors"
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="font-medium text-texto text-[11px] truncate flex items-center gap-1.5">
-                          {inc.type === 'BLOQUEO_VIA' ? (
-                            <ShieldAlert className="w-3.5 h-3.5 text-ambar shrink-0" />
-                          ) : (
-                            <AlertTriangle className="w-3.5 h-3.5 text-rojo shrink-0" />
-                          )}
-                          <span>{inc.title}</span>
-                        </span>
-                        <span className="font-mono text-[10px] text-texto2">{inc.timestamp}</span>
-                      </div>
-                      <div className="text-[10px] text-mint mt-1 flex items-center justify-between">
-                        <span>Ver detalle replanificación</span>
-                        <ExternalLink className="w-3 h-3 text-texto2" />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
+          <Flecha tamano={14} />
+        </button>
       </div>
+      {!colapsado && <div className="flex-1 overflow-y-auto p-3 space-y-3 text-xs">{children}</div>}
+    </aside>
+  );
+}
 
-      {/* Selected Vehicle or Order Floating Inspector */}
-      {selectedVehicle && (
-        <div className="absolute bottom-12 left-1/2 -translate-x-1/2 z-30 bg-panel2 border border-mint rounded-lg p-3 shadow-2xl flex items-center gap-4 text-xs animate-in fade-in slide-in-from-bottom-2">
-          <div className="flex items-center gap-2">
-            <span className="w-2.5 h-2.5 rounded-full bg-mint" />
-            <span className="font-mono font-bold text-texto">{selectedVehicle.plate}</span>
-            <span className="text-texto2 font-mono">({selectedVehicle.type})</span>
-          </div>
-          <div className="border-l border-borde/60 pl-3">
-            <span className="text-texto2">Conductor: </span>
-            <span className="text-texto font-medium">{selectedVehicle.driverName}</span>
-          </div>
-          <div className="border-l border-borde/60 pl-3 font-mono">
-            <span className="text-texto2">Carga: </span>
-            <span className="text-mint font-semibold">{selectedVehicle.currentLoad} / {selectedVehicle.maxCapacity} pkgs</span>
-          </div>
-          <div className="border-l border-borde/60 pl-3 font-mono">
-            <span className="text-texto2">Destino: </span>
-            <span className="text-ambar font-semibold">{selectedVehicle.destinationType || 'EN ESPERA'}</span>
-          </div>
-          <button
-            onClick={() => setSelectedVehicleId(null)}
-            className="text-texto2 hover:text-texto ml-2 px-1 text-sm font-bold"
-          >
-            ×
+function Bloque({ titulo, children, aclaracion }: { titulo: string; children: ReactNode; aclaracion?: string }) {
+  return (
+    <section className="bg-panel2 border border-borde rounded-lg p-3">
+      <h3 className="text-[11px] uppercase tracking-wider text-texto2 font-semibold mb-2">{titulo}</h3>
+      {aclaracion && <p className="text-[11px] text-texto2 -mt-1 mb-2 leading-snug">{aclaracion}</p>}
+      {children}
+    </section>
+  );
+}
+
+function Fila({ k, v, mono = true, claseValor = '' }: { k: ReactNode; v: ReactNode; mono?: boolean; claseValor?: string }) {
+  const noDisp = v === NO_DISPONIBLE;
+  return (
+    <div className="flex justify-between items-baseline gap-3 py-0.5">
+      <span className="text-texto2">{k}</span>
+      <span className={`${mono && !noDisp ? 'font-mono' : ''} ${noDisp ? 'text-texto2 italic' : 'text-texto'} text-[13px] text-right ${claseValor}`}>
+        {v}
+      </span>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Banners sobre el mapa
+// ---------------------------------------------------------------------------
+
+function Banners({
+  snapshot,
+  datosVigentes,
+  recibidoEn,
+  errorMapa,
+  errorBloqueos,
+}: {
+  snapshot: SnapshotSimulacion;
+  datosVigentes: boolean;
+  recibidoEn: number | null;
+  errorMapa: string | null;
+  errorBloqueos: string | null;
+}) {
+  const { aviso, cerrarAviso } = useSimulacion();
+  const resultado = tipoResultado(snapshot);
+  const corrida = hayCorrida(snapshot);
+
+  return (
+    <div className="shrink-0 flex flex-col">
+      {aviso && (
+        <div
+          role="status"
+          className={`flex items-start gap-2 px-4 py-2 text-xs border-b ${
+            aviso.tipo === 'error' ? 'bg-rojo/10 border-rojo/60 text-texto' : 'bg-azul/10 border-azul/60 text-texto'
+          }`}
+        >
+          <span className={aviso.tipo === 'error' ? 'text-rojo' : 'text-azul'}>
+            <IconoInfo tamano={16} />
+          </span>
+          <p className="flex-1">{aviso.texto}</p>
+          <button onClick={cerrarAviso} aria-label="Cerrar aviso" className="text-texto2 hover:text-texto">
+            <IconoCerrar tamano={14} />
           </button>
         </div>
       )}
 
-      {/* Modals */}
-      <DetalleIncidenciaModal
-        incident={activeIncidentModal}
-        onClose={() => setActiveIncidentModal(null)}
-        vehicles={state.vehicles}
-        orders={state.orders}
-      />
+      {corrida && !datosVigentes && (
+        <div role="alert" className="flex items-center gap-2 px-4 py-2 text-xs bg-ambar/10 border-b border-ambar text-texto">
+          <span className="text-ambar">
+            <IconoAlerta tamano={16} />
+          </span>
+          <p>
+            <b className="text-ambar">Conexión en tiempo real perdida.</b> Se muestra el último estado recibido a las{' '}
+            <span className="font-mono">{horaNavegador(recibidoEn)}</span> (hora de este dispositivo); puede no estar
+            vigente. Reconectando automáticamente…
+          </p>
+        </div>
+      )}
 
-      <ColapsoModal
-        report={state.collapseReport || null}
-        onClose={() => setShowCollapseModal(false)}
-        onReset={onReset}
-      />
+      {!corrida && (
+        <div className="flex flex-wrap items-center gap-3 px-4 py-2 text-xs bg-panel2 border-b border-borde text-texto">
+          <span className="text-texto2">
+            <IconoInfo tamano={16} />
+          </span>
+          <p className="flex-1">No hay una corrida en curso en el backend. El mapa muestra la ciudad y los almacenes.</p>
+          <Boton variant="secundario" className="text-xs py-1" onClick={() => navegar({ nombre: 'selector' })}>
+            Elegir escenario
+          </Boton>
+        </div>
+      )}
 
-      <CierreSimulacionModal
-        isOpen={showClosureModal}
-        onClose={() => setShowClosureModal(false)}
-        state={state}
-        onReset={onReset}
-      />
+      {resultado && <BannerResultado tipo={resultado} snapshot={snapshot} />}
 
-      {/* Input File Format Guide Modal */}
-      {showFileFormatModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-bg/80 backdrop-blur-sm">
-          <div className="w-full max-w-lg bg-panel2 border border-borde rounded-lg p-4 space-y-3">
-            <div className="flex items-center justify-between border-b border-borde pb-2">
-              <h3 className="text-sm font-bold text-texto uppercase">Estructura de Archivos de Entrada</h3>
-              <button
-                onClick={() => setShowFileFormatModal(false)}
-                className="text-texto2 hover:text-texto text-sm font-bold"
-              >
-                ×
-              </button>
-            </div>
-            <div className="text-xs space-y-3 text-texto2">
-              <div>
-                <span className="text-texto font-semibold block">1. Archivo de Pedidos (ventasaaaamm.txt):</span>
-                <code className="block bg-panel p-2 rounded font-mono text-[11px] text-mint mt-1">
-                  ##d##h##m:posX,posY,cIdCliente,qq,hl
-                </code>
-                <p className="mt-1 text-[11px]">
-                  Ejemplo: <code className="text-texto">11d13h31m:45,43,c9167,12,36</code> (día 11 a las 13:31, nodo 45,43, cliente c9167, 12 paquetes, deadline 36 horas).
-                </p>
-              </div>
-
-              <div>
-                <span className="text-texto font-semibold block">2. Archivo de Bloqueos (aaaamm.bloqueadas):</span>
-                <code className="block bg-panel p-2 rounded font-mono text-[11px] text-mint mt-1">
-                  ##d##h##m-##d##h##m:x1,y1,x2,y2
-                </code>
-                <p className="mt-1 text-[11px]">
-                  Ejemplo: <code className="text-texto">01d06h00m-01d15h00m:31,21,34,21</code> (bloqueo entre los nodos 31,21 y 34,21 del día 1 de 06:00 a 15:00).
-                </p>
-              </div>
-            </div>
-            <div className="flex justify-end pt-2">
-              <Boton variant="secundario" onClick={() => setShowFileFormatModal(false)}>
-                Entendido
-              </Boton>
-            </div>
-          </div>
+      {(errorMapa || errorBloqueos) && (
+        <div className="px-4 py-1.5 text-[11px] bg-panel border-b border-borde text-texto2 flex flex-col gap-0.5">
+          {errorMapa && (
+            <span>
+              <b className="text-ambar">/api/mapa no respondió:</b> se dibuja la retícula de 70 × 50 km del enunciado. {errorMapa}
+            </span>
+          )}
+          {errorBloqueos && (
+            <span>
+              <b className="text-ambar">Bloqueos no disponibles:</b> {errorBloqueos}
+            </span>
+          )}
         </div>
       )}
     </div>
   );
-};
+}
+
+function BannerResultado({ tipo, snapshot }: { tipo: NonNullable<ReturnType<typeof tipoResultado>>; snapshot: SnapshotSimulacion }) {
+  const conf = {
+    COLAPSO: {
+      clase: 'bg-rojo/15 border-rojo text-rojo',
+      icono: <IconoColapso tamano={18} />,
+      titulo: 'COLAPSO LOGÍSTICO',
+      texto: 'Un pedido no se entregó dentro de su plazo.',
+    },
+    COMPLETADA: {
+      clase: 'bg-mint/10 border-mint text-mint',
+      icono: <IconoCorrecto tamano={18} />,
+      titulo: 'CORRIDA COMPLETADA',
+      texto: 'El escenario alcanzó su condición de término sin incumplimientos.',
+    },
+    ERROR: {
+      clase: 'bg-ambar/10 border-ambar text-ambar',
+      icono: <IconoAlerta tamano={18} />,
+      titulo: 'DETENIDA POR ERROR O FALTA DE DATOS',
+      texto: snapshot.mensaje ?? 'El backend no informó la causa.',
+    },
+    DETENIDA_MANUAL: {
+      clase: 'bg-panel2 border-texto2 text-texto',
+      icono: <IconoDetener tamano={16} />,
+      titulo: 'CORRIDA DETENIDA',
+      texto: 'La sesión controladora detuvo la corrida.',
+    },
+  }[tipo];
+  return (
+    <div className={`flex flex-wrap items-center gap-3 px-4 py-2 border-b ${conf.clase}`} role="status">
+      {conf.icono}
+      <p className="text-sm font-bold tracking-wide">{conf.titulo}</p>
+      <p className="text-xs text-texto flex-1 min-w-[200px]">
+        {conf.texto} Reloj al detenerse: <span className="font-mono">{formatoFechaHora(snapshot.relojSimulado)}</span>.
+      </p>
+      <Boton variant="secundario" className="text-xs py-1" onClick={() => navegar({ nombre: 'resultado' })}>
+        Ver resultado
+      </Boton>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Panel izquierdo
+// ---------------------------------------------------------------------------
+
+function PanelParametros({
+  snapshot,
+  flota,
+  errorFlota,
+  recargarFlota,
+  almacenes,
+  errorAlmacenes,
+  recargarAlmacenes,
+  pedirDetener,
+}: {
+  snapshot: SnapshotSimulacion;
+  flota: VehiculoOperativo[] | null;
+  errorFlota: string | null;
+  recargarFlota: () => void;
+  almacenes: AlmacenOperativo[] | null;
+  errorAlmacenes: string | null;
+  recargarAlmacenes: () => void;
+  pedirDetener: () => void;
+}) {
+  const { rol, accionEnCurso } = useSimulacion();
+  const activa = corridaActiva(snapshot);
+  const esc = snapshot.escenario ? ESCENARIOS[snapshot.escenario] : null;
+
+  return (
+    <>
+      <Bloque titulo="Control">
+        {rol === 'CONTROLADOR' ? (
+          <div className="space-y-2">
+            <p className="text-texto2 leading-snug">Esta sesión inició la corrida y es la única que puede detenerla.</p>
+            <Boton
+              variant="peligro"
+              icono={<IconoDetener tamano={14} />}
+              onClick={pedirDetener}
+              disabled={accionEnCurso === 'DETENER'}
+              disabledReason="Solicitud de detención en curso."
+              className="w-full"
+            >
+              Detener corrida
+            </Boton>
+          </div>
+        ) : rol === 'OBSERVADOR' ? (
+          <p className="text-texto2 leading-snug">
+            Modo <b className="text-azul">observador</b>: otra sesión controla esta corrida. Usted ve el mismo estado en
+            tiempo real, sin controles.
+          </p>
+        ) : (
+          <p className="text-texto2 leading-snug">
+            No hay una corrida activa. Puede iniciar una desde{' '}
+            <button className="text-azul underline" onClick={() => navegar({ nombre: 'selector' })}>
+              el selector de escenario
+            </button>
+            .
+          </p>
+        )}
+        {snapshot.estado === 'PAUSADA' && (
+          <Nota tono="aviso" className="mt-2">
+            El backend informa la corrida como pausada. Este visualizador no ofrece controles de reproducción.
+          </Nota>
+        )}
+      </Bloque>
+
+      <Bloque titulo="Corrida">
+        <Fila k="Escenario" v={esc ? esc.titulo : NO_DISPONIBLE} mono={false} />
+        <Fila k="Término" v={esc ? esc.condicionTermino : NO_DISPONIBLE} mono={false} claseValor="max-w-[170px]" />
+        <Fila k="Inicio" v={formatoFechaHora(snapshot.fechaHoraInicio)} />
+        <Fila
+          k="Fin"
+          v={
+            snapshot.escenario === 'SIMULACION_CINCO_DIAS'
+              ? formatoFechaHora(snapshot.fechaHoraFin)
+              : snapshot.escenario
+                ? 'Sin fecha de fin conocida'
+                : NO_DISPONIBLE
+          }
+          mono={snapshot.escenario === 'SIMULACION_CINCO_DIAS'}
+        />
+        <Fila k="Identificador" v={snapshot.idSimulacion != null ? String(snapshot.idSimulacion) : NO_DISPONIBLE} />
+        <Fila k="Semilla" v={NO_DISPONIBLE} />
+        <Fila k="Algoritmo" v={snapshot.algoritmo ?? NO_DISPONIBLE} />
+        <Fila k="Perfil" v={snapshot.perfil ?? NO_DISPONIBLE} />
+        {snapshot.mensaje && (
+          <p className="mt-2 pt-2 border-t border-borde text-[11px] text-texto2 leading-snug">
+            <span className="text-texto">Backend:</span> {snapshot.mensaje}
+          </p>
+        )}
+      </Bloque>
+
+      <Bloque
+        titulo="Composición de la flota"
+        aclaracion={activa ? 'Solo lectura durante la corrida.' : 'Según /api/vehiculos.'}
+      >
+        {errorFlota && !flota ? (
+          <ErrorCarga titulo="No se pudo leer la flota" error={errorFlota} reintentar={recargarFlota} />
+        ) : !flota ? (
+          <Cargando />
+        ) : (
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-texto2 text-right">
+                <th className="text-left font-semibold pb-1">Tipo</th>
+                <th className="font-semibold pb-1">Cant.</th>
+                <th className="font-semibold pb-1">Paq.</th>
+                <th className="font-semibold pb-1">km/h</th>
+                <th className="font-semibold pb-1">S/ km</th>
+              </tr>
+            </thead>
+            <tbody>
+              {ORDEN_TIPOS.map((t) => {
+                const lista = flota.filter((v) => tipoDesdeCodigo(v.idVehiculo) === t);
+                const m = lista[0];
+                return (
+                  <tr key={t} className="text-right">
+                    <td className="text-left py-0.5">
+                      <span className="inline-flex items-center gap-1 text-texto">
+                        <IconoMapaSvg forma={t === 'AUTO' ? 'auto' : t === 'MOTO' ? 'moto' : 'bicicleta'} color={COLOR_TIPO[t]} tamano={18} />
+                        {ETIQUETA_TIPO_PLURAL[t]}
+                      </span>
+                    </td>
+                    <td className="font-mono text-texto">{lista.length}</td>
+                    <td className="font-mono text-texto">{m ? m.capacidadPaquetes : '—'}</td>
+                    <td className="font-mono text-texto">{m ? m.velocidadKmh : '—'}</td>
+                    <td className="font-mono text-texto">{m ? formatoSoles(m.costoPorKm).replace('S/ ', '') : '—'}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </Bloque>
+
+      <Bloque titulo="Almacenes">
+        {errorAlmacenes && !almacenes ? (
+          <ErrorCarga titulo="No se pudieron leer los almacenes" error={errorAlmacenes} reintentar={recargarAlmacenes} />
+        ) : !almacenes ? (
+          <Cargando />
+        ) : (
+          almacenes.map((a) => (
+            <Fila
+              key={a.idAlmacen}
+              k={
+                <span>
+                  {a.nombre} <span className="font-mono">{formatoCoordenada(a.ubicacionX, a.ubicacionY)}</span>
+                </span>
+              }
+              v={a.stockActual == null ? 'Stock ilimitado' : `${formatoEntero(a.stockActual)} / ${formatoEntero(a.capacidadMaxima)}`}
+              mono={a.stockActual != null}
+            />
+          ))
+        )}
+      </Bloque>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Panel derecho
+// ---------------------------------------------------------------------------
+
+function PanelIndicadores({ snapshot, bloqueosCargados }: { snapshot: SnapshotSimulacion; bloqueosCargados: boolean }) {
+  const p = snapshot.pedidos;
+  const colapso = enColapso(snapshot);
+  const corrida = hayCorrida(snapshot);
+  const dia = diaSimulado(snapshot.fechaHoraInicio, snapshot.relojSimulado);
+
+  const porTipo = ORDEN_TIPOS.map((t) => {
+    const lista = snapshot.vehiculos.filter((v) => tipoDesdeCodigo(v.idVehiculo) === t);
+    return {
+      tipo: t,
+      total: lista.length,
+      enRuta: lista.filter((v) => v.estado === 'EN_RUTA' || v.estado === 'RETORNANDO_ALMACEN').length,
+      averiadas: lista.filter((v) => estaAveriado(v.estado)).length,
+      mantenimiento: lista.filter((v) => estaEnMantenimiento(v.estado)).length,
+    };
+  });
+
+  return (
+    <>
+      <section
+        className={`rounded-lg border p-3 ${colapso ? 'border-rojo bg-rojo/10' : 'border-borde bg-panel2'}`}
+        aria-live="polite"
+      >
+        <h3 className="text-[11px] uppercase tracking-wider text-texto2 font-semibold mb-1">Situación</h3>
+        {!corrida ? (
+          <p className="text-texto2">Sin corrida.</p>
+        ) : colapso ? (
+          <div className="flex items-start gap-2 text-rojo">
+            <IconoColapso tamano={22} />
+            <div>
+              <p className="font-bold text-sm">Colapso logístico</p>
+              <p className="text-texto text-xs">
+                <span className="font-mono">{p.retrasados}</span> pedido(s) fuera de plazo. El primer incumplimiento
+                produce el colapso.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-start gap-2 text-mint">
+            <IconoCorrecto tamano={22} />
+            <div>
+              <p className="font-bold text-sm">Sin incumplimientos</p>
+              <p className="text-texto text-xs">
+                Ningún pedido ha vencido su plazo{dia != null ? <> hasta el día <span className="font-mono">{dia}</span>, <span className="font-mono">{formatoHora(snapshot.relojSimulado)}</span></> : null}.
+              </p>
+            </div>
+          </div>
+        )}
+      </section>
+
+      <Bloque titulo="Pedidos del periodo" aclaracion="Resumen del snapshot del backend.">
+        <div className="grid grid-cols-2 gap-2 mb-2">
+          <Cifra etiqueta="Entregados" valor={p.entregados} clase="text-mint" />
+          <Cifra etiqueta="En ruta" valor={p.enRuta} clase="text-azul" />
+        </div>
+        <Fila k="Pendientes" v={formatoEntero(p.pendientes)} />
+        <Fila k="Reasignados" v={formatoEntero(p.reasignados)} />
+        <Fila k="Futuros (aún no llegan)" v={formatoEntero(p.futuros)} />
+        <Fila
+          k="Fuera de plazo"
+          v={formatoEntero(p.retrasados)}
+          claseValor={p.retrasados > 0 ? '!text-rojo font-bold' : ''}
+        />
+        <div className="border-t border-borde mt-1.5 pt-1.5">
+          <Fila k="Total del periodo" v={formatoEntero(p.total)} />
+        </div>
+      </Bloque>
+
+      <Bloque titulo="Holgura mínima">
+        <Fila k="Holgura mínima" v={NO_DISPONIBLE} />
+        <Fila k="Pedido crítico" v={NO_DISPONIBLE} />
+      </Bloque>
+
+      <Bloque titulo="Flota" aclaracion="Estados informados en el snapshot.">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="text-texto2 text-right">
+              <th className="text-left font-semibold pb-1">Tipo</th>
+              <th className="font-semibold pb-1">En ruta</th>
+              <th className="font-semibold pb-1" title="Averiadas">Aver.</th>
+              <th className="font-semibold pb-1" title="En mantenimiento">Mant.</th>
+            </tr>
+          </thead>
+          <tbody>
+            {porTipo.map((f) => (
+              <tr key={f.tipo} className="text-right">
+                <td className="text-left py-0.5 text-texto">{ETIQUETA_TIPO_PLURAL[f.tipo as TipoVehiculo]}</td>
+                <td className="font-mono text-texto">
+                  {f.enRuta} / {f.total}
+                </td>
+                <td className={`font-mono ${f.averiadas ? 'text-ambar' : 'text-texto'}`}>{f.averiadas}</td>
+                <td className={`font-mono ${f.mantenimiento ? 'text-[#38bdf8]' : 'text-texto'}`}>{f.mantenimiento}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div className="border-t border-borde mt-2 pt-1.5">
+          <Fila k="Distancia recorrida" v={NO_DISPONIBLE} />
+          <Fila k="Costo acumulado" v={NO_DISPONIBLE} />
+        </div>
+      </Bloque>
+
+      <Bloque titulo="Incidencias">
+        <Fila k="Bloqueos activos" v={formatoEntero(snapshot.bloqueosActivos)} />
+        {!bloqueosCargados && corrida && <p className="text-[11px] text-texto2">Cargando el trazado de los bloqueos…</p>}
+        <Nota className="mt-1.5">
+          Los bloqueos son programados desde el archivo mensual. El registro de averías tipo 1, 2 y 3 aún no está
+          integrado en este visualizador.
+        </Nota>
+      </Bloque>
+    </>
+  );
+}
+
+function Cifra({ etiqueta, valor, clase }: { etiqueta: string; valor: number; clase: string }) {
+  return (
+    <div className="bg-bg border border-borde rounded-md px-2 py-1.5">
+      <div className="text-[11px] text-texto2">{etiqueta}</div>
+      <div className={`font-mono text-2xl font-bold ${clase}`}>{formatoEntero(valor)}</div>
+    </div>
+  );
+}

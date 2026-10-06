@@ -1,587 +1,502 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as EventoPuntero } from 'react';
+import type { AlmacenOperativo, BloqueoRespuesta, VehiculoSnapshot } from '../types/api';
+import { dibujarForma, BORDE } from '../components/iconos/formas';
 import {
-  Coordinate,
-  Vehicle,
-  Warehouse,
-  Order,
-  RoadBlock,
-  Incident,
-} from '../types/logistics';
+  construirRutas,
+  distanciaSegmento,
+  polilineaPx,
+  type Proyeccion,
+  type RutaKm,
+} from '../components/mapa/geometria';
+import { colorDeVehiculo, estaAveriado, estaEnMantenimiento, tipoDesdeCodigo } from '../utilitarios/vehiculos';
 
-export interface MapViewport {
-  offsetX: number;
-  offsetY: number;
-  scale: number;
+/**
+ * Motor de dibujo del mapa de la ciudad.
+ *
+ * - Retícula como 71 líneas verticales y 51 horizontales (ancho+1, alto+1).
+ * - Escala = menor cociente entre espacio disponible y dimensiones de la
+ *   ciudad → celdas cuadradas. El zoom solo multiplica esa escala base.
+ * - Origen (0,0) abajo a la izquierda: el eje Y se invierte al proyectar.
+ * - Resolución interna multiplicada por devicePixelRatio.
+ */
+
+export interface Dimensiones {
+  anchoKm: number;
+  altoKm: number;
 }
 
-export function useMapCanvas(
-  warehouses: Warehouse[],
-  vehicles: Vehicle[],
-  orders: Order[],
-  roadBlocks: RoadBlock[],
-  selectedVehicleId: string | null,
-  onSelectVehicle: (id: string | null) => void,
-  onSelectOrder: (order: Order | null) => void
-) {
+export type Objetivo =
+  | { tipo: 'vehiculo'; id: string }
+  | { tipo: 'nodo'; x: number; y: number; ids: string[]; idAlmacen: string | null }
+  | { tipo: 'almacen'; id: string };
+
+export type Seleccion = { tipo: 'vehiculo'; id: string } | { tipo: 'nodo'; x: number; y: number } | null;
+
+export interface EstadoHover {
+  objetivo: Objetivo;
+  /** Posición del cursor en píxeles CSS dentro del lienzo. */
+  px: number;
+  py: number;
+}
+
+interface Opciones {
+  dimensiones: Dimensiones;
+  almacenes: AlmacenOperativo[];
+  vehiculos: VehiculoSnapshot[];
+  bloqueos: BloqueoRespuesta[];
+  seleccion: Seleccion;
+  alSeleccionar: (s: Seleccion) => void;
+  /** Atenúa todo el contenido (datos no vigentes). */
+  atenuado: boolean;
+}
+
+const MARGEN = 34;
+const GROSOR_RUTA = 2.4;
+const RADIO_MARCA = 11;
+
+interface Grupo {
+  x: number;
+  y: number;
+  ids: string[];
+  idAlmacen: string | null;
+}
+
+export function useMapCanvas(op: Opciones) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [viewport, setViewport] = useState<MapViewport>({ offsetX: 40, offsetY: 40, scale: 12 });
-  const [hoveredCoord, setHoveredCoord] = useState<Coordinate | null>(null);
-  const [hoveredVehicle, setHoveredVehicle] = useState<Vehicle | null>(null);
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragStart, setDragStart] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [tamano, setTamano] = useState({ w: 0, h: 0 });
+  /** zoom multiplica la escala base; x/y desplazan el centro de la ciudad en px. */
+  const [vista, setVista] = useState({ zoom: 1, x: 0, y: 0 });
+  const [hover, setHover] = useState<EstadoHover | null>(null);
+  const [cursorKm, setCursorKm] = useState<{ x: number; y: number } | null>(null);
+  const arrastre = useRef<{ x0: number; y0: number; dx0: number; dy0: number; movido: boolean } | null>(null);
+  const polilineas = useRef<Map<string, Array<[number, number]>>>(new Map());
 
-  const GRID_WIDTH_KM = 70;
-  const GRID_HEIGHT_KM = 50;
+  const { anchoKm, altoKm } = op.dimensiones;
 
-  // Convert logical coordinates (0..70, 0..50) where (0,0) is bottom-left
-  // to canvas pixel coordinates
-  const toCanvasPixels = useCallback(
-    (coord: Coordinate, h: number): { px: number; py: number } => {
-      const px = viewport.offsetX + coord.x * viewport.scale;
-      // Invert Y axis: Y=0 is bottom, Y=50 is top
-      const py = h - viewport.offsetY - coord.y * viewport.scale;
-      return { px, py };
-    },
-    [viewport]
-  );
-
-  // Convert canvas pixel coordinates to nearest logical grid coordinate
-  const toGridCoord = useCallback(
-    (px: number, py: number, h: number): Coordinate => {
-      const gx = Math.round((px - viewport.offsetX) / viewport.scale);
-      const gy = Math.round((h - viewport.offsetY - py) / viewport.scale);
-      return {
-        x: Math.max(0, Math.min(GRID_WIDTH_KM, gx)),
-        y: Math.max(0, Math.min(GRID_HEIGHT_KM, gy)),
-      };
-    },
-    [viewport]
-  );
-
-  // Auto-fit function
-  const fitToView = useCallback(() => {
+  // Tamaño del contenedor.
+  useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const parent = canvas.parentElement;
-    if (!parent) return;
-
-    const w = parent.clientWidth;
-    const h = parent.clientHeight;
-
-    const padding = 60;
-    const availableW = w - padding * 2;
-    const availableH = h - padding * 2;
-
-    const scaleX = availableW / GRID_WIDTH_KM;
-    const scaleY = availableH / GRID_HEIGHT_KM;
-    const scale = Math.max(6, Math.min(scaleX, scaleY));
-
-    const totalGridPixelW = GRID_WIDTH_KM * scale;
-    const totalGridPixelH = GRID_HEIGHT_KM * scale;
-
-    const offsetX = (w - totalGridPixelW) / 2;
-    const offsetY = (h - totalGridPixelH) / 2;
-
-    setViewport({ offsetX, offsetY, scale });
+    const padre = canvas?.parentElement;
+    if (!padre) return;
+    const medir = () => setTamano({ w: padre.clientWidth, h: padre.clientHeight });
+    medir();
+    const ro = new ResizeObserver(medir);
+    ro.observe(padre);
+    return () => ro.disconnect();
   }, []);
 
-  // Window resize observer
+  // Proyección km → px.
+  const proy: Proyeccion & { ox: number; oy: number } = useMemo(() => {
+    const base = Math.max(
+      0.1,
+      Math.min((tamano.w - 2 * MARGEN) / anchoKm, (tamano.h - 2 * MARGEN) / altoKm)
+    );
+    const escala = base * vista.zoom;
+    const ox = (tamano.w - escala * anchoKm) / 2 + vista.x;
+    const oy = (tamano.h - escala * altoKm) / 2 + vista.y;
+    return {
+      escala,
+      ox,
+      oy,
+      px: (x: number) => ox + x * escala,
+      py: (y: number) => oy + (altoKm - y) * escala,
+    };
+  }, [tamano, vista, anchoKm, altoKm]);
+
+  const rutas: RutaKm[] = useMemo(() => construirRutas(op.vehiculos), [op.vehiculos]);
+
+  // Vehículos agrupados por nodo. Los que están en un almacén quedan DENTRO de él.
+  const grupos: Grupo[] = useMemo(() => {
+    const porNodo = new Map<string, Grupo>();
+    for (const v of op.vehiculos) {
+      const k = `${v.x},${v.y}`;
+      let g = porNodo.get(k);
+      if (!g) {
+        const alm = op.almacenes.find((a) => a.ubicacionX === v.x && a.ubicacionY === v.y);
+        g = { x: v.x, y: v.y, ids: [], idAlmacen: alm?.idAlmacen ?? null };
+        porNodo.set(k, g);
+      }
+      g.ids.push(v.idVehiculo);
+    }
+    for (const g of porNodo.values()) g.ids.sort();
+    return [...porNodo.values()];
+  }, [op.vehiculos, op.almacenes]);
+
+  const vehiculoPorId = useMemo(() => new Map(op.vehiculos.map((v) => [v.idVehiculo, v])), [op.vehiculos]);
+
+  // Vehículo resaltado: el que está bajo el cursor o, si no, el seleccionado.
+  const enfocado: string | null =
+    hover?.objetivo.tipo === 'vehiculo'
+      ? hover.objetivo.id
+      : op.seleccion?.tipo === 'vehiculo'
+        ? op.seleccion.id
+        : null;
+
+  // ------------------------------------------------------------------------
+  // Dibujo
+  // ------------------------------------------------------------------------
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || !canvas.parentElement) return;
-
-    fitToView();
-
-    const resizeObserver = new ResizeObserver(() => {
-      fitToView();
-    });
-
-    resizeObserver.observe(canvas.parentElement);
-    return () => resizeObserver.disconnect();
-  }, [fitToView]);
-
-  // Main Canvas Render
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
+    if (!canvas || tamano.w === 0 || tamano.h === 0) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
     const dpr = window.devicePixelRatio || 1;
-    const rect = canvas.getBoundingClientRect();
-    const w = rect.width;
-    const h = rect.height;
+    canvas.width = Math.round(tamano.w * dpr);
+    canvas.height = Math.round(tamano.h * dpr);
+    canvas.style.width = `${tamano.w}px`;
+    canvas.style.height = `${tamano.h}px`;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    canvas.width = w * dpr;
-    canvas.height = h * dpr;
-    ctx.scale(dpr, dpr);
+    const { px, py, escala } = proy;
+    ctx.clearRect(0, 0, tamano.w, tamano.h);
+    ctx.fillStyle = '#0a111e';
+    ctx.fillRect(0, 0, tamano.w, tamano.h);
 
-    // 1. Clear background
-    ctx.fillStyle = '#0a111e'; // --color-bg
-    ctx.fillRect(0, 0, w, h);
-
-    // 2. Draw 70x50 km Manhattan Grid Lines
+    // 1. Retícula: anchoKm+1 verticales y altoKm+1 horizontales, líneas continuas.
     ctx.lineWidth = 1;
-    ctx.strokeStyle = '#16233a'; // --color-panel2
-
-    // Vertical lines (X: 0 to 70)
-    for (let x = 0; x <= GRID_WIDTH_KM; x++) {
-      const p1 = toCanvasPixels({ x, y: 0 }, h);
-      const p2 = toCanvasPixels({ x, y: GRID_HEIGHT_KM }, h);
-
+    for (let x = 0; x <= anchoKm; x++) {
+      ctx.strokeStyle = x % 10 === 0 ? '#2a3d5e' : '#1a2940';
       ctx.beginPath();
-      ctx.moveTo(p1.px, p1.py);
-      ctx.lineTo(p2.px, p2.py);
-      ctx.strokeStyle = x % 10 === 0 ? '#24364f' : '#141e30';
+      ctx.moveTo(Math.round(px(x)) + 0.5, py(0));
+      ctx.lineTo(Math.round(px(x)) + 0.5, py(altoKm));
       ctx.stroke();
-
-      // Axis label every 10 km
-      if (x % 10 === 0) {
-        ctx.fillStyle = '#a7b6c9';
-        ctx.font = '10px ui-monospace, monospace';
-        ctx.textAlign = 'center';
-        ctx.fillText(`${x}`, p1.px, p1.py + 15);
-      }
     }
-
-    // Horizontal lines (Y: 0 to 50)
-    for (let y = 0; y <= GRID_HEIGHT_KM; y++) {
-      const p1 = toCanvasPixels({ x: 0, y }, h);
-      const p2 = toCanvasPixels({ x: GRID_WIDTH_KM, y }, h);
-
+    for (let y = 0; y <= altoKm; y++) {
+      ctx.strokeStyle = y % 10 === 0 ? '#2a3d5e' : '#1a2940';
       ctx.beginPath();
-      ctx.moveTo(p1.px, p1.py);
-      ctx.lineTo(p2.px, p2.py);
-      ctx.strokeStyle = y % 10 === 0 ? '#24364f' : '#141e30';
+      ctx.moveTo(px(0), Math.round(py(y)) + 0.5);
+      ctx.lineTo(px(anchoKm), Math.round(py(y)) + 0.5);
       ctx.stroke();
-
-      // Axis label every 10 km
-      if (y % 10 === 0) {
-        ctx.fillStyle = '#a7b6c9';
-        ctx.font = '10px ui-monospace, monospace';
-        ctx.textAlign = 'right';
-        ctx.fillText(`${y}`, p1.px - 6, p1.py + 3);
-      }
     }
-
-    // Grid boundary outline
-    const b00 = toCanvasPixels({ x: 0, y: 0 }, h);
-    const b70_50 = toCanvasPixels({ x: GRID_WIDTH_KM, y: GRID_HEIGHT_KM }, h);
-    ctx.strokeStyle = '#24364f';
+    ctx.strokeStyle = '#3b527a';
     ctx.lineWidth = 1.5;
-    ctx.strokeRect(b00.px, b70_50.py, b70_50.px - b00.px, b00.py - b70_50.py);
+    ctx.strokeRect(px(0), py(altoKm), anchoKm * escala, altoKm * escala);
 
-    // 3. Draw Road Blocks (Red thick dashed line with prohibition mark)
-    roadBlocks.forEach((block) => {
-      const p1 = toCanvasPixels(block.from, h);
-      const p2 = toCanvasPixels(block.to, h);
+    ctx.font = '11px ui-monospace, Consolas, monospace';
+    ctx.fillStyle = '#a7b6c9';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    for (let x = 0; x <= anchoKm; x += 10) ctx.fillText(String(x), px(x), py(0) + 6);
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    for (let y = 0; y <= altoKm; y += 10) ctx.fillText(String(y), px(0) - 6, py(y));
 
+    const alfaBase = op.atenuado ? 0.45 : 1;
+
+    // 2. Bloqueos activos (programados desde el archivo mensual).
+    for (const b of op.bloqueos) {
+      if (b.vertices.length < 2) continue;
       ctx.save();
+      ctx.globalAlpha = alfaBase;
       ctx.strokeStyle = '#ef4444';
-      ctx.lineWidth = 3;
-      ctx.setLineDash([5, 3]);
+      ctx.lineWidth = 4;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'miter';
       ctx.beginPath();
-      ctx.moveTo(p1.px, p1.py);
-      ctx.lineTo(p2.px, p2.py);
-      ctx.stroke();
-
-      // Prohibition badge on midpoint
-      const midX = (p1.px + p2.px) / 2;
-      const midY = (p1.py + p2.py) / 2;
-      ctx.fillStyle = '#ef4444';
-      ctx.beginPath();
-      ctx.arc(midX, midY, 6, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.strokeStyle = '#0a111e';
-      ctx.lineWidth = 1.5;
-      ctx.setLineDash([]);
-      ctx.beginPath();
-      ctx.moveTo(midX - 3, midY - 3);
-      ctx.lineTo(midX + 3, midY + 3);
-      ctx.stroke();
-      ctx.restore();
-    });
-
-    // 4. Draw Vehicle Routes (Trajectories)
-    vehicles.forEach((vehicle) => {
-      const isSelected = vehicle.id === selectedVehicleId;
-      const isHovered = hoveredVehicle?.id === vehicle.id;
-      const highlight = isSelected || isHovered;
-
-      // Color token
-      let strokeColor = '#60a5fa'; // Auto: azul
-      if (vehicle.type === 'MOTO') strokeColor = '#a78bfa'; // Moto: violeta
-      if (vehicle.type === 'BICICLETA') strokeColor = '#34d399'; // Bici: mint
-
-      const opacity = highlight ? 1.0 : selectedVehicleId ? 0.2 : 0.7;
-
-      ctx.save();
-      // Draw traveled path (faint dotted)
-      if (vehicle.traveledPath.length > 0) {
-        ctx.strokeStyle = strokeColor;
-        ctx.globalAlpha = opacity * 0.35;
-        ctx.lineWidth = 1.5;
-        ctx.setLineDash([3, 3]);
-        ctx.beginPath();
-        vehicle.traveledPath.forEach((pt, idx) => {
-          const cp = toCanvasPixels(pt, h);
-          if (idx === 0) ctx.moveTo(cp.px, cp.py);
-          else ctx.lineTo(cp.px, cp.py);
-        });
-        const currentP = toCanvasPixels(vehicle.coord, h);
-        ctx.lineTo(currentP.px, currentP.py);
-        ctx.stroke();
+      // Se respeta la ortogonalidad aunque un vértice llegara mal formado.
+      let previo = b.vertices[0];
+      ctx.moveTo(px(previo.x), py(previo.y));
+      for (let i = 1; i < b.vertices.length; i++) {
+        const v = b.vertices[i];
+        if (v.x !== previo.x && v.y !== previo.y) ctx.lineTo(px(v.x), py(previo.y));
+        ctx.lineTo(px(v.x), py(v.y));
+        previo = v;
       }
+      ctx.stroke();
+      const a = b.vertices[0];
+      const z = b.vertices[1];
+      dibujarForma(ctx, 'bloqueo', (px(a.x) + px(z.x)) / 2, (py(a.y) + py(z.y)) / 2);
+      ctx.restore();
+    }
 
-      // Draw pending path (solid line, strictly orthogonal Manhattan)
-      if (vehicle.pendingPath.length > 0) {
-        ctx.globalAlpha = opacity;
-        ctx.lineWidth = highlight ? 2.5 : 1.5;
-        ctx.setLineDash([]);
-
-        // Amber halo if alternative route around block
-        if (vehicle.hasAlternativeRoute) {
-          ctx.strokeStyle = '#fbbf24';
-          ctx.lineWidth = 4.5;
-          ctx.beginPath();
-          const startP = toCanvasPixels(vehicle.coord, h);
-          ctx.moveTo(startP.px, startP.py);
-          vehicle.pendingPath.forEach((pt) => {
-            const cp = toCanvasPixels(pt, h);
-            ctx.lineTo(cp.px, cp.py);
-          });
-          ctx.stroke();
-        }
-
-        ctx.strokeStyle = strokeColor;
-        ctx.beginPath();
-        const startP = toCanvasPixels(vehicle.coord, h);
-        ctx.moveTo(startP.px, startP.py);
-        vehicle.pendingPath.forEach((pt) => {
-          const cp = toCanvasPixels(pt, h);
-          ctx.lineTo(cp.px, cp.py);
-        });
-        ctx.stroke();
-
-        // Destination marker
-        if (vehicle.currentTargetCoord) {
-          const destP = toCanvasPixels(vehicle.currentTargetCoord, h);
-          ctx.fillStyle = vehicle.destinationType === 'CLIENTE' ? '#fbbf24' : '#34d399';
-          ctx.beginPath();
-          ctx.arc(destP.px, destP.py, 4, 0, Math.PI * 2);
-          ctx.fill();
-        }
+    // 3. Rutas pendientes (caminoActual), con carriles en tramos compartidos.
+    const nuevas = new Map<string, Array<[number, number]>>();
+    const ordenadas = [...rutas].sort((r1, r2) =>
+      r1.idVehiculo === enfocado ? 1 : r2.idVehiculo === enfocado ? -1 : 0
+    );
+    for (const r of ordenadas) {
+      const pts = polilineaPx(r, proy, GROSOR_RUTA);
+      nuevas.set(r.idVehiculo, pts);
+      if (pts.length < 2) continue;
+      const esEnfocada = r.idVehiculo === enfocado;
+      const color = colorDeVehiculo(r.idVehiculo);
+      ctx.save();
+      ctx.globalAlpha = alfaBase * (enfocado == null ? 0.85 : esEnfocada ? 1 : 0.15);
+      ctx.lineJoin = 'miter';
+      ctx.lineCap = 'butt';
+      if (esEnfocada) {
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = GROSOR_RUTA + 3;
+        trazar(ctx, pts);
+      }
+      ctx.strokeStyle = color;
+      ctx.lineWidth = esEnfocada ? GROSOR_RUTA + 1 : GROSOR_RUTA;
+      trazar(ctx, pts);
+      if (r.destino && vehiculoPorId.get(r.idVehiculo)?.pedidoObjetivo != null) {
+        dibujarForma(ctx, 'destinoCliente', px(r.destino.x), py(r.destino.y), color);
       }
       ctx.restore();
-    });
+    }
+    polilineas.current = nuevas;
 
-    // 5. Draw Client Orders (Circles colored by Semáforo)
-    orders.forEach((order) => {
-      if (order.status === 'ENTREGADO') return;
-
-      const p = toCanvasPixels(order.coord, h);
-      let color = '#22c55e'; // Verde
-      if (order.criticality === 'AMBAR') color = '#f59e0b';
-      if (order.criticality === 'ROJO') color = '#ef4444';
-
+    // 4. Almacenes, con la cantidad de unidades que contienen.
+    for (const a of op.almacenes) {
+      const x = px(a.ubicacionX);
+      const y = py(a.ubicacionY);
+      const central = a.tipo === 'CENTRAL';
       ctx.save();
-      // Outer glow for critical
-      if (order.criticality === 'ROJO') {
-        ctx.fillStyle = 'rgba(239, 68, 68, 0.25)';
-        ctx.beginPath();
-        ctx.arc(p.px, p.py, 10, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      ctx.fillStyle = color;
-      ctx.beginPath();
-      ctx.arc(p.px, p.py, 5, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.strokeStyle = '#0a111e';
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
-
-      // Client label
-      ctx.fillStyle = '#e8eef7';
-      ctx.font = '9px system-ui, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText(order.clientCode, p.px, p.py - 7);
+      ctx.globalAlpha = alfaBase;
+      dibujarForma(ctx, central ? 'almacenCentral' : 'almacenIntermedio', x, y, undefined, 1.25);
+      etiqueta(ctx, `${a.nombre} (${a.ubicacionX},${a.ubicacionY})`, x, y + 18, '#34d399');
+      const dentro = grupos.find((g) => g.idAlmacen === a.idAlmacen);
+      if (dentro) insignia(ctx, x + 22, y - 2, String(dentro.ids.length), dentro.ids.includes(enfocado ?? ''));
       ctx.restore();
-    });
+    }
 
-    // 6. Draw Warehouses: Centered letters AC, A1, A2 inside pins (NEVER red!)
-    warehouses.forEach((wh) => {
-      const p = toCanvasPixels(wh.coord, h);
-      const isCentral = wh.isCentral;
-      const size = isCentral ? 22 : 20;
-
+    // 5. Unidades fuera de almacén: una marca por nodo, con la cantidad si hay varias.
+    for (const g of grupos) {
+      if (g.idAlmacen) continue;
+      const x = px(g.x);
+      const y = py(g.y);
+      const contieneEnfocado = enfocado != null && g.ids.includes(enfocado);
+      const seleccionado =
+        (op.seleccion?.tipo === 'nodo' && op.seleccion.x === g.x && op.seleccion.y === g.y) ||
+        (op.seleccion?.tipo === 'vehiculo' && g.ids.includes(op.seleccion.id));
       ctx.save();
-      if (isCentral) {
-        // Almacén Central (AC): Cian / Blanco destacado con letras 'AC' dentro (PROHIBIDO ROJO)
-        // Halo
-        ctx.fillStyle = 'rgba(56, 189, 248, 0.35)';
-        ctx.fillRect(p.px - size * 0.75, p.py - size * 0.75, size * 1.5, size * 1.5);
-
-        // Pin square
-        ctx.fillStyle = '#38bdf8'; // Cian
-        ctx.fillRect(p.px - size / 2, p.py - size / 2, size, size);
-
-        // White border
+      ctx.globalAlpha = alfaBase * (enfocado == null || contieneEnfocado ? 1 : 0.35);
+      if (seleccionado || contieneEnfocado) {
         ctx.strokeStyle = '#ffffff';
         ctx.lineWidth = 2;
-        ctx.strokeRect(p.px - size / 2, p.py - size / 2, size, size);
-
-        // Center letters 'AC' inside pin
-        ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 11px ui-monospace, monospace';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText('AC', p.px, p.py);
-
-        // Label below
-        ctx.textBaseline = 'alphabetic';
-        ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 11px system-ui, sans-serif';
-        ctx.fillText(`AC (${wh.coord.x},${wh.coord.y}) ∞`, p.px, p.py + size / 2 + 13);
+        ctx.beginPath();
+        ctx.arc(x, y, RADIO_MARCA + 3, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      if (g.ids.length === 1) {
+        dibujarUnidad(ctx, vehiculoPorId.get(g.ids[0])!, x, y);
       } else {
-        // Almacenes Intermedios (A1, A2): Mint con letras 'A1' y 'A2' dentro
-        ctx.fillStyle = 'rgba(52, 211, 153, 0.25)';
-        ctx.fillRect(p.px - size * 0.75, p.py - size * 0.75, size * 1.5, size * 1.5);
-
-        ctx.fillStyle = '#34d399'; // Mint
-        ctx.fillRect(p.px - size / 2, p.py - size / 2, size, size);
-
-        ctx.strokeStyle = '#ffffff';
+        ctx.fillStyle = '#16233a';
+        ctx.strokeStyle = '#e8eef7';
         ctx.lineWidth = 1.5;
-        ctx.strokeRect(p.px - size / 2, p.py - size / 2, size, size);
-
-        // Center letters 'A1' or 'A2' inside pin
-        ctx.fillStyle = '#0a111e';
-        ctx.font = 'bold 10px ui-monospace, monospace';
+        ctx.beginPath();
+        ctx.arc(x, y, RADIO_MARCA, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = '#e8eef7';
+        ctx.font = 'bold 11px ui-monospace, Consolas, monospace';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(wh.code, p.px, p.py);
-
-        // Label below
-        ctx.textBaseline = 'alphabetic';
-        ctx.fillStyle = '#34d399';
-        ctx.font = 'bold 10px system-ui, sans-serif';
-        ctx.fillText(`${wh.code} (${wh.coord.x},${wh.coord.y}) [${wh.currentStock}]`, p.px, p.py + size / 2 + 12);
+        ctx.fillText(String(g.ids.length), x, y + 0.5);
+        const estados = g.ids.map((id) => vehiculoPorId.get(id)?.estado);
+        if (estados.some(estaAveriado)) dibujarForma(ctx, 'averia', x + 12, y - 11, undefined, 0.8);
+        else if (estados.some(estaEnMantenimiento)) dibujarForma(ctx, 'mantenimiento', x + 12, y - 11, undefined, 0.8);
       }
       ctx.restore();
-    });
+    }
+  }, [tamano, proy, rutas, grupos, op.almacenes, op.bloqueos, op.seleccion, op.atenuado, enfocado, vehiculoPorId, anchoKm, altoKm]);
 
-    // 7. Draw Vehicles: Solid colored points without any automatic numbers inside
-    const nodeGroups: Record<string, Vehicle[]> = {};
-    vehicles.forEach((v) => {
-      const key = `${v.coord.x},${v.coord.y}`;
-      if (!nodeGroups[key]) nodeGroups[key] = [];
-      nodeGroups[key].push(v);
-    });
+  // ------------------------------------------------------------------------
+  // Interacción
+  // ------------------------------------------------------------------------
 
-    Object.entries(nodeGroups).forEach(([key, group]) => {
-      const [gx, gy] = key.split(',').map(Number);
-      const isWarehouseNode = warehouses.some((w) => w.coord.x === gx && w.coord.y === gy);
+  const aKm = useCallback(
+    (mx: number, my: number) => {
+      const x = Math.round((mx - proy.ox) / proy.escala);
+      const y = Math.round(altoKm - (my - proy.oy) / proy.escala);
+      if (x < 0 || x > anchoKm || y < 0 || y > altoKm) return null;
+      return { x, y };
+    },
+    [proy, anchoKm, altoKm]
+  );
 
-      // If vehicles are stationed at a warehouse, the warehouse marker already represents the node
-      if (isWarehouseNode) {
+  const buscarObjetivo = useCallback(
+    (mx: number, my: number): Objetivo | null => {
+      // Marcas de unidades y almacenes primero.
+      let mejor: { o: Objetivo; d: number } | null = null;
+      for (const g of grupos) {
+        const d = Math.hypot(mx - proy.px(g.x), my - proy.py(g.y));
+        if (d > RADIO_MARCA + 6 || (mejor && mejor.d <= d)) continue;
+        const o: Objetivo =
+          g.ids.length === 1 && !g.idAlmacen
+            ? { tipo: 'vehiculo', id: g.ids[0] }
+            : { tipo: 'nodo', x: g.x, y: g.y, ids: g.ids, idAlmacen: g.idAlmacen };
+        mejor = { o, d };
+      }
+      for (const a of op.almacenes) {
+        if (grupos.some((g) => g.idAlmacen === a.idAlmacen)) continue;
+        const d = Math.hypot(mx - proy.px(a.ubicacionX), my - proy.py(a.ubicacionY));
+        if (d <= RADIO_MARCA + 6 && (!mejor || d < mejor.d)) mejor = { o: { tipo: 'almacen', id: a.idAlmacen }, d };
+      }
+      if (mejor) return mejor.o;
+
+      // Luego, el trazo de las rutas.
+      let mejorRuta: { id: string; d: number } | null = null;
+      for (const [id, pts] of polilineas.current) {
+        for (let i = 1; i < pts.length; i++) {
+          const d = distanciaSegmento([mx, my], pts[i - 1], pts[i]);
+          if (d <= 5 && (!mejorRuta || d < mejorRuta.d)) mejorRuta = { id, d };
+        }
+      }
+      return mejorRuta ? { tipo: 'vehiculo', id: mejorRuta.id } : null;
+    },
+    [grupos, proy, op.almacenes]
+  );
+
+  const posicion = (e: EventoPuntero) => {
+    const r = canvasRef.current!.getBoundingClientRect();
+    return { mx: e.clientX - r.left, my: e.clientY - r.top };
+  };
+
+  const onPointerDown = (e: EventoPuntero<HTMLCanvasElement>) => {
+    arrastre.current = { x0: e.clientX, y0: e.clientY, dx0: vista.x, dy0: vista.y, movido: false };
+  };
+
+  const onPointerMove = (e: EventoPuntero<HTMLCanvasElement>) => {
+    const { mx, my } = posicion(e);
+    const a = arrastre.current;
+    if (a && e.buttons === 1) {
+      const dx = e.clientX - a.x0;
+      const dy = e.clientY - a.y0;
+      if (a.movido || Math.abs(dx) + Math.abs(dy) > 4) {
+        a.movido = true;
+        setVista((v) => ({ ...v, x: a.dx0 + dx, y: a.dy0 + dy }));
+        setHover(null);
         return;
       }
-
-      const p = toCanvasPixels({ x: gx, y: gy }, h);
-      const v = group[0];
-      const isSelected = group.some((veh) => veh.id === selectedVehicleId);
-
-      let vColor = '#60a5fa'; // Auto: Azul
-      if (v.type === 'MOTO') vColor = '#a78bfa'; // Moto: Violeta
-      if (v.type === 'BICICLETA') vColor = '#34d399'; // Bici: Mint
-
-      ctx.save();
-      // Selection ring
-      if (isSelected) {
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.arc(p.px, p.py, 10, 0, Math.PI * 2);
-        ctx.stroke();
-      }
-
-      // Solid color point (NO automatic numbers rendered inside)
-      ctx.fillStyle = v.status === 'AVERIADO' ? '#ef4444' : vColor;
-      ctx.beginPath();
-      ctx.arc(p.px, p.py, 6, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.strokeStyle = '#0a111e';
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
-
-      // Status badges if Breakdown or Lunch Break
-      if (v.status === 'AVERIADO') {
-        ctx.fillStyle = '#ef4444';
-        ctx.font = '9px system-ui, sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText('⚠ AVERÍA', p.px, p.py - 10);
-      } else if (v.isTakingBreak) {
-        ctx.fillStyle = '#fbbf24';
-        ctx.font = '9px system-ui, sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText('☕ REFRIGERIO', p.px, p.py - 10);
-      }
-      ctx.restore();
-    });
-
-    // 8. Draw Scale and Cursor Coordinates at Bottom
-    ctx.save();
-    // Graphic scale bar
-    const scaleBarKm = 10;
-    const scaleBarPx = scaleBarKm * viewport.scale;
-    const barX = 20;
-    const barY = h - 25;
-
-    ctx.strokeStyle = '#a7b6c9';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(barX, barY);
-    ctx.lineTo(barX + scaleBarPx, barY);
-    ctx.moveTo(barX, barY - 4);
-    ctx.lineTo(barX, barY + 4);
-    ctx.moveTo(barX + scaleBarPx, barY - 4);
-    ctx.lineTo(barX + scaleBarPx, barY + 4);
-    ctx.stroke();
-
-    ctx.fillStyle = '#a7b6c9';
-    ctx.font = '10px ui-monospace, monospace';
-    ctx.textAlign = 'left';
-    ctx.fillText(`${scaleBarKm} km`, barX + scaleBarPx + 8, barY + 3);
-
-    // Cursor coordinates
-    if (hoveredCoord) {
-      ctx.textAlign = 'right';
-      ctx.fillText(`Pos: (${hoveredCoord.x}, ${hoveredCoord.y})`, w - 20, barY + 3);
     }
-    ctx.restore();
-  }, [
-    viewport,
-    warehouses,
-    vehicles,
-    orders,
-    roadBlocks,
-    selectedVehicleId,
-    hoveredVehicle,
-    hoveredCoord,
-    toCanvasPixels,
-  ]);
-
-  // Mouse / Touch handlers for independent pan and zoom
-  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    setIsDragging(true);
-    setDragStart({ x: e.clientX - viewport.offsetX, y: e.clientY - viewport.offsetY });
-  };
-
-  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    const px = e.clientX - rect.left;
-    const py = e.clientY - rect.top;
-
-    const gridCoord = toGridCoord(px, py, rect.height);
-    setHoveredCoord(gridCoord);
-
-    if (isDragging) {
-      setViewport((prev) => ({
-        ...prev,
-        offsetX: e.clientX - dragStart.x,
-        offsetY: e.clientY - dragStart.y,
-      }));
-    } else {
-      // Find hovered vehicle
-      const vFound = vehicles.find(
-        (v) => Math.abs(v.coord.x - gridCoord.x) <= 1 && Math.abs(v.coord.y - gridCoord.y) <= 1
-      );
-      setHoveredVehicle(vFound || null);
-    }
-  };
-
-  const handleMouseUp = () => {
-    setIsDragging(false);
-  };
-
-  const handleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    const px = e.clientX - rect.left;
-    const py = e.clientY - rect.top;
-    const gridCoord = toGridCoord(px, py, rect.height);
-
-    // Check if clicked vehicle
-    const clickedVehicle = vehicles.find(
-      (v) => Math.abs(v.coord.x - gridCoord.x) <= 1 && Math.abs(v.coord.y - gridCoord.y) <= 1
-    );
-
-    if (clickedVehicle) {
-      onSelectVehicle(clickedVehicle.id === selectedVehicleId ? null : clickedVehicle.id);
-      return;
-    }
-
-    // Check if clicked order
-    const clickedOrder = orders.find(
-      (o) => o.coord.x === gridCoord.x && o.coord.y === gridCoord.y && o.status !== 'ENTREGADO'
-    );
-    if (clickedOrder) {
-      onSelectOrder(clickedOrder);
-      return;
-    }
-
-    // Deselect
-    onSelectVehicle(null);
-    onSelectOrder(null);
-  };
-
-  const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
-    e.preventDefault();
-    const zoomFactor = e.deltaY < 0 ? 1.15 : 0.85;
-    const newScale = Math.max(5, Math.min(45, viewport.scale * zoomFactor));
-
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
-
-    // Zoom centered on mouse position
-    const newOffsetX = mouseX - (mouseX - viewport.offsetX) * (newScale / viewport.scale);
-    const newOffsetY = mouseY - (mouseY - viewport.offsetY) * (newScale / viewport.scale);
-
-    setViewport({
-      offsetX: newOffsetX,
-      offsetY: newOffsetY,
-      scale: newScale,
+    setCursorKm(aKm(mx, my));
+    const o = buscarObjetivo(mx, my);
+    setHover((prev) => {
+      if (!o) return null;
+      if (prev && mismoObjetivo(prev.objetivo, o)) return { ...prev, px: mx, py: my };
+      return { objetivo: o, px: mx, py: my };
     });
   };
+
+  const onPointerUp = (e: EventoPuntero<HTMLCanvasElement>) => {
+    const a = arrastre.current;
+    arrastre.current = null;
+    if (a?.movido) return;
+    const { mx, my } = posicion(e);
+    const o = buscarObjetivo(mx, my);
+    if (!o) op.alSeleccionar(null);
+    else if (o.tipo === 'vehiculo') op.alSeleccionar({ tipo: 'vehiculo', id: o.id });
+    else if (o.tipo === 'nodo') op.alSeleccionar({ tipo: 'nodo', x: o.x, y: o.y });
+    else op.alSeleccionar(null);
+  };
+
+  const onPointerLeave = () => {
+    arrastre.current = null;
+    setHover(null);
+    setCursorKm(null);
+  };
+
+  // Rueda: zoom centrado en el cursor (listener no pasivo para evitar el scroll de la página).
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const alGirar = (e: WheelEvent) => {
+      e.preventDefault();
+      const r = canvas.getBoundingClientRect();
+      const mx = e.clientX - r.left;
+      const my = e.clientY - r.top;
+      const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+      setVista((v) => {
+        const zoom = Math.max(1, Math.min(8, v.zoom * factor));
+        if (zoom === 1) return { zoom: 1, x: 0, y: 0 };
+        // Mantener fijo el punto bajo el cursor: el centro de la ciudad está en (w/2 + x, h/2 + y).
+        const k = zoom / v.zoom;
+        const cx = tamano.w / 2 + v.x;
+        const cy = tamano.h / 2 + v.y;
+        return { zoom, x: v.x + (mx - cx) * (1 - k), y: v.y + (my - cy) * (1 - k) };
+      });
+    };
+    canvas.addEventListener('wheel', alGirar, { passive: false });
+    return () => canvas.removeEventListener('wheel', alGirar);
+  }, [tamano]);
+
+  const encuadrar = useCallback(() => {
+    setVista({ zoom: 1, x: 0, y: 0 });
+  }, []);
 
   return {
     canvasRef,
-    hoveredCoord,
-    hoveredVehicle,
-    fitToView,
-    handlers: {
-      onMouseDown: handleMouseDown,
-      onMouseMove: handleMouseMove,
-      onMouseUp: handleMouseUp,
-      onMouseLeave: () => {
-        setIsDragging(false);
-        setHoveredCoord(null);
-        setHoveredVehicle(null);
-      },
-      onClick: handleClick,
-      onWheel: handleWheel,
-    },
+    hover,
+    cursorKm,
+    escalaPx: proy.escala,
+    zoom: vista.zoom,
+    encuadrar,
+    manejadores: { onPointerDown, onPointerMove, onPointerUp, onPointerLeave },
   };
+}
+
+function mismoObjetivo(a: Objetivo, b: Objetivo): boolean {
+  if (a.tipo !== b.tipo) return false;
+  if (a.tipo === 'vehiculo' && b.tipo === 'vehiculo') return a.id === b.id;
+  if (a.tipo === 'almacen' && b.tipo === 'almacen') return a.id === b.id;
+  if (a.tipo === 'nodo' && b.tipo === 'nodo') return a.x === b.x && a.y === b.y && a.ids.length === b.ids.length;
+  return false;
+}
+
+function trazar(ctx: CanvasRenderingContext2D, pts: Array<[number, number]>) {
+  ctx.beginPath();
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.stroke();
+}
+
+function dibujarUnidad(ctx: CanvasRenderingContext2D, v: VehiculoSnapshot, x: number, y: number) {
+  // Fondo para que el icono se lea sobre las rutas.
+  ctx.fillStyle = 'rgba(10,17,30,0.85)';
+  ctx.beginPath();
+  ctx.arc(x, y, RADIO_MARCA, 0, Math.PI * 2);
+  ctx.fill();
+  if (estaAveriado(v.estado)) {
+    dibujarForma(ctx, 'averia', x, y);
+    return;
+  }
+  if (estaEnMantenimiento(v.estado)) {
+    dibujarForma(ctx, 'mantenimiento', x, y);
+    return;
+  }
+  const tipo = tipoDesdeCodigo(v.idVehiculo);
+  const color = colorDeVehiculo(v.idVehiculo);
+  if (tipo === 'AUTO') dibujarForma(ctx, 'auto', x, y, color);
+  else if (tipo === 'MOTO') dibujarForma(ctx, 'moto', x, y, color);
+  else if (tipo === 'BICICLETA') dibujarForma(ctx, 'bicicleta', x, y, color);
+  else {
+    ctx.fillStyle = color;
+    ctx.strokeStyle = BORDE;
+    ctx.beginPath();
+    ctx.arc(x, y, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
+}
+
+function etiqueta(ctx: CanvasRenderingContext2D, texto: string, x: number, y: number, color: string) {
+  ctx.font = '600 11px system-ui, "Segoe UI", sans-serif';
+  const w = ctx.measureText(texto).width;
+  ctx.fillStyle = 'rgba(8,14,25,0.88)';
+  ctx.fillRect(x - w / 2 - 4, y - 8, w + 8, 16);
+  ctx.fillStyle = color;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(texto, x, y);
+}
+
+function insignia(ctx: CanvasRenderingContext2D, x: number, y: number, texto: string, resaltada: boolean) {
+  ctx.font = 'bold 11px ui-monospace, Consolas, monospace';
+  const w = Math.max(18, ctx.measureText(texto).width + 10);
+  ctx.fillStyle = resaltada ? '#ffffff' : '#e8eef7';
+  ctx.strokeStyle = BORDE;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.roundRect(x - w / 2, y - 9, w, 18, 9);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = '#0a111e';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(texto, x, y + 0.5);
 }

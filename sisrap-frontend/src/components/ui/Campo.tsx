@@ -25,14 +25,14 @@ export const Campo: React.FC<CampoProps> = ({
         <label htmlFor={inputId} className="text-xs font-normal text-texto2">
           {label}
         </label>
-        {nota && <span className="text-[11px] text-texto2/70 italic">{nota}</span>}
+        {nota && <span className="text-[11px] text-texto2">{nota}</span>}
       </div>
 
       <div className="relative flex items-center">
         <input
           id={inputId}
           disabled={disabled}
-          className={`w-full bg-bg border border-borde rounded-md font-mono text-sm px-3 py-1.5 text-texto placeholder:text-texto2/40 focus:outline-none focus:border-mint focus:ring-1 focus:ring-mint transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+          className={`w-full bg-bg border border-borde rounded-md font-mono text-sm px-3 py-1.5 text-texto placeholder:text-texto2 focus:outline-none focus:border-mint focus:ring-1 focus:ring-mint transition-colors disabled:bg-panel2 disabled:text-texto2 disabled:cursor-not-allowed ${
             unidad ? 'pr-12' : ''
           } ${error ? 'border-rojo focus:border-rojo focus:ring-rojo' : ''} ${className}`}
           {...props}

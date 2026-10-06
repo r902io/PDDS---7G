@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+/* Tokens del estándar de GUI (sin cambios). Contraste sobre --color-bg:
+   texto ≥ 12:1, texto2 ≥ 7:1; los acentos superan 4.5:1. */
 @theme {
   --color-bg: #0a111e;
   --color-panel: #101b2d;
@@ -12,22 +14,36 @@
   --color-ambar: #fbbf24;
   --color-rojo: #f87171;
   --color-violeta: #a78bfa;
+  /* Semáforo: solo para criticidad temporal y siempre con su valor o etiqueta. */
   --color-sem-verde: #22c55e;
   --color-sem-ambar: #f59e0b;
   --color-sem-rojo: #ef4444;
+
+  /* Fuentes del sistema: ninguna fuente externa. */
+  --font-sans: "Segoe UI", system-ui, -apple-system, Roboto, Ubuntu, sans-serif;
+  /* Monoespaciada solo para reloj, cifras, coordenadas e identificadores. */
+  --font-mono: Consolas, "Cascadia Mono", ui-monospace, SFMono-Regular, Menlo, "Liberation Mono", monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
 }
 
 body {
-  background-color: var(--color-bg, #0a111e);
-  color: var(--color-texto, #e8eef7);
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  background-color: var(--color-bg);
+  color: var(--color-texto);
+  font-family: var(--font-sans);
   margin: 0;
-  padding: 0;
-  overflow-x: hidden;
   -webkit-font-smoothing: antialiased;
 }
 
-/* Monospace restricted to clocks, numbers, IDs, coords, files */
-.font-mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+button {
+  font-family: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-mint);
+  outline-offset: 2px;
 }

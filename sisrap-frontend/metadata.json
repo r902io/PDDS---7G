@@ -1,6 +1,0 @@
-{
-  "name": "SisRap - Visualizador de Planificación Logística",
-  "description": "Componente Visualizador para el sistema de planificación logística metaheurística de PaqRap con retícula vial 70x50 km, monitoreo de flota en tiempo real y tres escenarios de operación.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}
