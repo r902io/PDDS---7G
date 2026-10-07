@@ -100,12 +100,11 @@ export function EscenarioDashboard() {
               reintentar={() => window.location.reload()}
             />
             <Nota>
-              La interfaz no muestra datos simulados: hasta que el backend responda en <span className="font-mono">/api/simulacion/estado</span> o
-              por el flujo en tiempo real, el mapa queda vacío.
+              No hay datos de simulación disponibles todavía. El mapa se mostrará cuando se recupere la conexión.
             </Nota>
           </div>
         ) : (
-          <Cargando texto="Conectando con el backend de SisRap…" />
+          <Cargando texto="Conectando con SisRap…" />
         )}
       </div>
     );
@@ -323,7 +322,7 @@ function Banners({
           <span className="text-texto2">
             <IconoInfo tamano={16} />
           </span>
-          <p className="flex-1">No hay una corrida en curso en el backend. El mapa muestra la ciudad y los almacenes.</p>
+          <p className="flex-1">No hay una corrida en curso. El mapa muestra la ciudad y los almacenes.</p>
           <Boton variant="secundario" className="text-xs py-1" onClick={() => navegar({ nombre: 'selector' })}>
             Elegir escenario
           </Boton>
@@ -336,7 +335,7 @@ function Banners({
         <div className="px-4 py-1.5 text-[11px] bg-panel border-b border-borde text-texto2 flex flex-col gap-0.5">
           {errorMapa && (
             <span>
-              <b className="text-ambar">/api/mapa no respondió:</b> se dibuja la retícula de 70 × 50 km del enunciado. {errorMapa}
+              <b className="text-ambar">No se pudo cargar el mapa:</b> se muestra temporalmente la retícula de 70 × 50 km. {errorMapa}
             </span>
           )}
           {errorBloqueos && (
@@ -368,7 +367,7 @@ function BannerResultado({ tipo, snapshot }: { tipo: NonNullable<ReturnType<type
       clase: 'bg-ambar/10 border-ambar text-ambar',
       icono: <IconoAlerta tamano={18} />,
       titulo: 'DETENIDA POR ERROR O FALTA DE DATOS',
-      texto: snapshot.mensaje ?? 'El backend no informó la causa.',
+      texto: snapshot.mensaje ?? 'No se informó la causa.',
     },
     DETENIDA_MANUAL: {
       clase: 'bg-panel2 border-texto2 text-texto',
@@ -451,7 +450,7 @@ function PanelParametros({
         )}
         {snapshot.estado === 'PAUSADA' && (
           <Nota tono="aviso" className="mt-2">
-            El backend informa la corrida como pausada. Este visualizador no ofrece controles de reproducción.
+            La corrida está pausada. Esta pantalla se mantiene en modo de consulta.
           </Nota>
         )}
       </Bloque>
@@ -471,20 +470,16 @@ function PanelParametros({
           }
           mono={snapshot.escenario === 'SIMULACION_CINCO_DIAS'}
         />
-        <Fila k="Identificador" v={snapshot.idSimulacion != null ? String(snapshot.idSimulacion) : NO_DISPONIBLE} />
-        <Fila k="Semilla" v={NO_DISPONIBLE} />
-        <Fila k="Algoritmo" v={snapshot.algoritmo ?? NO_DISPONIBLE} />
-        <Fila k="Perfil" v={snapshot.perfil ?? NO_DISPONIBLE} />
         {snapshot.mensaje && (
           <p className="mt-2 pt-2 border-t border-borde text-[11px] text-texto2 leading-snug">
-            <span className="text-texto">Backend:</span> {snapshot.mensaje}
+            <span className="text-texto">Detalle:</span> {snapshot.mensaje}
           </p>
         )}
       </Bloque>
 
       <Bloque
         titulo="Composición de la flota"
-        aclaracion={activa ? 'Solo lectura durante la corrida.' : 'Según /api/vehiculos.'}
+        aclaracion={activa ? 'Solo lectura durante la corrida.' : 'Estado actual de la flota.'}
       >
         {errorFlota && !flota ? (
           <ErrorCarga titulo="No se pudo leer la flota" error={errorFlota} reintentar={recargarFlota} />
@@ -603,7 +598,7 @@ function PanelIndicadores({ snapshot, bloqueosCargados }: { snapshot: SnapshotSi
         )}
       </section>
 
-      <Bloque titulo="Pedidos del periodo" aclaracion="Resumen del snapshot del backend.">
+      <Bloque titulo="Pedidos del periodo" aclaracion="Resumen actualizado de la corrida.">
         <div className="grid grid-cols-2 gap-2 mb-2">
           <Cifra etiqueta="Entregados" valor={p.entregados} clase="text-mint" />
           <Cifra etiqueta="En ruta" valor={p.enRuta} clase="text-azul" />

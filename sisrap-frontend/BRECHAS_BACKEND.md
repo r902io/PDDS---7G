@@ -132,11 +132,12 @@ Revisado contra el código de `sisrap-backend` (rama `dev`, 06/10/2026) y contra
 - `ParametrosController` (`/api/parametros/{perfil}`) solo existe con el perfil `experimentacion`. En el perfil
   normal el visualizador no puede mostrar los parámetros del perfil `BASE` que usa la corrida.
 
-### 16. Bloqueos creados desde el front anterior
+### 16. Gestión manual de bloqueos
 
-- En la base desplegada hay bloqueos con `idIncidencia` 11, 12 y 13 creados el 06/10/2026 desde el botón de
-  "crear bloqueo" del front anterior (ya eliminado). El enunciado indica que los bloqueos vienen solo del
-  archivo mensual; conviene cancelarlos. `POST /api/bloqueos` sigue abierto a cualquier sesión.
+- La interfaz vuelve a exponer la gestión manual de bloqueos porque el backend ya soporta `POST /api/bloqueos`
+  y `DELETE /api/bloqueos/{id}` con sesión.
+- La pantalla valida que el intervalo sea correcto, que los puntos estén dentro de la ciudad y que cada tramo
+  sea horizontal o vertical. Los bloqueos programados o activos se pueden cancelar desde la misma tabla.
 
 ### 17. Pedidos de la fecha elegida
 

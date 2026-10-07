@@ -250,6 +250,14 @@ export interface PuntoRespuesta {
   y: number;
 }
 
+
+/** BloqueoController.CrearBloqueoRequest */
+export interface CrearBloqueoRequest {
+  inicio: FechaHoraLocal;
+  fin: FechaHoraLocal;
+  vertices: PuntoRespuesta[];
+}
+
 /** BloqueoController.BloqueoRespuesta */
 export interface BloqueoRespuesta {
   idIncidencia: number;

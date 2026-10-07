@@ -57,7 +57,7 @@ antes de empaquetar el JAR. Con Docker, montar `dist/` como volumen y pasar la v
 
 ```bash
 npm run build
-VITE_BACKEND_URL=http://<servidor-backend>:8080 npm run preview   # http://<esta-máquina>:4173
+VITE_BACKEND_URL=http://1inf54-981-7g.inf.pucp.edu.pe:8080 npm run preview   # http://<esta-máquina>:4173
 ```
 
 ## Estructura
@@ -79,7 +79,8 @@ BRECHAS_BACKEND.md         Datos que la interfaz necesita y el backend aún no e
 ## Reglas que respeta la interfaz
 
 - Ningún control de reproducción (pausa, reanudar, velocidad, barras de tiempo). Solo iniciar y detener.
-- Ningún control para crear bloqueos ni para registrar averías simuladas.
+- Los bloqueos viales se pueden crear y cancelar desde *Mantenimiento → Bloqueos*. El formulario valida fechas, límites de la ciudad y tramos horizontales/verticales.
+- El registro de averías simuladas sigue pendiente de cerrar la regla de negocio durante una corrida.
 - El primer pedido fuera de plazo (`pedidos.retrasados > 0`) se presenta como colapso logístico.
 - Las fechas del backend son `LocalDateTime` sin zona: se muestran tal cual llegan.
 - El tipo de vehículo se deduce del prefijo del código: `TA` auto, `TM` moto, `TB` bicicleta.

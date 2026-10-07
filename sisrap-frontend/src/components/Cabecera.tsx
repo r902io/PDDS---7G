@@ -213,7 +213,7 @@ function IndicadorConexion({
 }) {
   if (vigentes) {
     return (
-      <span className="flex items-center gap-1.5 text-xs text-mint" title="Conectado al flujo en tiempo real del backend">
+      <span className="flex items-center gap-1.5 text-xs text-mint" title="Conectado en tiempo real">
         <IconoConexion tamano={16} /> En vivo
       </span>
     );
@@ -221,7 +221,7 @@ function IndicadorConexion({
   return (
     <span
       className="flex items-center gap-1.5 text-xs text-ambar"
-      title="Sin datos en tiempo real del backend"
+      title="Sin datos en tiempo real"
       role="status"
     >
       <IconoSinConexion tamano={16} />

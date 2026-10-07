@@ -29,7 +29,6 @@ export function SelectorEscenario() {
   const { snapshot, sesion, iniciar, accionEnCurso, reintentarSesion } = useSimulacion();
   const [escenario, setEscenario] = useState<EscenarioSimulacion>('OPERACION_DIARIA');
   const [fechaInicio, setFechaInicio] = useState(hoyLocal());
-  const [semillaTexto, setSemillaTexto] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   const almacenes = useConsulta((s) => catalogoService.almacenes(s), 'almacenes');
@@ -37,30 +36,25 @@ export function SelectorEscenario() {
 
   const activa = corridaActiva(snapshot);
   const fechaValida = /^\d{4}-\d{2}-\d{2}$/.test(fechaInicio);
-  const semillaValida = semillaTexto.trim() === '' || /^-?\d+$/.test(semillaTexto.trim());
 
   const motivoBloqueo =
     sesion.fase === 'CARGANDO'
-      ? 'Esperando que el backend cree la sesión anónima.'
+      ? 'Preparando la sesión.'
       : sesion.fase === 'ERROR'
-        ? 'No hay sesión con el backend: no se puede iniciar.'
+        ? 'No hay una sesión disponible para iniciar.'
         : accionEnCurso === 'INICIAR'
           ? 'Solicitud de inicio en curso.'
           : !fechaValida
             ? 'Indique una fecha de inicio válida.'
-            : !semillaValida
-              ? 'La semilla debe ser un número entero o quedar vacía.'
-              : undefined;
+            : undefined;
 
   const alIniciar = async () => {
     setError(null);
-    const semilla = semillaTexto.trim() === '' ? null : Number(semillaTexto.trim());
-    const r = await iniciar(escenario, fechaInicio, semilla);
+    const r = await iniciar(escenario, fechaInicio, null);
     if (r.ok || r.corridaEnCurso) navegar({ nombre: 'operacion' });
     else setError(r.mensaje);
   };
 
-  // Composición de la flota según el backend.
   const flota = ORDEN_TIPOS.map((t) => {
     const lista = (vehiculos.datos ?? []).filter((v) => tipoDesdeCodigo(v.idVehiculo) === t);
     return { tipo: t, cantidad: lista.length, muestra: lista[0] ?? null };
@@ -72,9 +66,8 @@ export function SelectorEscenario() {
         <div>
           <h1 className="text-2xl font-semibold text-texto">Seleccione el escenario de operación</h1>
           <p className="text-sm text-texto2 mt-1 max-w-3xl leading-relaxed">
-            El backend ejecuta una sola corrida a la vez. La sesión que la inicia queda como controladora y es la
-            única que puede detenerla; cualquier otro dispositivo que abra esta página la ve en tiempo real como
-            observador.
+            Solo puede ejecutarse una corrida a la vez. Quien la inicia puede detenerla; los demás usuarios pueden
+            seguir su avance en tiempo real como observadores.
           </p>
         </div>
 
@@ -99,7 +92,7 @@ export function SelectorEscenario() {
         )}
 
         {sesion.fase === 'ERROR' && (
-          <ErrorCarga titulo="No se pudo crear la sesión con el backend" error={sesion.error} reintentar={reintentarSesion} />
+          <ErrorCarga titulo="No se pudo preparar la sesión" error={sesion.error} reintentar={reintentarSesion} />
         )}
 
         {/* 1. Escenarios */}
@@ -143,8 +136,8 @@ export function SelectorEscenario() {
 
         {/* 2. Parámetros de la corrida */}
         <section className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <Panel titulo="2 · Parámetros de la corrida" subtitulo="Se envían a POST /api/simulacion/iniciar">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <Panel titulo="2 · Inicio de la corrida" subtitulo="Indica la fecha desde la que comenzará la simulación.">
+            <div className="grid grid-cols-1 gap-3">
               <Campo
                 label="Fecha de inicio"
                 type="date"
@@ -152,16 +145,6 @@ export function SelectorEscenario() {
                 onChange={(e) => setFechaInicio(e.target.value)}
                 nota="La corrida empieza a las 00:00"
                 required
-              />
-              <Campo
-                label="Semilla aleatoria"
-                type="text"
-                inputMode="numeric"
-                value={semillaTexto}
-                onChange={(e) => setSemillaTexto(e.target.value)}
-                placeholder="Vacío: el backend usa 42"
-                nota="Reproducibilidad"
-                error={semillaValida ? undefined : 'Debe ser un número entero.'}
               />
             </div>
             <div className="mt-4 flex flex-col items-start gap-2">
@@ -176,12 +159,11 @@ export function SelectorEscenario() {
               >
                 {accionEnCurso === 'INICIAR' ? 'Iniciando…' : 'Iniciar corrida'}
               </Boton>
-              {error && <ErrorCarga titulo="El backend no inició la corrida" error={error} className="w-full" />}
+              {error && <ErrorCarga titulo="No se pudo iniciar la corrida" error={error} className="w-full" />}
             </div>
           </Panel>
 
-          {/* Datos del caso tal como los entrega el backend */}
-          <Panel titulo="Datos del caso en el backend" subtitulo="Solo lectura · /api/almacenes y /api/vehiculos">
+          <Panel titulo="Datos del caso" subtitulo="Almacenes y flota disponibles para la simulación.">
             <div className="space-y-3 text-xs">
               <div>
                 <p className="text-texto2 mb-1">Almacenes</p>

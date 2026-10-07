@@ -2,6 +2,7 @@ import type {
   AlmacenOperativo,
   AveriaVehiculo,
   BloqueoRespuesta,
+  CrearBloqueoRequest,
   EstadoPedido,
   MantenimientoVehiculo,
   MapaCiudad,
@@ -10,10 +11,7 @@ import type {
 } from '../types/api';
 import { apiFetch } from './apiClient';
 
-/**
- * Consultas de solo lectura a los controladores de datos maestros.
- * En esta entrega ninguna vista crea, edita ni elimina registros.
- */
+/** Operaciones de catálogo y mantenimiento usadas por la interfaz. */
 export const catalogoService = {
   mapa(senal?: AbortSignal): Promise<MapaCiudad> {
     return apiFetch<MapaCiudad>('/api/mapa', { autenticar: false, senal });
@@ -61,5 +59,18 @@ export const catalogoService = {
   bloqueos(instante?: string | null, senal?: AbortSignal): Promise<BloqueoRespuesta[]> {
     const q = instante ? `?instante=${encodeURIComponent(instante)}` : '';
     return apiFetch<BloqueoRespuesta[]>(`/api/bloqueos${q}`, { autenticar: false, senal });
+  },
+
+  crearBloqueo(datos: CrearBloqueoRequest): Promise<BloqueoRespuesta> {
+    return apiFetch<BloqueoRespuesta>('/api/bloqueos', {
+      metodo: 'POST',
+      cuerpo: datos,
+    });
+  },
+
+  cancelarBloqueo(idIncidencia: number): Promise<void> {
+    return apiFetch<void>(`/api/bloqueos/${idIncidencia}`, {
+      metodo: 'DELETE',
+    });
   },
 };

@@ -117,7 +117,7 @@ function DetalleVehiculo({
     return (
       <>
         <Cabecera titulo={id} cerrar={cerrar} />
-        <p className="p-4 text-sm text-texto2">La unidad ya no figura en el último estado recibido del backend.</p>
+        <p className="p-4 text-sm text-texto2">La unidad ya no figura en el estado más reciente de la simulación.</p>
       </>
     );
   }
@@ -152,7 +152,7 @@ function DetalleVehiculo({
         <Dato k="Carga actual" v={NO_DISPONIBLE} />
 
         <h3 className="text-[11px] uppercase tracking-wider text-texto2 font-semibold mt-4 mb-1">Ficha de la unidad</h3>
-        {!catalogoCargado && <p className="text-xs text-texto2">Cargando la ficha desde /api/vehiculos…</p>}
+        {!catalogoCargado && <p className="text-xs text-texto2">Cargando datos del vehículo…</p>}
         <Dato k="Capacidad" v={catalogo ? `${formatoEntero(catalogo.capacidadPaquetes)} paquetes` : NO_DISPONIBLE} mono={!!catalogo} />
         <Dato k="Velocidad" v={catalogo ? `${formatoDecimal(catalogo.velocidadKmh)} km/h` : NO_DISPONIBLE} mono={!!catalogo} />
         <Dato k="Tarifa" v={catalogo ? `${formatoSoles(catalogo.costoPorKm)} por km` : NO_DISPONIBLE} mono={!!catalogo} />

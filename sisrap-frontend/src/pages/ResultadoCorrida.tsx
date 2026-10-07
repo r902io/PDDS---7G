@@ -36,7 +36,7 @@ const PRESENTACION: Record<
     clase: 'border-ambar bg-ambar/10 text-ambar',
     icono: <IconoAlerta tamano={34} />,
     descripcion:
-      'La corrida no pudo continuar. No es un colapso logístico: el backend reportó un error, por ejemplo por datos de entrada faltantes.',
+      'La corrida no pudo continuar. No es un colapso logístico: ocurrió un error o faltan datos necesarios para continuar.',
   },
   DETENIDA_MANUAL: {
     titulo: 'Corrida detenida manualmente',
@@ -66,7 +66,7 @@ export function ResultadoCorrida() {
       <Centro>
         <IconoInfo tamano={30} />
         <h1 className="text-xl font-semibold text-texto">Aún no hay resultados</h1>
-        <p className="text-sm text-texto2">El backend no tiene una corrida registrada desde que se inició.</p>
+        <p className="text-sm text-texto2">Todavía no se ha registrado una corrida.</p>
         <Boton onClick={() => navegar({ nombre: 'selector' })}>Elegir escenario</Boton>
       </Centro>
     );
@@ -103,7 +103,7 @@ export function ResultadoCorrida() {
             <p className="text-sm text-texto mt-1 leading-relaxed">{pres.descripcion}</p>
             {snapshot.mensaje && (
               <p className="text-sm text-texto mt-2">
-                <span className="text-texto2">Mensaje del backend:</span> {snapshot.mensaje}
+                <span className="text-texto2">Detalle:</span> {snapshot.mensaje}
               </p>
             )}
           </div>
@@ -121,8 +121,6 @@ export function ResultadoCorrida() {
             />
             <Dato k="Día alcanzado" v={dia != null ? (esc?.diasTotales ? `Día ${dia} de ${esc.diasTotales}` : `Día ${dia}`) : NO_DISPONIBLE} mono />
             <Dato k="Tiempo simulado" v={horas != null ? `${formatoDecimal(horas)} h` : NO_DISPONIBLE} mono />
-            <Dato k="Identificador" v={snapshot.idSimulacion != null ? String(snapshot.idSimulacion) : NO_DISPONIBLE} mono />
-            <Dato k="Algoritmo" v={snapshot.algoritmo ?? NO_DISPONIBLE} mono />
           </Tarjeta>
 
           <Tarjeta titulo="Pedidos">
@@ -141,8 +139,7 @@ export function ResultadoCorrida() {
             <Dato k="Pedido que lo originó" v={NO_DISPONIBLE} />
             <Dato k="Instante exacto del incumplimiento" v={NO_DISPONIBLE} />
             <Nota className="mt-2">
-              El snapshot del backend no identifica el pedido ni el instante exacto del primer incumplimiento; se muestra
-              el reloj en el que el backend lo detectó. Ver BRECHAS_BACKEND.md.
+              El sistema muestra el momento en que detectó el primer incumplimiento. El pedido específico no está disponible en el resumen actual.
             </Nota>
           </Tarjeta>
         )}

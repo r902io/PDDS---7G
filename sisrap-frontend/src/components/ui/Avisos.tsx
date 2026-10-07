@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { IconoAlerta, IconoInfo, IconoRecargar } from '../iconos';
 
-/** Mensaje de error de una llamada al backend, con opción de reintentar. */
+/** Mensaje de error de una operación, con opción de reintentar. */
 export function ErrorCarga({
   titulo,
   error,
