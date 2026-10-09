@@ -31,6 +31,7 @@ public class Ruta {
     private Set<String> nodosBloqueados = Set.of();
     private List<Almacen> almacenesCandidatos = List.of();
     private boolean intransitable;
+    private boolean fueraDeTurno;
 
     /**
      * Constructor histórico: conserva exactamente el comportamiento usado por
@@ -85,6 +86,7 @@ public class Ruta {
 
     public Set<String> getNodosBloqueados() { return nodosBloqueados; }
     public boolean isIntransitable() { return intransitable; }
+    public boolean isFueraDeTurno() { return fueraDeTurno; }
 
     public Ruta copiar() {
         Ruta copia = new Ruta(
@@ -109,6 +111,7 @@ public class Ruta {
 
     public void recalcular() {
         intransitable = false;
+        fueraDeTurno = false;
         double distanciaPasos = 0.0;
         Nodo posicion = posicionInicialPara(almacenOrigen);
         LocalDateTime reloj = inicio;
@@ -161,6 +164,9 @@ public class Ruta {
         distanciaTotalKm = distanciaPasos * reglas.distanciaNodoKm();
         costoTotal = distanciaTotalKm * vehiculo.getCostoPorKm();
         tiempoTotalHoras = horasEntre(inicio, reloj);
+        fueraDeTurno = pasarPorAlmacenOrigen && !secuenciaPedidos.isEmpty()
+                && (JornadaOperativa.refrigerio(inicio)
+                || reloj.isAfter(JornadaOperativa.finTurno(inicio)));
     }
 
     public double horaLlegadaDe(int indice) {
@@ -210,6 +216,17 @@ public class Ruta {
             reloj = nuevoPedido.getFechaLlegada();
         }
 
+        LocalDateTime fin = sumarHoras(reloj, reglas.servicioHoras());
+        if (reglas.incluirRetorno()) {
+            int retorno = pasosEntre(nuevoPedido.getUbicacion(), origenCandidato.getUbicacion());
+            if (retorno < 0) return Double.POSITIVE_INFINITY;
+            fin = sumarHoras(fin, retorno * reglas.distanciaNodoKm() / vehiculo.getVelocidadKmh());
+        }
+        if (pasarPorAlmacenOrigen && (JornadaOperativa.refrigerio(inicio)
+                || fin.isAfter(JornadaOperativa.finTurno(inicio)))) {
+            return Double.POSITIVE_INFINITY;
+        }
+        if (reloj.isAfter(nuevoPedido.getFechaLimite())) return Double.POSITIVE_INFINITY;
         return horasEntre(inicio, reloj);
     }
 
@@ -296,9 +313,10 @@ public class Ruta {
                 reglas.altoCiudad());
     }
 
-    private static LocalDateTime sumarHoras(LocalDateTime base, double horas) {
-        long nanos = Math.round(horas * 3_600_000_000_000.0);
-        return base.plusNanos(nanos);
+    private LocalDateTime sumarHoras(LocalDateTime base, double horas) {
+        return pasarPorAlmacenOrigen
+                ? JornadaOperativa.avanzar(base, horas)
+                : base.plusNanos(Math.round(horas * 3_600_000_000_000.0));
     }
 
     private static double horasEntre(LocalDateTime desde, LocalDateTime hasta) {

@@ -105,8 +105,10 @@ async function leerDetalle(res: Response): Promise<string | null> {
     if (!texto) return null;
     try {
       const cuerpo = JSON.parse(texto) as ErrorSpring & { error?: string };
-      const msg = cuerpo.message?.trim();
+      const msg = typeof cuerpo.message === 'string' ? cuerpo.message.trim() : '';
+      const error = typeof cuerpo.error === 'string' ? cuerpo.error.trim() : '';
       if (msg) return msg;
+      if (error) return error;
       return null;
     } catch {
       return null;

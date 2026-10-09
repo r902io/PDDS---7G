@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { AlmacenOperativo, BloqueoRespuesta, VehiculoSnapshot } from '../../types/api';
+import type { AlmacenOperativo, BloqueoRespuesta, PedidoOperativo, VehiculoSnapshot } from '../../types/api';
 import { useMapCanvas, type Dimensiones, type Objetivo, type Seleccion } from '../../hooks/useMapCanvas';
 import { IconoEncuadrar, IconoMapaSvg } from '../iconos';
 import {
@@ -20,6 +20,8 @@ interface Props {
   dimensiones: Dimensiones;
   almacenes: AlmacenOperativo[];
   vehiculos: VehiculoSnapshot[];
+  corridaId: number | null;
+  pedidos: PedidoOperativo[];
   bloqueos: BloqueoRespuesta[];
   seleccion: Seleccion;
   alSeleccionar: (s: Seleccion) => void;
@@ -30,7 +32,7 @@ interface Props {
 const LARGOS_ESCALA = [1, 2, 5, 10, 20];
 
 export function MapaCiudad(props: Props) {
-  const { canvasRef, hover, cursorKm, escalaPx, zoom, encuadrar, manejadores } = useMapCanvas(props);
+  const { canvasRef, vehiculosCanvasRef, hover, cursorKm, escalaPx, zoom, encuadrar, manejadores } = useMapCanvas(props);
   const [leyendaAbierta, setLeyendaAbierta] = useState(true);
 
   // Escala gráfica: el mayor largo redondo que quepa en ~120 px.
@@ -45,6 +47,8 @@ export function MapaCiudad(props: Props) {
         aria-label={`Mapa de la ciudad de ${props.dimensiones.anchoKm} por ${props.dimensiones.altoKm} km con ${props.vehiculos.length} unidades`}
         {...manejadores}
       />
+
+      <canvas ref={vehiculosCanvasRef} className="absolute left-0 top-0 pointer-events-none" aria-hidden="true" />
 
       {/* Leyenda */}
       <div className="absolute left-2.5 top-2.5 z-10 bg-panel/95 border border-borde rounded-lg px-3 py-2 text-xs max-w-[340px]">
@@ -66,7 +70,9 @@ export function MapaCiudad(props: Props) {
               <ItemLeyenda forma="moto" color={COLOR_TIPO.MOTO} texto="Moto (TM)" />
               <ItemLeyenda forma="almacenIntermedio" texto="Almacén intermedio" />
               <ItemLeyenda forma="bicicleta" color={COLOR_TIPO.BICICLETA} texto="Bicicleta (TB)" />
-              <ItemLeyenda forma="destinoCliente" color={COLOR_TIPO.AUTO} texto="Destino: pedido" />
+              <ItemLeyenda forma="destinoCliente" color={COLOR_TIPO.AUTO} texto="Destino de ruta" />
+              <span className="text-ambar">● Pedido pendiente</span>
+              <span className="text-azul">● Pedido en ruta</span>
               <ItemLeyenda forma="averia" texto="Unidad averiada" />
               <ItemLeyenda forma="bloqueo" texto="Tramo bloqueado" />
               <ItemLeyenda forma="mantenimiento" texto="En mantenimiento" />
@@ -115,6 +121,7 @@ export function MapaCiudad(props: Props) {
           y={hover.py}
           vehiculos={props.vehiculos}
           almacenes={props.almacenes}
+          pedidos={props.pedidos}
         />
       )}
     </div>
@@ -136,12 +143,14 @@ function Tooltip({
   y,
   vehiculos,
   almacenes,
+  pedidos,
 }: {
   objetivo: Objetivo;
   x: number;
   y: number;
   vehiculos: VehiculoSnapshot[];
   almacenes: AlmacenOperativo[];
+  pedidos: PedidoOperativo[];
 }) {
   const estilo = { left: x + 14, top: y + 14 };
   const clase =
@@ -166,6 +175,18 @@ function Tooltip({
         />
       </div>
     );
+  }
+
+  if (objetivo.tipo === 'pedido') {
+    const p = pedidos.find(p => p.idPedido === objetivo.id);
+    if (!p) return null;
+    return <div className={clase} style={estilo}>
+      <strong className="text-sm text-texto">Pedido #{p.idPedido}</strong>
+      <Tabla filas={[
+        ['Estado', p.estado], ['Cantidad', `${p.cantidadQq} paquetes`],
+        ['Prioridad', p.prioridad], ['Ubicación', formatoCoordenada(p.ubicacionX, p.ubicacionY)],
+      ]} mono={[false, true, false, true]} />
+    </div>;
   }
 
   if (objetivo.tipo === 'almacen') {

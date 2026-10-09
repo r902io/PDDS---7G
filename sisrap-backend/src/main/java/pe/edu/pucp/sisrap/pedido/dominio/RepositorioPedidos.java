@@ -26,6 +26,8 @@ public interface RepositorioPedidos {
 
     List<CargaHistoricaPedidos> listarCargasHistoricas();
 
+    void eliminarCargaHistorica(String huella);
+
     boolean existeCargaPeriodo(
             int anio,
             int mes

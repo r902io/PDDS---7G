@@ -1,4 +1,4 @@
-import type { IniciarSimulacionRequest, SnapshotSimulacion } from '../types/api';
+import type { IniciarSimulacionRequest, ResultadoPersistido, SnapshotSimulacion } from '../types/api';
 import { apiFetch } from './apiClient';
 
 /**
@@ -9,6 +9,10 @@ import { apiFetch } from './apiClient';
  * NO existen funciones para llamarlos.
  */
 export const simulacionService = {
+  resultado(idSimulacion: number, senal?: AbortSignal): Promise<ResultadoPersistido> {
+    return apiFetch<ResultadoPersistido>(`/api/simulacion/${idSimulacion}/resultado`, { autenticar: false, senal });
+  },
+
   estado(): Promise<SnapshotSimulacion> {
     return apiFetch<SnapshotSimulacion>('/api/simulacion/estado', { autenticar: false });
   },

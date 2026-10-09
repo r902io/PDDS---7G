@@ -19,6 +19,7 @@ import pe.edu.pucp.sisrap.parametros.dominio.Configuracion;
 import pe.edu.pucp.sisrap.parametros.dominio.ReglasPlanificacion;
 import pe.edu.pucp.sisrap.pedido.dominio.Pedido;
 import pe.edu.pucp.sisrap.pedido.dominio.TipoPrioridad;
+import pe.edu.pucp.sisrap.simulacion.infraestructura.EsquemaDatosSimulacion;
 import pe.edu.pucp.sisrap.planificador.dominio.modelo.ContextoPlanificacion;
 public class JdbcExperimento implements RepositorioExperimento {
     private final DataSource fuente;
@@ -30,6 +31,7 @@ public class JdbcExperimento implements RepositorioExperimento {
     }
     public DatosExperimento cargar(SolicitudExperimento solicitud){
         try(var cn=fuente.getConnection()){
+            EsquemaDatosSimulacion.asegurar(cn);
             cn.setTransactionIsolation(Connection.TRANSACTION_REPEATABLE_READ);cn.setAutoCommit(false);
             try{
                 BaseOperativa base=JdbcBaseOperativa.leer(cn,solicitud.perfil());
@@ -37,7 +39,7 @@ public class JdbcExperimento implements RepositorioExperimento {
                 int limite=Arrays.stream(cfg.texto("experimento.tamanios").split(",")).map(String::trim).mapToInt(Integer::parseInt).max().orElseThrow();
                 if(limite>maxPedidos)throw new IllegalArgumentException("Tamaño supera límite del servidor");
                 List<Pedido> pedidos=new ArrayList<>();
-                try(var st=cn.prepareStatement("SELECT * FROM pedido WHERE fecha_llegada>=? AND fecha_llegada<=? ORDER BY fecha_llegada,id_pedido LIMIT ?")){
+                try(var st=cn.prepareStatement("SELECT id_historico AS id_pedido,id_cliente,cantidad_qq,prioridad,horas_limite,fecha_llegada,ubicacion_x,ubicacion_y FROM pedido_historico WHERE fecha_llegada>=? AND fecha_llegada<=? ORDER BY fecha_llegada,id_historico LIMIT ?")){
                     st.setTimestamp(1,Timestamp.valueOf(solicitud.desde()));st.setTimestamp(2,Timestamp.valueOf(solicitud.instante()));st.setInt(3,limite);
                     try(var rs=st.executeQuery()){while(rs.next())pedidos.add(new Pedido(rs.getLong("id_pedido"),rs.getString("id_cliente"),
                         rs.getInt("cantidad_qq"),TipoPrioridad.valueOf(rs.getString("prioridad")),

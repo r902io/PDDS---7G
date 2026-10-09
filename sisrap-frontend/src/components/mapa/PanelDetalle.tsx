@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import type { AlmacenOperativo, VehiculoOperativo, VehiculoSnapshot } from '../../types/api';
+import type { AlmacenOperativo, PedidoOperativo, VehiculoOperativo, VehiculoSnapshot } from '../../types/api';
 import type { Seleccion } from '../../hooks/useMapCanvas';
 import { IconoCerrar, IconoMapaSvg } from '../iconos';
 import {
@@ -24,13 +24,14 @@ import { pasosUnitarios } from './geometria';
 interface Props {
   seleccion: Exclude<Seleccion, null>;
   vehiculos: VehiculoSnapshot[];
+  pedidos: PedidoOperativo[];
   catalogo: VehiculoOperativo[] | null;
   almacenes: AlmacenOperativo[];
   alSeleccionar: (s: Seleccion) => void;
 }
 
 /** Panel lateral con el detalle de la unidad (o del nodo) seleccionado en el mapa. */
-export function PanelDetalle({ seleccion, vehiculos, catalogo, almacenes, alSeleccionar }: Props) {
+export function PanelDetalle({ seleccion, vehiculos, pedidos, catalogo, almacenes, alSeleccionar }: Props) {
   const cerrar = () => alSeleccionar(null);
 
   return (
@@ -38,7 +39,22 @@ export function PanelDetalle({ seleccion, vehiculos, catalogo, almacenes, alSele
       className="absolute top-0 right-0 bottom-0 z-20 w-[380px] max-w-[92%] bg-panel border-l border-mint shadow-2xl flex flex-col"
       aria-label="Detalle de la selección"
     >
-      {seleccion.tipo === 'vehiculo' ? (
+      {seleccion.tipo === 'pedido' ? (
+        <div className="px-4 py-3 overflow-y-auto">
+          <button className="float-right text-texto2 underline text-xs" onClick={cerrar}>Cerrar</button>
+          <h2 className="text-base font-semibold text-texto mb-3">Pedido #{seleccion.id}</h2>
+          {(() => { const p = pedidos.find(p => p.idPedido === seleccion.id); return p ? <>
+            <Dato k="Cliente" v={p.idCliente} />
+            <Dato k="Estado" v={p.estado} />
+            <Dato k="Paquetes" v={String(p.cantidadQq)} mono />
+            <Dato k="Prioridad" v={p.prioridad} />
+            <Dato k="Plazo" v={`${p.horasLimite} horas`} mono />
+            <Dato k="Ubicación" v={formatoCoordenada(p.ubicacionX, p.ubicacionY)} mono />
+            <Dato k="Registro" v={p.fechaLlegada} mono />
+            <Dato k="Entrega" v={p.fechaEntregaReal ?? 'Todavía no entregado'} />
+          </> : <p className="text-sm text-texto2">Este pedido no está en la página del mapa.</p>; })()}
+        </div>
+      ) : seleccion.tipo === 'vehiculo' ? (
         <DetalleVehiculo
           v={vehiculos.find((u) => u.idVehiculo === seleccion.id) ?? null}
           id={seleccion.id}

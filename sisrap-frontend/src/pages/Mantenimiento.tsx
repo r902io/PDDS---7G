@@ -12,7 +12,7 @@ import type {
 import { navegar, type PestanaMantenimiento } from '../estado/navegacion';
 import { useSimulacion } from '../estado/SimulacionContext';
 import { catalogoService } from '../services/catalogoService';
-import { apiFetch, sesionGuardada, textoError } from '../services/apiClient';
+import { apiFetch, textoError } from '../services/apiClient';
 import { useConsulta } from '../hooks/useConsulta';
 import { Cargando, ErrorCarga, Nota } from '../components/ui/Avisos';
 import { Boton } from '../components/ui/Boton';
@@ -47,20 +47,6 @@ interface CrearBloqueoRequest {
   vertices: PuntoBloqueo[];
 }
 
-interface CargaHistoricaPedidos {
-  huella: string;
-  anio: number;
-  mes: number;
-  filas: number;
-  fechaCarga: string;
-}
-
-interface ResultadoCargaHistorica {
-  archivosProcesados: number;
-  pedidosInsertados: number;
-  cargas: CargaHistoricaPedidos[];
-}
-
 function ahoraLocalInput(): string {
   const fecha = new Date();
   fecha.setMinutes(fecha.getMinutes() - fecha.getTimezoneOffset());
@@ -69,42 +55,6 @@ function ahoraLocalInput(): string {
 
 function conSegundos(valor: string): string {
   return valor.length === 16 ? `${valor}:00` : valor;
-}
-
-async function importarHistoricos(archivos: File[]): Promise<ResultadoCargaHistorica> {
-  const sesion = sesionGuardada();
-  if (!sesion?.token) throw new Error('La sesión aún no está disponible. Intenta nuevamente en unos segundos.');
-
-  const formulario = new FormData();
-  archivos.forEach((archivo) => formulario.append('archivos', archivo));
-
-  let respuesta: Response;
-  try {
-    respuesta = await fetch('/api/pedidos/cargas-historicas', {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        Authorization: `Bearer ${sesion.token}`,
-      },
-      body: formulario,
-      cache: 'no-store',
-    });
-  } catch {
-    throw new Error('No se pudo conectar con el servidor para cargar los archivos.');
-  }
-
-  if (!respuesta.ok) {
-    let detalle = '';
-    try {
-      const cuerpo = (await respuesta.json()) as { message?: string };
-      detalle = cuerpo.message?.trim() ?? '';
-    } catch {
-      // El cuerpo de error puede no ser JSON.
-    }
-    throw new Error(detalle || 'No se pudieron importar los pedidos históricos.');
-  }
-
-  return (await respuesta.json()) as ResultadoCargaHistorica;
 }
 
 export function Mantenimiento({ pestana }: { pestana: PestanaMantenimiento }) {
@@ -746,7 +696,6 @@ function VistaAlmacenes() {
 // Pedidos
 // ---------------------------------------------------------------------------
 
-const ESTADOS_PEDIDO: EstadoPedido[] = ['PENDIENTE', 'EN_RUTA', 'ENTREGADO', 'REASIGNADO', 'RETRASADO'];
 const ETIQUETA_PEDIDO: Record<EstadoPedido, string> = {
   PENDIENTE: 'Pendiente',
   EN_RUTA: 'En ruta',
@@ -757,245 +706,58 @@ const ETIQUETA_PEDIDO: Record<EstadoPedido, string> = {
 const TAMANIO_PAGINA = 100;
 
 function VistaPedidos() {
-  const { sesion, snapshot } = useSimulacion();
-  const [anio, setAnio] = useState('');
-  const [mes, setMes] = useState('');
-  const [estado, setEstado] = useState<EstadoPedido | ''>('');
+  const { snapshot } = useSimulacion();
   const [pagina, setPagina] = useState(0);
-  const [modalCarga, setModalCarga] = useState(false);
-  const [cargandoArchivos, setCargandoArchivos] = useState(false);
-  const [errorCarga, setErrorCarga] = useState<string | null>(null);
-  const [resultadoCarga, setResultadoCarga] = useState<ResultadoCargaHistorica | null>(null);
-
-  const anioN = /^\d{4}$/.test(anio) ? Number(anio) : undefined;
-  const mesN = /^\d{1,2}$/.test(mes) && Number(mes) >= 1 && Number(mes) <= 12 ? Number(mes) : undefined;
-  const clave = `pedidos-${anioN}-${mesN}-${estado}-${pagina}`;
-  const c = useConsulta(
-    (s) => catalogoService.pedidos({ anio: anioN, mes: mesN, estado: estado || undefined, pagina, tamanio: TAMANIO_PAGINA }, s),
-    clave
+  const consulta = useConsulta(
+    s => catalogoService.pedidos({ pagina, tamanio: TAMANIO_PAGINA }, s),
+    `pedidos-${snapshot?.idSimulacion ?? 'sin-corrida'}-${pagina}`,
+    snapshot?.estado === 'EJECUTANDO' ? 8_000 : null
   );
-  const cargas = useConsulta(
-    (s) => apiFetch<CargaHistoricaPedidos[]>('/api/pedidos/cargas-historicas', { autenticar: false, senal: s }),
-    'cargas-historicas-pedidos'
-  );
-  const lista = c.datos?.contenido ?? [];
-  const totalPaginas = c.datos ? Math.max(1, Math.ceil(c.datos.total / TAMANIO_PAGINA)) : 1;
-  const simulacionActiva = snapshot?.estado === 'EJECUTANDO' || snapshot?.estado === 'PAUSADA';
-  const puedeCargar = sesion.fase === 'LISTA' && !simulacionActiva;
-  const claseInput = 'bg-bg border border-borde rounded px-2 py-1 font-mono text-xs text-texto w-20';
-
-  const cargar = async (archivos: File[]) => {
-    setCargandoArchivos(true);
-    setErrorCarga(null);
-    setResultadoCarga(null);
-    try {
-      const resultado = await importarHistoricos(archivos);
-      setResultadoCarga(resultado);
-      c.recargar();
-      cargas.recargar();
-    } catch (e) {
-      setErrorCarga(e instanceof Error ? e.message : 'No se pudieron cargar los archivos.');
-    } finally {
-      setCargandoArchivos(false);
-    }
-  };
+  const lista = consulta.datos?.contenido ?? [];
+  const totalPaginas = consulta.datos ? Math.max(1, Math.ceil(consulta.datos.total / TAMANIO_PAGINA)) : 1;
 
   return (
-    <>
-      <MarcoTabla
-        titulo="Pedidos"
-        cantidad={c.datos ? `${formatoEntero(c.datos.total)} pedidos` : null}
-        recargar={() => { c.recargar(); cargas.recargar(); }}
-        cargando={c.cargando || cargas.cargando}
-        filtros={
-          <div className="flex flex-wrap items-center gap-2 text-xs text-texto2">
-            <label className="flex items-center gap-1">
-              Año
-              <input className={claseInput} value={anio} placeholder="AAAA" inputMode="numeric" onChange={(e) => { setAnio(e.target.value); setPagina(0); }} />
-            </label>
-            <label className="flex items-center gap-1">
-              Mes
-              <input className={`${claseInput} w-14`} value={mes} placeholder="MM" inputMode="numeric" onChange={(e) => { setMes(e.target.value); setPagina(0); }} />
-            </label>
-            <label className="flex items-center gap-1">
-              Estado
-              <select
-                className="bg-bg border border-borde rounded px-2 py-1 text-xs text-texto"
-                value={estado}
-                onChange={(e) => { setEstado(e.target.value as EstadoPedido | ''); setPagina(0); }}
-              >
-                <option value="">Todos</option>
-                {ESTADOS_PEDIDO.map((e) => <option key={e} value={e}>{ETIQUETA_PEDIDO[e]}</option>)}
-              </select>
-            </label>
-            <Boton
-              type="button"
-              className="ml-1 py-1 px-3 text-xs"
-              onClick={() => { setErrorCarga(null); setResultadoCarga(null); setModalCarga(true); }}
-              disabled={!puedeCargar}
-              disabledReason={simulacionActiva ? 'Detén la simulación antes de cargar pedidos históricos.' : 'La sesión aún no está disponible.'}
-            >
-              Importar históricos
-            </Boton>
-          </div>
-        }
-      >
-        {cargas.datos && cargas.datos.length > 0 && (
-          <div className="px-4 py-2 border-b border-borde bg-panel2/40 text-xs text-texto2">
-            <span className="font-semibold text-texto">Periodos cargados:</span>{' '}
-            {cargas.datos
-              .slice()
-              .sort((a, b) => (a.anio * 100 + a.mes) - (b.anio * 100 + b.mes))
-              .map((x) => `${String(x.mes).padStart(2, '0')}/${x.anio}`)
-              .join(', ')}
-          </div>
-        )}
-        <EstadoConsulta error={c.error} cargando={c.cargando} vacio={lista.length === 0} recargar={c.recargar} />
-        {lista.length > 0 && (
-          <>
-            <table className="w-full text-[13px] border-collapse">
-              <thead>
-                <tr>
-                  <Th>Pedido</Th>
-                  <Th>Cliente</Th>
-                  <Th derecha>Cantidad</Th>
-                  <Th derecha>Plazo</Th>
-                  <Th>Llegada</Th>
-                  <Th>Entrega real</Th>
-                  <Th>Ubicación</Th>
-                  <Th>Estado</Th>
+    <MarcoTabla
+      titulo="Pedidos generados en la corrida"
+      cantidad={consulta.datos ? `${formatoEntero(consulta.datos.total)} pedidos` : null}
+      recargar={consulta.recargar}
+      cargando={consulta.cargando}
+    >
+      <EstadoConsulta error={consulta.error} cargando={consulta.cargando} vacio={lista.length === 0} recargar={consulta.recargar} />
+      {lista.length > 0 && (
+        <>
+          <table className="w-full text-[13px] border-collapse">
+            <thead>
+              <tr>
+                <Th>Pedido</Th>
+                <Th>Cliente</Th>
+                <Th derecha>Cantidad</Th>
+                <Th derecha>Plazo</Th>
+                <Th>Llegada</Th>
+                <Th>Entrega real</Th>
+                <Th>Ubicación</Th>
+                <Th>Estado</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {lista.map(p => (
+                <tr key={p.idPedido} className="hover:bg-panel2">
+                  <Td mono>{p.idPedido}</Td>
+                  <Td mono>{p.idCliente}</Td>
+                  <Td mono derecha>{formatoEntero(p.cantidadQq)} paq</Td>
+                  <Td mono derecha>{p.horasLimite} h</Td>
+                  <Td mono>{formatoFechaHora(p.fechaLlegada)}</Td>
+                  <Td mono>{p.fechaEntregaReal ? formatoFechaHora(p.fechaEntregaReal) : <span className="font-sans text-texto2">—</span>}</Td>
+                  <Td mono>{formatoCoordenada(p.ubicacionX, p.ubicacionY)}</Td>
+                  <Td><Insignia texto={ETIQUETA_PEDIDO[p.estado] ?? p.estado} tono={p.estado === 'ENTREGADO' ? 'ok' : p.estado === 'RETRASADO' ? 'critico' : 'neutro'} /></Td>
                 </tr>
-              </thead>
-              <tbody>
-                {lista.map((p) => (
-                  <tr key={p.idPedido} className="hover:bg-panel2">
-                    <Td mono>{p.idPedido}</Td>
-                    <Td mono>{p.idCliente}</Td>
-                    <Td mono derecha>{formatoEntero(p.cantidadQq)} paq</Td>
-                    <Td mono derecha>{p.horasLimite} h</Td>
-                    <Td mono>{formatoFechaHora(p.fechaLlegada)}</Td>
-                    <Td mono>{p.fechaEntregaReal ? formatoFechaHora(p.fechaEntregaReal) : <span className="font-sans text-texto2">—</span>}</Td>
-                    <Td mono>{formatoCoordenada(p.ubicacionX, p.ubicacionY)}</Td>
-                    <Td><Insignia texto={ETIQUETA_PEDIDO[p.estado] ?? p.estado} tono={p.estado === 'ENTREGADO' ? 'ok' : p.estado === 'RETRASADO' ? 'critico' : 'neutro'} /></Td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <Paginacion pagina={pagina} total={totalPaginas} cambiar={setPagina} />
-          </>
-        )}
-      </MarcoTabla>
-
-      <Modal
-        isOpen={modalCarga}
-        onClose={() => !cargandoArchivos && setModalCarga(false)}
-        titulo="Importar pedidos históricos"
-        subtitulo="Carga uno o varios archivos mensuales de ventas."
-        tamano="ancho"
-      >
-        <FormularioCargaHistorica
-          cargando={cargandoArchivos}
-          error={errorCarga}
-          resultado={resultadoCarga}
-          cancelar={() => setModalCarga(false)}
-          cargar={cargar}
-        />
-      </Modal>
-    </>
-  );
-}
-
-function FormularioCargaHistorica({
-  cargando,
-  error,
-  resultado,
-  cancelar,
-  cargar,
-}: {
-  cargando: boolean;
-  error: string | null;
-  resultado: ResultadoCargaHistorica | null;
-  cancelar: () => void;
-  cargar: (archivos: File[]) => Promise<void>;
-}) {
-  const [archivos, setArchivos] = useState<File[]>([]);
-  const [errorLocal, setErrorLocal] = useState<string | null>(null);
-
-  const seleccionar = (lista: FileList | null) => {
-    const nuevos = lista ? Array.from(lista) : [];
-    setArchivos(nuevos);
-    setErrorLocal(null);
-  };
-
-  const validar = (): string | null => {
-    if (archivos.length === 0) return 'Selecciona al menos un archivo.';
-    if (archivos.length > 60) return 'Puedes cargar como máximo 60 archivos a la vez.';
-    let total = 0;
-    const patron = /^ventas[._-]?\d{4}(0[1-9]|1[0-2])\.(txt|csv)$/i;
-    for (const archivo of archivos) {
-      if (!patron.test(archivo.name)) return `El nombre ${archivo.name} no sigue el formato esperado, por ejemplo ventas202601.txt.`;
-      if (archivo.size > 10 * 1024 * 1024) return `${archivo.name} supera el límite de 10 MB.`;
-      total += archivo.size;
-    }
-    if (total > 50 * 1024 * 1024) return 'La selección completa supera el límite de 50 MB.';
-    return null;
-  };
-
-  const enviar = async (e: FormEvent) => {
-    e.preventDefault();
-    const mensaje = validar();
-    setErrorLocal(mensaje);
-    if (mensaje) return;
-    await cargar(archivos);
-  };
-
-  return (
-    <form onSubmit={enviar} className="space-y-4">
-      <div className="border border-dashed border-borde rounded-lg p-5 bg-bg text-center">
-        <input
-          id="archivos-historicos"
-          type="file"
-          accept=".txt,.csv,text/plain,text/csv"
-          multiple
-          className="sr-only"
-          onChange={(e) => seleccionar(e.target.files)}
-        />
-        <label htmlFor="archivos-historicos" className="inline-flex cursor-pointer items-center justify-center px-4 py-2 rounded-md bg-panel2 border border-borde text-sm text-texto hover:border-mint">
-          Seleccionar archivos
-        </label>
-        <p className="text-xs text-texto2 mt-2">Archivos .txt o .csv mensuales. Ejemplo: ventas202601.txt</p>
-      </div>
-
-      {archivos.length > 0 && (
-        <div className="border border-borde rounded-lg overflow-hidden">
-          <div className="px-3 py-2 bg-panel2 text-xs text-texto2">{archivos.length} archivo{archivos.length === 1 ? '' : 's'} seleccionado{archivos.length === 1 ? '' : 's'}</div>
-          <ul className="divide-y divide-borde max-h-52 overflow-y-auto">
-            {archivos.map((archivo) => (
-              <li key={`${archivo.name}-${archivo.size}`} className="flex items-center gap-3 px-3 py-2 text-xs">
-                <span className="font-mono text-texto truncate">{archivo.name}</span>
-                <span className="ml-auto text-texto2">{(archivo.size / 1024).toFixed(1)} KB</span>
-              </li>
-            ))}
-          </ul>
-        </div>
+              ))}
+            </tbody>
+          </table>
+          <Paginacion pagina={pagina} total={totalPaginas} cambiar={setPagina} />
+        </>
       )}
-
-      <Nota tono="aviso">No se pueden cargar nuevos históricos mientras una simulación está ejecutándose o pausada. Tampoco se puede volver a cargar un periodo que ya fue registrado.</Nota>
-
-      {(errorLocal || error) && <ErrorCarga titulo="No se pudieron importar los archivos" error={errorLocal ?? error ?? ''} />}
-      {resultado && (
-        <div className="border border-mint/60 bg-mint/10 rounded-md px-3 py-2 text-sm text-texto">
-          Se procesaron <strong>{resultado.archivosProcesados}</strong> archivo{resultado.archivosProcesados === 1 ? '' : 's'} y se agregaron <strong>{formatoEntero(resultado.pedidosInsertados)}</strong> pedidos.
-        </div>
-      )}
-
-      <div className="flex justify-end gap-2">
-        <Boton type="button" variant="secundario" onClick={cancelar} disabled={cargando} disabledReason="La carga está en proceso.">Cerrar</Boton>
-        <Boton type="submit" disabled={cargando || archivos.length === 0} disabledReason={cargando ? 'La carga está en proceso.' : 'Selecciona al menos un archivo.'}>
-          {cargando ? 'Importando…' : 'Importar pedidos'}
-        </Boton>
-      </div>
-    </form>
+    </MarcoTabla>
   );
 }
 

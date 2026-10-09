@@ -25,7 +25,7 @@ import pe.edu.pucp.sisrap.control.aplicacion.GestionarControlSimulacion.ControlN
 
 @RestController
 @RequestMapping("/api/almacenes")
-public final class AlmacenController {
+public class AlmacenController {
 
     private final GestionarAlmacenes servicio;
 

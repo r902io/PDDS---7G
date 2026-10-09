@@ -166,6 +166,14 @@ public class GestionarPedidos {
         );
     }
 
+    public PedidoOperativo registrarManual(
+            String token, String cliente, int cantidad,
+            pe.edu.pucp.sisrap.pedido.dominio.TipoPrioridad prioridad,
+            int x, int y) {
+        validarSesion(token);
+        return motorSimulacion.registrarPedidoManual(cliente, cantidad, prioridad, x, y);
+    }
+
     public PedidoOperativo buscar(
             long idPedido
     ) {
@@ -183,6 +191,17 @@ public class GestionarPedidos {
     listarCargasHistoricas() {
 
         return repositorio.listarCargasHistoricas();
+    }
+
+    public void eliminarCargaHistorica(String token, String huella) {
+        validarSesion(token);
+        if (huella == null || !huella.matches("[0-9a-fA-F]{64}")) {
+            throw new IllegalArgumentException("La identificación de la carga es inválida");
+        }
+        synchronized (motorSimulacion) {
+            verificarSimulacionNoActiva();
+            repositorio.eliminarCargaHistorica(huella);
+        }
     }
 
     public synchronized ResultadoCargaHistorica importarHistoricos(

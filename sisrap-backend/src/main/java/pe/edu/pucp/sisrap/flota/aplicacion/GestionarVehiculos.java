@@ -15,19 +15,30 @@ import pe.edu.pucp.sisrap.flota.dominio.TipoAveria;
 import pe.edu.pucp.sisrap.flota.dominio.TipoMantenimiento;
 import pe.edu.pucp.sisrap.flota.dominio.VehiculoOperativo;
 import pe.edu.pucp.sisrap.sesion.aplicacion.GestionarSesiones;
+import pe.edu.pucp.sisrap.simulacion.aplicacion.MotorSimulacion;
+import pe.edu.pucp.sisrap.simulacion.dominio.EstadoSimulacion;
 
 @Service
 public final class GestionarVehiculos {
 
     private final RepositorioVehiculos repositorio;
     private final GestionarSesiones sesiones;
+    private final MotorSimulacion motor;
 
-    public GestionarVehiculos(
-            RepositorioVehiculos repositorio,
-            GestionarSesiones sesiones
-    ) {
+    public GestionarVehiculos(RepositorioVehiculos repositorio,
+                             GestionarSesiones sesiones, MotorSimulacion motor) {
         this.repositorio = repositorio;
         this.sesiones = sesiones;
+        this.motor = motor;
+    }
+
+    private LocalDateTime exigirSimulacionActiva() {
+        var s = motor.estadoActual();
+        if (s.estado() != EstadoSimulacion.EJECUTANDO
+                && s.estado() != EstadoSimulacion.PAUSADA) {
+            throw new IllegalArgumentException("Las incidencias de vehículos se registran durante la simulación");
+        }
+        return s.relojSimulado();
     }
 
     public List<VehiculoOperativo> listar() {
@@ -74,10 +85,14 @@ public final class GestionarVehiculos {
             );
         }
 
-        if (fechaOcurrencia == null) {
-            throw new IllegalArgumentException(
-                    "La fecha de ocurrencia es obligatoria"
-            );
+        // La avería ocurre AHORA en el reloj de la simulación. Si el cliente
+        // envió una duración basada en su reloj local, se conserva la duración.
+        LocalDateTime instanteSolicitado = fechaOcurrencia;
+        fechaOcurrencia = exigirSimulacionActiva();
+        if (instanteSolicitado != null && horaRetornoEstimada != null
+                && horaRetornoEstimada.isAfter(instanteSolicitado)) {
+            horaRetornoEstimada = fechaOcurrencia.plus(
+                    java.time.Duration.between(instanteSolicitado, horaRetornoEstimada));
         }
 
         if (horaRetornoEstimada != null
@@ -105,6 +120,7 @@ public final class GestionarVehiculos {
     ) {
 
         validarSesion(tokenSesion);
+        exigirSimulacionActiva();
 
         if (idIncidencia <= 0) {
             throw new IllegalArgumentException(
@@ -197,6 +213,22 @@ public final class GestionarVehiculos {
                 );
         }
 
+        LocalDateTime reloj = exigirSimulacionActiva();
+        if (fechaInicio == null) fechaInicio = reloj;
+        if (fechaFin == null) fechaFin = fechaInicio.plusHours(1);
+        if (fechaInicio.isBefore(reloj) ||
+                !fechaInicio.isBefore(motor.estadoActual().fechaHoraFin())) {
+            // Los clientes antiguos envían el reloj real; se normaliza su
+            // duración a la fecha/hora virtual de la simulación activa.
+            java.time.Duration duracion = java.time.Duration.between(fechaInicio, fechaFin);
+            fechaInicio = reloj;
+            fechaFin = duracion.isNegative() || duracion.isZero()
+                    ? fechaInicio.plusHours(1) : fechaInicio.plus(duracion);
+        }
+        if (fechaInicio.isBefore(reloj) ||
+                !fechaInicio.isBefore(motor.estadoActual().fechaHoraFin())) {
+            throw new IllegalArgumentException("El mantenimiento debe programarse dentro de la simulación");
+        }
         if (fechaInicio == null
                 || fechaFin == null) {
 
@@ -241,6 +273,7 @@ public final class GestionarVehiculos {
         validarSesion(tokenSesion);
 
         buscar(idVehiculo);
+        exigirSimulacionActiva();
 
         if (idMantenimiento <= 0) {
 

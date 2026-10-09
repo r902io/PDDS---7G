@@ -65,7 +65,7 @@ public final class FuncionObjetivo {
             ruta.recalcular();
             costo += ruta.getCostoTotal();
 
-            if (ruta.isIntransitable()) {
+            if (ruta.isIntransitable() || ruta.isFueraDeTurno()) {
                 v++;
             }
 

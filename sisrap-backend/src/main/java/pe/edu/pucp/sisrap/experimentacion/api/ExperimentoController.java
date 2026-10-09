@@ -9,7 +9,7 @@ import pe.edu.pucp.sisrap.experimentacion.aplicacion.*;
 @RestController
 @Profile("experimentacion")
 @RequestMapping("/api/experimentos")
-public final class ExperimentoController {
+public class ExperimentoController {
     private final EjecutarExperimento ejecutar;
     private final ConsultarExperimento consultar;
     private final AtomicBoolean ocupado=new AtomicBoolean();

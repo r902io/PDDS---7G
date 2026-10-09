@@ -172,6 +172,7 @@ public final class DistanciaReticula {
                 origen,
                 destino,
                 matrizBloqueo,
+                bloqueos,
                 ancho,
                 alto);
 
@@ -191,6 +192,7 @@ public final class DistanciaReticula {
             Nodo origen,
             Nodo destino,
             boolean[][] bloqueados,
+            Set<String> arcosCerrados,
             int ancho,
             int alto) {
 
@@ -232,7 +234,8 @@ public final class DistanciaReticula {
                 int ny = actual.y() + movimiento[1];
 
                 if (!dentro(nx, ny, ancho, alto)
-                        || bloqueados[nx][ny]) {
+                        || bloqueados[nx][ny]
+                        || ArcoReticula.bloqueado(actual.x(), actual.y(), nx, ny, arcosCerrados)) {
                     continue;
                 }
 
@@ -275,6 +278,7 @@ public final class DistanciaReticula {
                 continue;
             }
 
+            if (nodo.indexOf('|') >= 0) continue;
             int x = Integer.parseInt(nodo.substring(0, coma));
             int y = Integer.parseInt(nodo.substring(coma + 1));
 

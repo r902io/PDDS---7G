@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import type { AlmacenOperativo, SnapshotSimulacion, VehiculoOperativo, VehiculoSnapshot } from '../types/api';
+import type { AlmacenOperativo, PaginaPedidos, PedidoOperativo, SnapshotSimulacion, VehiculoOperativo, VehiculoSnapshot } from '../types/api';
 import { useSimulacion } from '../estado/SimulacionContext';
 import { navegar } from '../estado/navegacion';
 import { catalogoService } from '../services/catalogoService';
@@ -71,13 +71,22 @@ export function EscenarioDashboard() {
   reloj.current = snapshot?.relojSimulado ?? null;
   const bloqueos = useConsulta(
     (s) => catalogoService.bloqueos(reloj.current ? reloj.current.slice(0, 19) : null, s),
-    `bloqueos-${snapshot?.idSimulacion}-${snapshot?.estado}`,
-    activa ? 10_000 : null
+    `bloqueos-${snapshot?.idSimulacion}-${snapshot?.estado}-${snapshot?.bloqueosActivos}`,
+    activa ? 2_000 : null
   );
-  const bloqueosActivos = useMemo(
-    () => (corrida ? (bloqueos.datos ?? []).filter((b) => b.estado === 'ACTIVO') : []),
-    [bloqueos.datos, corrida]
+  const pedidosMap = useConsulta(
+    (s) => corrida ? catalogoService.pedidos({ pagina: 0, tamanio: 500 }, s)
+      : Promise.resolve({ contenido: [], total: 0, pagina: 0, tamanio: 500 } as PaginaPedidos),
+    `mapa-pedidos-${snapshot?.idSimulacion}-${snapshot?.estado}`,
+    activa ? 8_000 : null
   );
+  const bloqueosActivos = useMemo(() => {
+    if (!corrida || !snapshot?.relojSimulado) return [];
+    const instante = snapshot.relojSimulado.slice(0, 19);
+    return (bloqueos.datos ?? []).filter((b) =>
+      b.estado !== 'CANCELADO' && b.inicio.slice(0, 19) <= instante && instante < b.fin.slice(0, 19)
+    );
+  }, [bloqueos.datos, corrida, snapshot?.relojSimulado]);
 
   // Esc cancela la selección.
   useEffect(() => {
@@ -143,10 +152,16 @@ export function EscenarioDashboard() {
           errorBloqueos={bloqueos.error}
         />
         <div className="relative flex-1 min-h-0">
+          {pedidosMap.datos && pedidosMap.datos.total > pedidosMap.datos.contenido.length &&
+            <div className="absolute bottom-14 left-4 z-10 bg-panel/95 border border-borde rounded px-2 py-1 text-xs text-texto2">
+              Mostrando {pedidosMap.datos.contenido.length} de {pedidosMap.datos.total} destinos. Consulta el resto en Pedidos.
+            </div>}
           <MapaCiudad
             dimensiones={dimensiones}
             almacenes={almacenes.datos ?? []}
             vehiculos={vehiculos}
+            corridaId={snapshot.idSimulacion}
+            pedidos={pedidosMap.datos?.contenido ?? []}
             bloqueos={bloqueosActivos}
             seleccion={seleccion}
             alSeleccionar={setSeleccion}
@@ -156,6 +171,7 @@ export function EscenarioDashboard() {
             <PanelDetalle
               seleccion={seleccion}
               vehiculos={vehiculos}
+              pedidos={pedidosMap.datos?.contenido ?? []}
               catalogo={flota.datos}
               almacenes={almacenes.datos ?? []}
               alSeleccionar={setSeleccion}
@@ -171,7 +187,8 @@ export function EscenarioDashboard() {
         colapsado={derColapsado}
         alternar={() => setDerColapsado((v) => !v)}
       >
-        <PanelIndicadores snapshot={snapshot} bloqueosCargados={bloqueos.datos != null} />
+        <PanelIndicadores snapshot={snapshot} bloqueosCargados={bloqueos.datos != null}
+          pedidos={pedidosMap.datos?.contenido ?? []} pedidosCompletos={pedidosMap.datos != null && pedidosMap.datos.total <= pedidosMap.datos.contenido.length} />
       </PanelLateral>
 
       <Modal isOpen={confirmarDetener} onClose={() => setConfirmarDetener(false)} titulo="Detener la corrida">
@@ -548,8 +565,19 @@ function PanelParametros({
 // Panel derecho
 // ---------------------------------------------------------------------------
 
-function PanelIndicadores({ snapshot, bloqueosCargados }: { snapshot: SnapshotSimulacion; bloqueosCargados: boolean }) {
+function PanelIndicadores({ snapshot, bloqueosCargados, pedidos, pedidosCompletos }: {
+  snapshot: SnapshotSimulacion;
+  bloqueosCargados: boolean;
+  pedidos: PedidoOperativo[];
+  pedidosCompletos: boolean;
+}) {
   const p = snapshot.pedidos;
+  const pendientesCriticos = pedidos.filter(p => p.estado === 'PENDIENTE' || p.estado === 'EN_RUTA' || p.estado === 'REASIGNADO');
+  const relojMs = snapshot.relojSimulado ? Date.parse(snapshot.relojSimulado) : NaN;
+  const criticos = pendientesCriticos.map(p => ({
+    id: p.idPedido, restante: (Date.parse(p.fechaLlegada) + p.horasLimite * 3_600_000 - relojMs) / 60_000,
+  })).filter(p => Number.isFinite(p.restante)).sort((a, b) => a.restante - b.restante);
+  const critico = criticos[0] ?? null;
   const colapso = enColapso(snapshot);
   const corrida = hayCorrida(snapshot);
   const dia = diaSimulado(snapshot.fechaHoraInicio, snapshot.relojSimulado);
@@ -605,20 +633,26 @@ function PanelIndicadores({ snapshot, bloqueosCargados }: { snapshot: SnapshotSi
         </div>
         <Fila k="Pendientes" v={formatoEntero(p.pendientes)} />
         <Fila k="Reasignados" v={formatoEntero(p.reasignados)} />
-        <Fila k="Futuros (aún no llegan)" v={formatoEntero(p.futuros)} />
+        <Fila k="Ingresados hasta ahora" v={formatoEntero(Math.max(0, p.total - p.futuros))} />
+        <Fila k="Futuros estimados (aún no llegan)" v={formatoEntero(p.futuros)} />
         <Fila
           k="Fuera de plazo"
           v={formatoEntero(p.retrasados)}
           claseValor={p.retrasados > 0 ? '!text-rojo font-bold' : ''}
         />
         <div className="border-t border-borde mt-1.5 pt-1.5">
-          <Fila k="Total del periodo" v={formatoEntero(p.total)} />
+          <Fila k="Total previsto del periodo" v={formatoEntero(p.total)} />
         </div>
       </Bloque>
 
-      <Bloque titulo="Holgura mínima">
-        <Fila k="Holgura mínima" v={NO_DISPONIBLE} />
-        <Fila k="Pedido crítico" v={NO_DISPONIBLE} />
+
+      <Bloque titulo="Pedido de mayor criticidad">
+        {!pedidosCompletos ? <p className="text-xs text-texto2">La vista contiene solo una parte de los pedidos; la holgura global no se puede calcular con seguridad.</p> :
+          critico ? <>
+            <Fila k="Pedido" v={`#${critico.id}`} />
+            <Fila k="Tiempo hasta su plazo" v={`${Math.round(critico.restante)} min`} claseValor={critico.restante < 0 ? '!text-rojo' : critico.restante < 120 ? '!text-ambar' : '!text-mint'} />
+            <button className="text-xs text-azul underline mt-2" onClick={() => navegar({ nombre: 'mantenimiento', pestana: 'pedidos' })}>Ver todos los pedidos</button>
+          </> : <p className="text-xs text-texto2">No hay pedidos activos con plazo pendiente.</p>}
       </Bloque>
 
       <Bloque titulo="Flota" aclaracion="Estados informados en el snapshot.">
@@ -654,9 +688,12 @@ function PanelIndicadores({ snapshot, bloqueosCargados }: { snapshot: SnapshotSi
         <Fila k="Bloqueos activos" v={formatoEntero(snapshot.bloqueosActivos)} />
         {!bloqueosCargados && corrida && <p className="text-[11px] text-texto2">Cargando el trazado de los bloqueos…</p>}
         <Nota className="mt-1.5">
-          Los bloqueos son programados desde el archivo mensual. El registro de averías tipo 1, 2 y 3 aún no está
-          integrado en este visualizador.
+          Los bloqueos, mantenimientos y averías se registran manualmente durante la operación. Puedes gestionarlos desde las secciones correspondientes.
         </Nota>
+        <div className="flex flex-wrap gap-2 mt-2">
+          <button className="text-azul underline text-xs" onClick={() => navegar({ nombre: 'mantenimiento', pestana: 'bloqueos' })}>Gestionar bloqueos</button>
+          <button className="text-azul underline text-xs" onClick={() => navegar({ nombre: 'mantenimiento', pestana: 'vehiculos' })}>Averías y mantenimientos</button>
+        </div>
       </Bloque>
     </>
   );

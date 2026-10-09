@@ -9,19 +9,25 @@ import pe.edu.pucp.sisrap.almacen.dominio.AlmacenOperativo;
 import pe.edu.pucp.sisrap.almacen.dominio.RepositorioAlmacenes;
 import pe.edu.pucp.sisrap.almacen.dominio.TipoAlmacen;
 import pe.edu.pucp.sisrap.control.aplicacion.GestionarControlSimulacion;
+import pe.edu.pucp.sisrap.almacen.dominio.ConflictoAlmacenException;
+import pe.edu.pucp.sisrap.simulacion.aplicacion.MotorSimulacion;
+import pe.edu.pucp.sisrap.simulacion.dominio.EstadoSimulacion;
 
 @Service
 public final class GestionarAlmacenes {
 
     private final RepositorioAlmacenes repositorio;
     private final GestionarControlSimulacion control;
+    private final MotorSimulacion motor;
 
     public GestionarAlmacenes(
             RepositorioAlmacenes repositorio,
-            GestionarControlSimulacion control
+            GestionarControlSimulacion control,
+            MotorSimulacion motor
     ) {
         this.repositorio = repositorio;
         this.control = control;
+        this.motor = motor;
     }
 
     public List<AlmacenOperativo> listar() {
@@ -52,6 +58,12 @@ public final class GestionarAlmacenes {
     ) {
 
         control.verificarControlador(token);
+        synchronized (motor) {
+            exigirSinSimulacion();
+            if (repositorio.listar().size() >= 3) {
+                throw new ConflictoAlmacenException(
+                        "Ya existen los tres almacenes del caso. Modifique sus propiedades con PUT");
+            }
 
         validarId(idAlmacen);
         validarNombre(nombre);
@@ -90,6 +102,7 @@ public final class GestionarAlmacenes {
                 y,
                 capacidad
         );
+        }
     }
 
     public AlmacenOperativo actualizar(
@@ -102,8 +115,9 @@ public final class GestionarAlmacenes {
     ) {
 
         control.verificarControlador(token);
-
-        validarNombre(nombre);
+        synchronized (motor) {
+            exigirSinSimulacion();
+            validarNombre(nombre);
 
         return repositorio.actualizar(
                 idAlmacen,
@@ -112,6 +126,7 @@ public final class GestionarAlmacenes {
                 y,
                 capacidad
         );
+        }
     }
 
     public void eliminar(
@@ -120,8 +135,21 @@ public final class GestionarAlmacenes {
     ) {
 
         control.verificarControlador(token);
+        synchronized (motor) {
+            exigirSinSimulacion();
+            if (repositorio.listar().size() <= 3) {
+                throw new ConflictoAlmacenException(
+                        "Los tres almacenes del caso no se pueden eliminar; use PUT para editarlos");
+            }
+            repositorio.eliminar(idAlmacen);
+        }
+    }
 
-        repositorio.eliminar(idAlmacen);
+    private void exigirSinSimulacion() {
+        EstadoSimulacion e = motor.estadoActual().estado();
+        if (e == EstadoSimulacion.EJECUTANDO || e == EstadoSimulacion.PAUSADA) {
+            throw new ConflictoAlmacenException("Los almacenes solo se configuran antes de iniciar la corrida");
+        }
     }
 
     private void validarId(String id) {

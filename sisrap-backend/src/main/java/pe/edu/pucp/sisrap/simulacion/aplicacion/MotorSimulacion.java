@@ -29,6 +29,8 @@ import pe.edu.pucp.sisrap.pedido.dominio.Pedido;
 import pe.edu.pucp.sisrap.planificador.dominio.algoritmo.AlgoritmoGenetico;
 import pe.edu.pucp.sisrap.planificador.dominio.modelo.ContextoPlanificacion;
 import pe.edu.pucp.sisrap.planificador.dominio.modelo.Ruta;
+import pe.edu.pucp.sisrap.planificador.dominio.modelo.JornadaOperativa;
+import pe.edu.pucp.sisrap.planificador.dominio.modelo.ArcoReticula;
 import pe.edu.pucp.sisrap.planificador.dominio.modelo.Solucion;
 import pe.edu.pucp.sisrap.planificador.dominio.objetivo.FuncionObjetivo;
 import pe.edu.pucp.sisrap.simulacion.dominio.ConfiguracionSimulacion;
@@ -201,6 +203,28 @@ public class MotorSimulacion {
         return snapshotActual;
     }
 
+    public synchronized void sincronizarBloqueos() {
+        if (estado != EstadoSimulacion.EJECUTANDO && estado != EstadoSimulacion.PAUSADA) {
+            return;
+        }
+        if (actualizarBloqueosActivos()) {
+            publicarSnapshot(true);
+        }
+    }
+
+    public synchronized pe.edu.pucp.sisrap.pedido.dominio.PedidoOperativo registrarPedidoManual(
+            String cliente, int cantidad,
+            pe.edu.pucp.sisrap.pedido.dominio.TipoPrioridad prioridad, int x, int y) {
+        if (estado != EstadoSimulacion.EJECUTANDO && estado != EstadoSimulacion.PAUSADA) {
+            throw new ConflictoSimulacionException("La simulación debe estar activa para registrar pedidos");
+        }
+        var pedido = repositorio.registrarPedidoManual(cliente, cantidad, prioridad, x, y, reloj);
+        proximaPlanificacionVirtual = reloj;
+        nanoUltimaPlanificacion = 0L;
+        publicarSnapshot(true);
+        return pedido;
+    }
+
     private void tickSeguro() {
         synchronized (this) {
             try {
@@ -252,12 +276,22 @@ public class MotorSimulacion {
 
         LocalDateTime relojAnterior = reloj;
         LocalDateTime nuevoReloj = reloj.plusNanos(deltaVirtualNanos);
-        if (nuevoReloj.isAfter(configuracion.fechaHoraFin())) {
+        if (configuracion.escenario() != EscenarioSimulacion.OPERACION_DIARIA
+                && nuevoReloj.isAfter(configuracion.fechaHoraFin())) {
             nuevoReloj = configuracion.fechaHoraFin();
             deltaVirtualNanos = Math.max(
                     0L,
                     Duration.between(reloj, nuevoReloj).toNanos());
         }
+        LocalDateTime finTurno = JornadaOperativa.finTurno(relojAnterior);
+        if (nuevoReloj.isAfter(finTurno)) nuevoReloj = finTurno;
+        if (configuracion.escenario() == EscenarioSimulacion.COLAPSO_LOGISTICO) {
+            var vencimiento = repositorio.primerVencimientoEntre(relojAnterior, nuevoReloj);
+            if (vencimiento.isPresent() && vencimiento.get().instante().isBefore(nuevoReloj)) {
+                nuevoReloj = vencimiento.get().instante();
+            }
+        }
+        deltaVirtualNanos = Duration.between(relojAnterior, nuevoReloj).toNanos();
         reloj = nuevoReloj;
 
         repositorio.recargarAlmacenesSiCorresponde(
@@ -265,32 +299,7 @@ public class MotorSimulacion {
                 reloj
         );
 
-        repositorio.marcarPedidosRetrasados(reloj);
-
-        /*
-         * En colapso logístico la ejecución termina exactamente cuando el
-         * backend detecta el primer pedido fuera de plazo.
-         */
-        if (configuracion.escenario()
-                == EscenarioSimulacion.COLAPSO_LOGISTICO) {
-
-            var resumenColapso =
-                    repositorio.resumirPedidos(
-                            configuracion.fechaHoraInicio(),
-                            configuracion.fechaHoraFin(),
-                            reloj
-                    );
-
-            if (resumenColapso.retrasados() > 0) {
-
-                finalizar(
-                        true,
-                        "Colapso logístico: se detectó el primer incumplimiento de plazo"
-                );
-
-                return;
-            }
-        }
+        repositorio.publicarPedidosHasta(reloj);
 
         repositorio.sincronizarDisponibilidad(reloj);
 
@@ -298,15 +307,29 @@ public class MotorSimulacion {
                 repositorio.cargarVehiculosPersistidos();
         cancelarPlanesInterrumpidos(estadosVehiculos);
 
-        Set<String> bloqueosAhora = repositorio.cargarNodosBloqueados(reloj);
-        if (!bloqueosAhora.equals(bloqueados)) {
-            bloqueados = bloqueosAhora;
-            invalidarCaminosBloqueados();
-        }
+        actualizarBloqueosActivos();
 
-        double deltaHoras = deltaVirtualNanos / NANOS_POR_HORA;
+        double deltaHoras = JornadaOperativa.horasEfectivas(relojAnterior, reloj);
         actualizarPlanes(deltaHoras);
         persistirPosiciones();
+        if (!reloj.isBefore(finTurno)) cerrarTurno();
+        repositorio.marcarPedidosRetrasados(reloj);
+
+        /*
+         * En colapso logístico la ejecución termina exactamente cuando el
+         * backend detecta el primer pedido fuera de plazo.
+         */
+        if (configuracion.escenario() == EscenarioSimulacion.COLAPSO_LOGISTICO) {
+            var incumplimiento = repositorio.primerIncumplimiento(reloj);
+            if (incumplimiento.isPresent()) {
+                var evento = incumplimiento.get();
+                repositorio.guardarColapso(idSimulacion, evento);
+                mensajeEstado = "Colapso logístico: pedido " + evento.idPedido()
+                        + " fuera de plazo en " + evento.instante();
+                finalizar(true, mensajeEstado);
+                return;
+            }
+        }
 
         if (debeIntentarPlanificar(ahoraNano)) {
             intentarPlanificar();
@@ -326,7 +349,8 @@ public class MotorSimulacion {
             publicarSnapshot(false);
         }
 
-        if (!reloj.isBefore(configuracion.fechaHoraFin())) {
+        if (configuracion.escenario() != EscenarioSimulacion.OPERACION_DIARIA
+                && !reloj.isBefore(configuracion.fechaHoraFin())) {
             finalizar(true, "La simulación alcanzó la fecha/hora final");
         }
     }
@@ -370,8 +394,13 @@ public class MotorSimulacion {
         // AlgoritmoGenetico construye su población inicial mediante ConstructorVoraz.
         Solucion solucion = planificador.planificar(contexto);
         objetivo.calcular(solucion);
+        if (!solucion.isEsFactible() || solucion.getValorR() > 0) {
+            mensajeEstado = "No se encontró un plan factible dentro de los plazos";
+            return;
+        }
 
         List<PlanUnidad> nuevos = new ArrayList<>();
+        List<Ruta> rutasAceptadas = new ArrayList<>();
         List<Long> pedidosAsignados = new ArrayList<>();
 
         for (Ruta ruta : solucion.getRutas()) {
@@ -385,6 +414,7 @@ public class MotorSimulacion {
 
             PlanUnidad plan = PlanUnidad.desde(ruta, contexto);
             nuevos.add(plan);
+            rutasAceptadas.add(ruta);
             for (Pedido pedido : ruta.getSecuenciaPedidos()) {
                 pedidosAsignados.add(pedido.getIdPedido());
             }
@@ -397,6 +427,10 @@ public class MotorSimulacion {
             return;
         }
 
+        repositorio.guardarPlan(idSimulacion, reloj, solucion, rutasAceptadas,
+                operativo.configuracion().numero("objetivo.beta1"),
+                operativo.configuracion().numero("objetivo.beta2"),
+                operativo.configuracion().numero("objetivo.beta3"));
         repositorio.marcarPedidosEnRuta(pedidosAsignados);
         for (PlanUnidad plan : nuevos) {
             repositorio.actualizarEstadoVehiculo(plan.idVehiculo, "EN_RUTA");
@@ -404,6 +438,21 @@ public class MotorSimulacion {
         }
 
         mensajeEstado = "Planificación generada: " + nuevos.size() + " rutas nuevas";
+    }
+
+    private void cerrarTurno() {
+        if (planes.isEmpty()) return;
+        for (PlanUnidad plan : new ArrayList<>(planes.values())) {
+            repositorio.reencolarPedidos(plan.idsNoEntregados(), reloj);
+            if (plan.stockTomado) {
+                repositorio.devolverStock(plan.almacenOrigen.getIdAlmacen(),
+                        plan.cantidadNoEntregada());
+            }
+            repositorio.actualizarEstadoVehiculo(plan.idVehiculo, "DISPONIBLE");
+        }
+        planes.clear();
+        proximaPlanificacionVirtual = reloj;
+        nanoUltimaPlanificacion = 0L;
     }
 
     private void cancelarPlanesInterrumpidos(
@@ -439,16 +488,32 @@ public class MotorSimulacion {
 
         if (!cancelar.isEmpty()) {
             proximaPlanificacionVirtual = reloj;
+            nanoUltimaPlanificacion = 0L;
             mensajeEstado = "Se reencolaron pedidos por avería/mantenimiento";
         }
     }
 
+    private boolean actualizarBloqueosActivos() {
+        Set<String> actuales = repositorio.cargarNodosBloqueados(reloj);
+        if (actuales.equals(bloqueados)) {
+            return false;
+        }
+        bloqueados = actuales;
+        invalidarCaminosBloqueados();
+        proximaPlanificacionVirtual = reloj;
+        nanoUltimaPlanificacion = 0L;
+        return true;
+    }
+
     private void invalidarCaminosBloqueados() {
         for (PlanUnidad plan : planes.values()) {
-            if (plan.camino.stream()
-                    .anyMatch(n -> bloqueados.contains(clave(n)))) {
-                plan.camino.clear();
+            if (plan.destinoActual == null || mismaPosicion(plan.posicion, plan.destinoActual)) {
+                continue;
             }
+            plan.camino.clear();
+            CaminoReticula.calcular(plan.posicion, plan.destinoActual,
+                    bloqueados, plan.ancho, plan.alto)
+                    .ifPresent(plan.camino::addAll);
         }
     }
 
@@ -474,7 +539,7 @@ public class MotorSimulacion {
                     plan.creditoHoras -= plan.servicioRestanteHoras;
                     plan.servicioRestanteHoras = 0;
                     Pedido entregado = plan.pedidoObjetivo;
-                    repositorio.entregarPedido(entregado.getIdPedido(), reloj);
+                    repositorio.entregarPedido(entregado.getIdPedido(), instanteEvento(plan));
                     plan.pedidoObjetivo = null;
                     prepararDespuesDeEntrega(plan, finalizados);
                     if (finalizados.contains(plan.idVehiculo)) {
@@ -520,8 +585,17 @@ public class MotorSimulacion {
                     break;
                 }
 
+                Nodo siguiente = plan.camino.peekFirst();
+                if (siguiente == null || ArcoReticula.bloqueado(
+                        plan.posicion.getX(), plan.posicion.getY(),
+                        siguiente.getX(), siguiente.getY(), bloqueados)) {
+                    plan.camino.clear();
+                    plan.creditoHoras = 0;
+                    break;
+                }
+
                 plan.creditoHoras -= horasPorNodo;
-                Nodo siguiente = plan.camino.removeFirst();
+                plan.camino.removeFirst();
                 plan.posicion = siguiente;
 
                 if (plan.camino.isEmpty() && mismaPosicion(plan.posicion, plan.destinoActual)) {
@@ -593,11 +667,13 @@ public class MotorSimulacion {
                 plan.fase = FaseUnidad.IR_PEDIDO;
             }
             case IR_PEDIDO -> {
+                // El SLA se verifica a la llegada; la descarga dura 1h adicional.
+                repositorio.registrarArribo(plan.pedidoObjetivo.getIdPedido(), instanteEvento(plan));
                 plan.fase = FaseUnidad.ATENDIENDO;
                 plan.servicioRestanteHoras = plan.servicioHoras;
                 if (plan.servicioRestanteHoras <= 0) {
                     Pedido entregado = plan.pedidoObjetivo;
-                    repositorio.entregarPedido(entregado.getIdPedido(), reloj);
+                    repositorio.entregarPedido(entregado.getIdPedido(), instanteEvento(plan));
                     plan.pedidoObjetivo = null;
                     prepararDespuesDeEntrega(plan, finalizados);
                 }
@@ -638,6 +714,14 @@ public class MotorSimulacion {
         repositorio.actualizarEstadoVehiculo(plan.idVehiculo, "DISPONIBLE");
         finalizados.add(plan.idVehiculo);
         proximaPlanificacionVirtual = reloj;
+    }
+
+    /** Reconstruye el instante virtual del evento dentro del tick de simulación. */
+    private LocalDateTime instanteEvento(PlanUnidad plan) {
+        long nanos = Math.max(0L, Math.round(plan.creditoHoras * NANOS_POR_HORA));
+        LocalDateTime estimado = reloj.minusNanos(nanos);
+        return estimado.isBefore(configuracion.fechaHoraInicio())
+                ? configuracion.fechaHoraInicio() : estimado;
     }
 
     private void persistirPosiciones() {
@@ -770,7 +854,8 @@ public class MotorSimulacion {
                             estadoVehiculo,
                             plan.posicion.getX(),
                             plan.posicion.getY(),
-                            plan.pedidoObjetivo == null ? null : plan.pedidoObjetivo.getIdPedido(),
+                            plan.pedidoObjetivo == null ? null
+                                    : repositorio.idPedidoVisible(plan.pedidoObjetivo.getIdPedido()),
                             plan.camino.stream()
                                     .map(n -> new PuntoSimulacion(n.getX(), n.getY()))
                                     .toList()));

@@ -1,8 +1,9 @@
 import type { ReactNode } from 'react';
+import { DetalleResultado } from './DetalleResultado';
 import { useSimulacion } from '../estado/SimulacionContext';
 import { navegar } from '../estado/navegacion';
 import { Boton } from '../components/ui/Boton';
-import { Cargando, ErrorCarga, Nota } from '../components/ui/Avisos';
+import { Cargando, ErrorCarga } from '../components/ui/Avisos';
 import { IconoAlerta, IconoColapso, IconoCorrecto, IconoDetener, IconoInfo } from '../components/iconos';
 import { ESCENARIOS, corridaActiva, hayCorrida, tipoResultado, type TipoResultado } from '../utilitarios/escenarios';
 import {
@@ -134,21 +135,7 @@ export function ResultadoCorrida() {
           </Tarjeta>
         </div>
 
-        {tipo === 'COLAPSO' && (
-          <Tarjeta titulo="Origen del colapso">
-            <Dato k="Pedido que lo originó" v={NO_DISPONIBLE} />
-            <Dato k="Instante exacto del incumplimiento" v={NO_DISPONIBLE} />
-            <Nota className="mt-2">
-              El sistema muestra el momento en que detectó el primer incumplimiento. El pedido específico no está disponible en el resumen actual.
-            </Nota>
-          </Tarjeta>
-        )}
-
-        <Tarjeta titulo="Costos y recorrido">
-          <Dato k="Distancia total" v={NO_DISPONIBLE} />
-          <Dato k="Costo total" v={NO_DISPONIBLE} />
-          <Dato k="Utilización por tipo de vehículo" v={NO_DISPONIBLE} />
-        </Tarjeta>
+        {snapshot.idSimulacion !== null && <DetalleResultado idSimulacion={snapshot.idSimulacion} />}
 
         <div className="flex gap-2">
           <Boton onClick={() => navegar({ nombre: 'selector' })}>Nueva corrida</Boton>

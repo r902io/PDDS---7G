@@ -1,11 +1,3 @@
-/**
- * Contrato con sisrap-backend.
- *
- * Cada interfaz refleja exactamente un record de Java. Las fechas
- * LocalDateTime / LocalDate / LocalTime llegan como cadenas ISO SIN zona
- * horaria ("2026-09-01T08:30:00"); los Instant (sesión) llegan con "Z".
- * No se agrega ni se quita zona: se tratan como texto.
- */
 
 /** LocalDateTime de Java: "AAAA-MM-DDTHH:MM[:SS[.fff]]", sin zona. */
 export type FechaHoraLocal = string;
@@ -278,4 +270,75 @@ export interface ErrorSpring {
   error?: string;
   message?: string;
   path?: string;
+}
+
+/** Plantillas configurables ANTES de iniciar; las unidades reales se recrean al comenzar. */
+export interface AlmacenConfigurado {
+  idAlmacen: string;
+  nombre: string;
+  tipo: TipoAlmacen;
+  ubicacionX: number;
+  ubicacionY: number;
+  capacidadMaxima: number | null;
+}
+
+export type TipoFlota = 'AUTO' | 'MOTO' | 'BICICLETA';
+export interface TipoFlotaConfigurado {
+  tipo: TipoFlota;
+  cantidad: number;
+  capacidadPaquetes: number;
+  velocidadKmh: number;
+  costoPorKm: number;
+}
+export interface ConfiguracionOperativa {
+  almacenes: AlmacenConfigurado[];
+  flota: TipoFlotaConfigurado[];
+}
+
+/** Resultado persistido de una simulación. */
+export interface ResultadoPersistido {
+  idSimulacion: number;
+  escenario: string;
+  estado: string;
+  fechaInicio: FechaHoraLocal | null;
+  fechaFin: FechaHoraLocal | null;
+  tiempoRealMs: number;
+  totalPedidos: number;
+  entregados: number;
+  retrasados: number;
+  costoPlanificado: number;
+  distanciaPlanificadaKm: number;
+  pedidos: Array<{
+    idPedido: number; cliente: string; cantidad: number; prioridad: string;
+    fechaRegistro: FechaHoraLocal; fechaArribo: FechaHoraLocal | null;
+    fechaEntrega: FechaHoraLocal | null; estado: string; x: number; y: number;
+  }>;
+  incidencias: Array<{
+    idIncidencia: number; tipo: string; fechaOcurrencia: FechaHoraLocal;
+    activa: boolean; inicioBloqueo: FechaHoraLocal | null; finBloqueo: FechaHoraLocal | null;
+    idVehiculo: string | null; tipoAveria: string | null;
+    x: number | null; y: number | null;
+    retornoEstimado: FechaHoraLocal | null;
+    vertices: Array<{ orden: number; x: number; y: number }>;
+  }>;
+  mantenimientos: Array<{
+    idMantenimiento: number; idVehiculo: string; tipo: string;
+    inicio: FechaHoraLocal; fin: FechaHoraLocal; activo: boolean;
+  }>;
+  flotaInicial: Array<{
+    idVehiculo: string; tipo: string; capacidadPaquetes: number;
+    velocidadKmh: number; costoPorKm: number;
+  }>;
+  almacenesIniciales: Array<{
+    idAlmacen: string; nombre: string; tipo: string;
+    x: number; y: number; capacidadMaxima: number | null;
+  }>;
+}
+
+export interface CargaHistorica {
+  huella: string;
+  anio: number;
+  mes: number;
+  filas: number;
+  fechaCarga: string;
 }

@@ -13,6 +13,7 @@ import pe.edu.pucp.sisrap.carga.dominio.ReglasCarga;
 import pe.edu.pucp.sisrap.carga.dominio.RepositorioCarga;
 import pe.edu.pucp.sisrap.parametros.infraestructura.JdbcParametros;
 import pe.edu.pucp.sisrap.pedido.dominio.TipoPrioridad;
+import pe.edu.pucp.sisrap.simulacion.infraestructura.EsquemaDatosSimulacion;
 public class JdbcCarga implements RepositorioCarga {
     private final DataSource fuente;
     public JdbcCarga(DataSource fuente){this.fuente=fuente;}
@@ -37,15 +38,26 @@ public class JdbcCarga implements RepositorioCarga {
     }
     public boolean guardar(String huella,int anio,int mes,List<PedidoImportado> pedidos){
         try(var cn=fuente.getConnection()){
+            // También el importador heredado del perfil experimentacion debe
+            // guardar INSUMOS, nunca pedidos activos del simulador.
+            EsquemaDatosSimulacion.asegurar(cn);
             cn.setAutoCommit(false);
             try{
+                try (var periodo = cn.prepareStatement(
+                        "SELECT 1 FROM carga_pedidos_archivo WHERE anio=? AND mes=? LIMIT 1 FOR UPDATE")) {
+                    periodo.setInt(1, anio);
+                    periodo.setInt(2, mes);
+                    try (var rs = periodo.executeQuery()) {
+                        if (rs.next()) { cn.rollback(); return false; }
+                    }
+                }
                 try(var st=cn.prepareStatement("INSERT INTO carga_pedidos_archivo(huella,anio,mes,filas) VALUES(?,?,?,?)")){
                     st.setString(1,huella);st.setInt(2,anio);st.setInt(3,mes);st.setInt(4,pedidos.size());
                     try{st.executeUpdate();}catch(SQLException e){
                         if(e.getErrorCode()==1062){cn.rollback();return false;}throw e;
                     }
                 }
-                try(var st=cn.prepareStatement("INSERT INTO pedido(id_cliente,cantidad_qq,prioridad,horas_limite,fecha_llegada,ubicacion_x,ubicacion_y) VALUES(?,?,?,?,?,?,?)")){
+                try(var st=cn.prepareStatement("INSERT INTO pedido_historico(id_cliente,cantidad_qq,prioridad,horas_limite,fecha_llegada,ubicacion_x,ubicacion_y) VALUES(?,?,?,?,?,?,?)")){
                     for(var p:pedidos){
                         st.setString(1,p.cliente());st.setInt(2,p.cantidad());st.setString(3,p.prioridad().name());st.setInt(4,p.horas());
                         st.setTimestamp(5,Timestamp.valueOf(p.llegada()));st.setInt(6,p.x());st.setInt(7,p.y());st.addBatch();

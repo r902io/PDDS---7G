@@ -5,6 +5,7 @@ import java.time.LocalDate;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -20,6 +21,7 @@ import pe.edu.pucp.sisrap.simulacion.aplicacion.MotorSimulacion.ConflictoSimulac
 import pe.edu.pucp.sisrap.simulacion.dominio.ConfiguracionSimulacion;
 import pe.edu.pucp.sisrap.simulacion.dominio.EscenarioSimulacion;
 import pe.edu.pucp.sisrap.simulacion.dominio.SnapshotSimulacion;
+import pe.edu.pucp.sisrap.simulacion.dominio.ResultadoCorrida;
 
 @RestController
 @RequestMapping("/api/simulacion")
@@ -36,6 +38,16 @@ public class SimulacionController {
     /**
      * Estado público: todos los dispositivos pueden observar la simulación.
      */
+    /** Consulta una corrida finalizada sin mezclar registros de otras ejecuciones. */
+    @GetMapping("/{idSimulacion}/resultado")
+    public ResultadoCorrida resultado(@PathVariable long idSimulacion) {
+        try {
+            return servicio.resultado(idSimulacion);
+        } catch (java.util.NoSuchElementException e) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, e.getMessage());
+        }
+    }
+
     @GetMapping("/estado")
     public SnapshotSimulacion estado() {
         return servicio.estado();
@@ -72,7 +84,7 @@ public class SimulacionController {
 
         long semilla =
                 request.semilla() == null
-                        ? 42L
+                        ? java.util.concurrent.ThreadLocalRandom.current().nextLong()
                         : request.semilla();
 
         try {
