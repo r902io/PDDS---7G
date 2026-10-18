@@ -601,7 +601,7 @@ function PanelIndicadores({ snapshot, bloqueosCargados, pedidos, pedidosCompleto
   pedidosCompletos: boolean;
 }) {
   const p = snapshot.pedidos;
-  const pendientesCriticos = pedidos.filter(p => p.estado === 'PENDIENTE' || p.estado === 'EN_RUTA' || p.estado === 'REASIGNADO');
+  const pendientesCriticos = pedidos.filter(p => p.estado === 'PENDIENTE' || p.estado === 'EN_RUTA' || p.estado === 'REASIGNADO' || p.estado === 'RETRASADO');
   const relojMs = snapshot.relojSimulado ? Date.parse(snapshot.relojSimulado) : NaN;
   const criticos = pendientesCriticos.map(p => ({
     id: p.idPedido, restante: (Date.parse(p.fechaLlegada) + p.horasLimite * 3_600_000 - relojMs) / 60_000,
@@ -637,7 +637,7 @@ function PanelIndicadores({ snapshot, bloqueosCargados, pedidos, pedidosCompleto
             <div>
               <p className="font-bold text-sm">{snapshot.escenario === 'COLAPSO_LOGISTICO' ? 'Colapso logístico' : 'Incumplimiento de plazo registrado'}</p>
               <p className="text-texto text-xs">
-                <span className="font-mono">{p.retrasados}</span> pedido(s) fuera de plazo.
+                <span className="font-mono">{p.retrasados}</span> incumplimiento(s) acumulado(s), de los cuales <span className="font-mono">{p.retrasadosSinEntregar ?? p.retrasados}</span> todavía no se entregaron.
                 {snapshot.escenario !== 'COLAPSO_LOGISTICO' ? ' La corrida continúa hasta el final del período.' : ' Este escenario termina al primer incumplimiento.'}
               </p>
             </div>
@@ -665,10 +665,14 @@ function PanelIndicadores({ snapshot, bloqueosCargados, pedidos, pedidosCompleto
         <Fila k="Ingresados hasta ahora" v={formatoEntero(Math.max(0, p.total - p.futuros))} />
         <Fila k="Futuros estimados (aún no llegan)" v={formatoEntero(p.futuros)} />
         <Fila
-          k="Fuera de plazo"
+          k="Incumplimientos acumulados (incluye entregados tarde)"
           v={formatoEntero(p.retrasados)}
           claseValor={p.retrasados > 0 ? '!text-rojo font-bold' : ''}
         />
+        <Fila k="Vencidos aún sin entregar" v={formatoEntero(p.retrasadosSinEntregar ?? p.retrasados)} />
+        <Fila k="De ellos, en ruta" v={formatoEntero(p.retrasadosEnRuta ?? 0)} />
+        <Fila k="Entregados fuera de plazo" v={formatoEntero(p.retrasadosEntregados ?? 0)} />
+        <p className="text-[11px] text-texto2 mt-1">El incumplimiento es una condición del SLA y puede corresponder a un pedido en ruta o ya entregado. No debe sumarse a los estados físicos.</p>
         <div className="border-t border-borde mt-1.5 pt-1.5">
           <Fila k="Total previsto del periodo" v={formatoEntero(p.total)} />
         </div>

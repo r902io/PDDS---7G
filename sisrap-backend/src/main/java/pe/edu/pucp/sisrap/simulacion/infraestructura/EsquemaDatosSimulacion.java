@@ -130,7 +130,7 @@ public final class EsquemaDatosSimulacion {
                         ubicacion_y INT NOT NULL,
                         estado VARCHAR(24) NOT NULL,
                         fase VARCHAR(32) NOT NULL,
-                        evento VARCHAR(24) NOT NULL,
+                        evento VARCHAR(64) NOT NULL,
                         carga_paquetes INT NOT NULL,
                         id_pedido_objetivo BIGINT NULL,
                         distancia_tramo_km DOUBLE NOT NULL DEFAULT 0,
@@ -164,6 +164,31 @@ public final class EsquemaDatosSimulacion {
                         nombre VARCHAR(100) PRIMARY KEY, aplicado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
                     """);
+        }
+        // CREATE TABLE IF NOT EXISTS no actualiza tablas creadas por versiones anteriores.
+        // Los eventos de recuperación pueden superar los 24 caracteres del esquema inicial.
+        // La ampliación es idempotente y conserva todas las trayectorias ya archivadas.
+        try (PreparedStatement ps = cn.prepareStatement("""
+                SELECT CHARACTER_MAXIMUM_LENGTH
+                FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'simulacion_recorrido'
+                  AND COLUMN_NAME = 'evento'
+                """)) {
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    throw new SQLException("No existe la columna evento de simulacion_recorrido");
+                }
+                long capacidad = rs.getLong(1);
+                if (capacidad < 64) {
+                    try (Statement st = cn.createStatement()) {
+                        st.executeUpdate("""
+                                ALTER TABLE simulacion_recorrido
+                                MODIFY COLUMN evento VARCHAR(64) NOT NULL
+                                """);
+                    }
+                }
+            }
         }
         // La antigua versión guardaba el histórico en pedido. Se migra una sola vez,
         // únicamente para meses respaldados por carga_pedidos_archivo.

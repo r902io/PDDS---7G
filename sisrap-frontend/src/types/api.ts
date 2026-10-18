@@ -58,6 +58,9 @@ export interface ResumenPedidosSimulacion {
   reasignados: number;
   retrasados: number;
   entregados: number;
+  retrasadosSinEntregar: number;
+  retrasadosEntregados: number;
+  retrasadosEnRuta: number;
 }
 
 /**

@@ -7,5 +7,8 @@ public record ResumenPedidosSimulacion(
         int enRuta,
         int reasignados,
         int retrasados,
-        int entregados) {
+        int entregados,
+        int retrasadosSinEntregar,
+        int retrasadosEntregados,
+        int retrasadosEnRuta) {
 }

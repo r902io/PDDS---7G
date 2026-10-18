@@ -47,6 +47,9 @@ public record SnapshotSimulacion(
                         0,
                         0,
                         0,
+                        0,
+                        0,
+                        0,
                         0
                 ),
                 0,

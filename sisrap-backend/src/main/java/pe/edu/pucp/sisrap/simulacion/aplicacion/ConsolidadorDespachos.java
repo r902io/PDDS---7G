@@ -32,7 +32,9 @@ public final class ConsolidadorDespachos {
         if (pedidos.size() != 1) return false;
         Pedido pedido = pedidos.get(0);
         LocalDateTime ahora = contexto.instante();
-        if (pedido.getHorasLimite() < 8
+        // Los servicios priorizados (4/8/12/18 h) no esperan consolidacion.
+        // Se puede agrupar si ya existe compatibilidad, sin retener el despacho.
+        if (pedido.getHorasLimite() < 36
                 || !pedido.getFechaLlegada().plusMinutes(MINUTOS_ESPERA).isAfter(ahora)
                 || (finCorrida != null && !finCorrida.isAfter(ahora.plusMinutes(MINUTOS_ESPERA)))) {
             return false;
