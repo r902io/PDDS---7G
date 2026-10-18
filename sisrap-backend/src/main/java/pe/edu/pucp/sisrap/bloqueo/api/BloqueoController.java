@@ -24,17 +24,23 @@ import pe.edu.pucp.sisrap.bloqueo.aplicacion.GestionarBloqueos.SesionNoAutorizad
 import pe.edu.pucp.sisrap.bloqueo.dominio.BloqueoOperativo;
 import pe.edu.pucp.sisrap.bloqueo.dominio.EstadoBloqueo;
 import pe.edu.pucp.sisrap.geografia.dominio.Nodo;
+import pe.edu.pucp.sisrap.simulacion.aplicacion.MotorSimulacion;
 
 @RestController
 @RequestMapping("/api/bloqueos")
-public final class BloqueoController {
+public class BloqueoController {
 
     private final GestionarBloqueos servicio;
+    private final MotorSimulacion motor;
 
-    public BloqueoController(
-            GestionarBloqueos servicio
-    ) {
+    public BloqueoController(GestionarBloqueos servicio, MotorSimulacion motor) {
         this.servicio = servicio;
+        this.motor = motor;
+    }
+
+    private LocalDateTime relojActual() {
+        var actual = motor.estadoActual();
+        return actual.relojSimulado() == null ? LocalDateTime.now() : actual.relojSimulado();
     }
 
     @GetMapping
@@ -51,7 +57,7 @@ public final class BloqueoController {
         LocalDateTime referencia =
                 instante != null
                         ? instante
-                        : LocalDateTime.now();
+                        : relojActual();
 
         return servicio.listar()
                 .stream()
@@ -82,7 +88,7 @@ public final class BloqueoController {
             LocalDateTime referencia =
                     instante != null
                             ? instante
-                            : LocalDateTime.now();
+                            : relojActual();
 
             return respuesta(
                     servicio.buscar(idIncidencia),
@@ -125,13 +131,21 @@ public final class BloqueoController {
                             )
                             .toList();
 
-            BloqueoOperativo bloqueo =
-                    servicio.crear(
-                            token,
-                            request.inicio(),
-                            request.fin(),
-                            vertices
-                    );
+            LocalDateTime inicio = request.inicio() == null
+                    ? relojActual() : request.inicio();
+            LocalDateTime fin = request.fin() == null
+                    ? motor.estadoActual().fechaHoraFin() : request.fin();
+            // Admite clientes que todavía envían fechas del reloj real:
+            // conserva su duración pero aplica el bloqueo desde el reloj simulado.
+            if (inicio.isBefore(relojActual())
+                    || !inicio.isBefore(motor.estadoActual().fechaHoraFin())) {
+                java.time.Duration duracion = fin != null && fin.isAfter(inicio)
+                        ? java.time.Duration.between(inicio, fin) : null;
+                inicio = relojActual();
+                fin = duracion == null ? motor.estadoActual().fechaHoraFin()
+                        : inicio.plus(duracion);
+            }
+            BloqueoOperativo bloqueo = servicio.crear(token, inicio, fin, vertices);
 
             return ResponseEntity
                     .created(
@@ -143,7 +157,7 @@ public final class BloqueoController {
                     .body(
                             respuesta(
                                     bloqueo,
-                                    request.inicio()
+                                    relojActual()
                             )
                     );
 

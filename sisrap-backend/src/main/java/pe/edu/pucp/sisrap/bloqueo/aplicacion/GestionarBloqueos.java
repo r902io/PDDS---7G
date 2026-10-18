@@ -9,6 +9,8 @@ import org.springframework.stereotype.Service;
 import pe.edu.pucp.sisrap.bloqueo.dominio.BloqueoOperativo;
 import pe.edu.pucp.sisrap.bloqueo.dominio.RepositorioBloqueos;
 import pe.edu.pucp.sisrap.geografia.dominio.Nodo;
+import pe.edu.pucp.sisrap.simulacion.aplicacion.MotorSimulacion;
+import pe.edu.pucp.sisrap.simulacion.dominio.EstadoSimulacion;
 import pe.edu.pucp.sisrap.sesion.aplicacion.GestionarSesiones;
 
 @Service
@@ -16,13 +18,20 @@ public final class GestionarBloqueos {
 
     private final RepositorioBloqueos repositorio;
     private final GestionarSesiones sesiones;
+    private final MotorSimulacion motor;
 
-    public GestionarBloqueos(
-            RepositorioBloqueos repositorio,
-            GestionarSesiones sesiones
-    ) {
+    public GestionarBloqueos(RepositorioBloqueos repositorio,
+                             GestionarSesiones sesiones, MotorSimulacion motor) {
         this.repositorio = repositorio;
         this.sesiones = sesiones;
+        this.motor = motor;
+    }
+
+    private void exigirSimulacionActiva() {
+        var estado = motor.estadoActual().estado();
+        if (estado != EstadoSimulacion.EJECUTANDO && estado != EstadoSimulacion.PAUSADA) {
+            throw new IllegalArgumentException("Los bloqueos se administran durante una simulación activa");
+        }
     }
 
     public List<BloqueoOperativo> listar() {
@@ -50,12 +59,17 @@ public final class GestionarBloqueos {
     ) {
 
         validarSesion(tokenSesion);
+        exigirSimulacionActiva();
+        var snapshot = motor.estadoActual();
+        if (inicio == null || fin == null || !fin.isAfter(inicio)
+                || inicio.isBefore(snapshot.relojSimulado())
+                || !inicio.isBefore(snapshot.fechaHoraFin())) {
+            throw new IllegalArgumentException("El bloqueo debe comenzar desde el reloj simulado y antes de terminar la ejecución");
+        }
 
-        return repositorio.crear(
-                inicio,
-                fin,
-                vertices
-        );
+        BloqueoOperativo creado = repositorio.crear(inicio, fin, vertices);
+        motor.sincronizarBloqueos();
+        return creado;
     }
 
     public void cancelar(
@@ -64,6 +78,7 @@ public final class GestionarBloqueos {
     ) {
 
         validarSesion(tokenSesion);
+        exigirSimulacionActiva();
 
         if (idIncidencia <= 0) {
             throw new IllegalArgumentException(
@@ -72,12 +87,9 @@ public final class GestionarBloqueos {
         }
 
         if (!repositorio.cancelar(idIncidencia)) {
-
-            throw new NoSuchElementException(
-                    "No existe el bloqueo "
-                            + idIncidencia
-            );
+            throw new NoSuchElementException("No existe el bloqueo " + idIncidencia);
         }
+        motor.sincronizarBloqueos();
     }
 
     private void validarSesion(String token) {

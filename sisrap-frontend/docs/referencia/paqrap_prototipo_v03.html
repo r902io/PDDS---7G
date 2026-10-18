@@ -1,0 +1,3464 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PaqRap v03 — Planificador de rutas</title>
+<style>
+/* ============================================================
+   PaqRap · Prototipo de visualizador — versión 03
+   Tres escenarios: operación día a día, simulación de 5 días y
+   simulación hasta el colapso logístico, más las vistas de
+   mantenimiento.
+   Archivo único autocontenido: sin build, sin npm, sin CDN,
+   sin conexión a internet.
+   ------------------------------------------------------------
+   ÍNDICE DE SECCIONES
+     [CSS-1] Tokens de color y tipografía
+     [CSS-2] Estructura general y cabecera
+     [CSS-3] Vista selector de escenario
+     [CSS-4] Espacio de trabajo (3 zonas) y mapa
+     [CSS-5] Bloques de panel e indicadores
+     [CSS-6] Detalle de incidencia y banners de detención
+     [CSS-7] Vistas de mantenimiento
+     [JS-1]  Contrato de datos (documentación del objeto de estado)
+     [JS-2]  Parámetros del caso y biblioteca de datos
+     [JS-3]  Definición de escenarios y CONDICIONES DE TÉRMINO
+     [JS-4]  ESTADO_SIMULACION — datos por escenario
+     [JS-5]  Datos de las vistas de mantenimiento
+     [JS-6]  Utilidades de formato y fechas
+     [JS-7]  Iconos en Canvas
+     [JS-8]  Motor de dibujo del mapa (ÚNICO)
+     [JS-9]  Gráfico de evolución
+     [JS-10] Paneles: cabecera, izquierda, derecha
+     [JS-11] Vistas: selector, escenario, mantenimiento
+     [JS-12] Navegación, colapsos, modo captura y arranque
+   ============================================================ */
+
+/* ---------------- [CSS-1] Tokens ---------------- */
+:root{
+  --bg:        #0a111e;   /* fondo general, casi negro azulado */
+  --panel:     #101b2d;   /* superficie de paneles             */
+  --panel-2:   #16233a;   /* superficie elevada / filas        */
+  --border:    #24364f;
+  --text:      #e8eef7;   /* texto principal  (≥ 12:1)         */
+  --text-2:    #a7b6c9;   /* texto secundario (≥ 7:1)          */
+  --mint:      #34d399;   /* acento / valores correctos        */
+  --azul:      #60a5fa;   /* distancias                        */
+  --ambar:     #fbbf24;   /* advertencias                      */
+  --rojo:      #f87171;   /* incidencias / criticidad          */
+  --violeta:   #a78bfa;   /* motos                             */
+  /* Semáforo de criticidad (relleno de marcas sobre el mapa) */
+  --sem-verde: #22c55e;
+  --sem-ambar: #f59e0b;
+  --sem-rojo:  #ef4444;
+  /* Series del gráfico de evolución (paleta validada sobre fondo oscuro) */
+  --chart-entregas: #199e70;
+  --chart-costo:    #3987e5;
+  --sans: "Segoe UI", system-ui, -apple-system, sans-serif;
+  --mono: Consolas, "Cascadia Mono", "Courier New", monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{
+  background:var(--bg); color:var(--text);
+  font-family:var(--sans); font-size:14px; overflow:hidden;
+}
+button{font-family:inherit; cursor:pointer}
+.mono{font-family:var(--mono)}
+
+/* ---------------- [CSS-2] Estructura y cabecera ---------------- */
+#app{height:100vh; display:flex; flex-direction:column; background:var(--bg)}
+/* Modo captura: lienzo fijo de 1920×1080 para láminas uniformes */
+body.captura{overflow:auto}
+body.captura #app{width:1920px; height:1080px; min-width:1920px; min-height:1080px;
+  border:1px dashed var(--border)}
+
+header{
+  display:flex; align-items:center; gap:20px;
+  padding:10px 18px; background:var(--panel); border-bottom:1px solid var(--border);
+  flex:0 0 auto;
+}
+#marca{display:flex; align-items:baseline; gap:10px}
+#marca .logo{font-weight:700; font-size:19px; letter-spacing:.3px; cursor:pointer}
+#marca .logo b{color:var(--mint)}
+#marca .esc{color:var(--text-2); font-size:13px; border:1px solid var(--border);
+  border-radius:20px; padding:2px 10px}
+#marca .esc.activo{color:var(--mint); border-color:#1d5c3a; background:#0f2b1d}
+#hdr-derecha{display:flex; align-items:center; gap:18px; margin-left:auto}
+.hdr-item{display:flex; flex-direction:column; line-height:1.25}
+.hdr-item .lbl{font-size:11px; color:var(--text-2); text-transform:uppercase; letter-spacing:.6px}
+.hdr-item .val{font-size:14px}
+/* 1.5 — día simulado y reloj contiguos; el periodo va después */
+#bloque-tiempo{
+  display:flex; align-items:center; gap:14px;
+  border:1px solid var(--border); border-radius:9px; padding:4px 12px;
+  background:var(--panel-2);
+}
+#reloj-box{display:flex; flex-direction:column; align-items:flex-end; line-height:1.1}
+#reloj{font-family:var(--mono); font-size:26px; font-weight:600; letter-spacing:1px}
+#reloj.detenido{color:var(--rojo)}
+#hdr-fecha{font-size:11px; color:var(--text-2); letter-spacing:.6px}
+.tag-sin-termino{
+  display:inline-block; font-size:10.5px; color:var(--ambar); background:#2e2308;
+  border:1px solid #6b5310; border-radius:20px; padding:1px 8px; margin-top:2px;
+}
+.btn-hdr{
+  background:none; border:1px solid var(--border); color:var(--text-2);
+  border-radius:6px; padding:5px 10px; font-size:12px;
+}
+.btn-hdr:hover{border-color:var(--azul); color:var(--text)}
+.btn-hdr.on{color:var(--mint); border-color:var(--mint)}
+
+/* Barra de navegación contextual (láminas o pestañas de mantenimiento) */
+nav#barra{
+  display:flex; align-items:center; gap:8px; padding:7px 18px;
+  background:var(--panel); border-bottom:1px solid var(--border); flex:0 0 auto;
+}
+nav#barra .titulo{font-size:12px; color:var(--text-2); text-transform:uppercase;
+  letter-spacing:.8px; margin-right:6px}
+nav#barra button{
+  background:var(--panel-2); border:1px solid var(--border); color:var(--text-2);
+  border-radius:6px; padding:5px 12px; font-size:13px;
+}
+nav#barra button:hover{color:var(--text); border-color:var(--azul)}
+nav#barra button.activa{background:#1d3a2f; border-color:var(--mint); color:var(--mint)}
+nav#barra .nota{margin-left:auto; font-size:12px; color:var(--text-2)}
+
+/* ---------------- [CSS-3] Selector de escenario ---------------- */
+#vista-selector{flex:1 1 auto; overflow-y:auto; padding:34px 42px}
+#vista-selector h1{font-size:23px; font-weight:600; margin-bottom:5px}
+#vista-selector .sub{color:var(--text-2); font-size:13.5px; margin-bottom:26px; max-width:820px; line-height:1.5}
+#vista-selector h2.sec{font-size:12.5px; text-transform:uppercase; letter-spacing:.9px;
+  color:var(--text-2); margin:32px 0 12px; padding-bottom:6px; border-bottom:1px solid var(--border)}
+#cards{display:grid; grid-template-columns:repeat(auto-fit, minmax(290px, 1fr)); gap:16px; max-width:1180px}
+.card-esc{
+  background:var(--panel); border:1px solid var(--border); border-radius:12px;
+  padding:18px 18px 16px; text-align:left; color:var(--text); display:flex;
+  flex-direction:column; gap:9px; min-height:236px;
+}
+.card-esc:hover{border-color:var(--mint); background:#132135}
+.card-esc.bloqueada{opacity:.55; cursor:not-allowed}
+.card-esc.bloqueada:hover{border-color:var(--border); background:var(--panel)}
+.card-esc.activa{border-color:var(--mint); box-shadow:0 0 0 1px var(--mint) inset}
+.card-esc .ic{width:44px; height:44px}
+.card-esc h3{font-size:16.5px; font-weight:600}
+.card-esc p{font-size:12.8px; color:var(--text-2); line-height:1.5; flex:1 1 auto}
+.card-esc .meta{font-size:11.5px; color:var(--text-2); border-top:1px solid var(--border);
+  padding-top:8px; display:flex; flex-direction:column; gap:3px}
+.card-esc .meta b{color:var(--text); font-weight:600}
+.card-esc .cta{font-size:12.5px; color:var(--mint); font-weight:600}
+.card-esc.bloqueada .cta{color:var(--ambar)}
+#mant-lista{display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr));
+  gap:12px; max-width:1180px}
+.card-mant{
+  background:var(--panel); border:1px solid var(--border); border-radius:10px;
+  padding:13px 14px; text-align:left; color:var(--text);
+}
+.card-mant:hover{border-color:var(--azul); background:#132135}
+.card-mant b{display:block; font-size:14px; margin-bottom:3px}
+.card-mant span{font-size:12px; color:var(--text-2); line-height:1.45}
+
+/* ---------------- [CSS-4] Espacio de trabajo y mapa ---------------- */
+#vista-escenario{flex:1 1 auto; display:flex; min-height:0}
+aside{
+  flex:0 0 314px; background:var(--panel); border-color:var(--border);
+  display:flex; flex-direction:column; min-height:0; transition:flex-basis .15s ease;
+}
+#col-izq{border-right:1px solid var(--border)}
+#col-der{border-left:1px solid var(--border); flex-basis:338px}
+aside .cab{
+  display:flex; align-items:center; justify-content:space-between;
+  padding:9px 12px; border-bottom:1px solid var(--border); flex:0 0 auto;
+}
+aside .cab h2{font-size:13px; text-transform:uppercase; letter-spacing:.8px; color:var(--text-2)}
+aside .cuerpo{overflow-y:auto; padding:12px; flex:1 1 auto}
+.btn-colapsar{background:none; border:1px solid var(--border); color:var(--text-2);
+  border-radius:5px; width:24px; height:24px; font-size:13px; line-height:1}
+/* Colapsada: franja delgada con icono; el mapa reflowea al liberar el ancho */
+aside.colapsada{flex-basis:30px !important}
+aside.colapsada .cab{border-bottom:none; padding:6px 3px; justify-content:center}
+aside.colapsada .cab h2, aside.colapsada .cuerpo{display:none}
+aside.colapsada .btn-colapsar{color:var(--mint); border-color:var(--mint)}
+
+#centro{flex:1 1 auto; display:flex; flex-direction:column; min-width:0; min-height:0}
+#map-wrap{position:relative; flex:1 1 auto; min-height:0}
+#mapa{position:absolute; inset:0; width:100%; height:100%; display:block}
+#coords{
+  position:absolute; right:12px; bottom:10px; background:rgba(10,17,30,.88);
+  border:1px solid var(--border); border-radius:6px; padding:3px 10px;
+  font-family:var(--mono); font-size:13px; color:var(--text);
+}
+/* Leyenda compacta del mapa: iconos dibujados con las mismas rutas de Canvas */
+#leyenda{
+  position:absolute; left:10px; top:10px; z-index:12;
+  background:rgba(13,23,41,.93); border:1px solid var(--border); border-radius:9px;
+  padding:8px 10px; font-size:11.5px; max-width:340px;
+}
+#leyenda .cabl{display:flex; align-items:center; gap:8px; margin-bottom:6px}
+#leyenda .cabl b{font-size:11px; text-transform:uppercase; letter-spacing:.7px; color:var(--text-2)}
+#leyenda .cabl button{margin-left:auto; background:none; border:1px solid var(--border);
+  color:var(--text-2); border-radius:4px; font-size:10px; padding:1px 6px}
+#leyenda .grid{display:grid; grid-template-columns:repeat(2, auto); gap:3px 16px}
+#leyenda .it{display:flex; align-items:center; gap:6px; color:var(--text-2); white-space:nowrap}
+#leyenda canvas{width:26px; height:20px; flex:0 0 auto}
+#leyenda.min .grid, #leyenda.min .pie{display:none}
+#leyenda .pie{margin-top:6px; padding-top:5px; border-top:1px solid var(--border);
+  color:var(--text-2); font-size:10.5px; line-height:1.45}
+#tooltip{
+  position:absolute; display:none; z-index:30; max-width:300px;
+  background:#0d1729; border:1px solid var(--mint); border-radius:8px;
+  padding:10px 12px; font-size:12.5px; box-shadow:0 6px 22px rgba(0,0,0,.55);
+}
+#tooltip h4{font-size:13px; margin-bottom:5px}
+#tooltip table{border-collapse:collapse}
+#tooltip td{padding:1.5px 0; vertical-align:top}
+#tooltip td:first-child{color:var(--text-2); padding-right:10px; white-space:nowrap}
+
+/* Panel inferior con el gráfico de evolución (láminas de cierre y colapso) */
+#panel-cierre{display:none; flex:0 0 auto; border-top:1px solid var(--border);
+  background:var(--panel); padding:10px 16px 12px}
+#panel-cierre h3{font-size:13px; text-transform:uppercase; letter-spacing:.8px;
+  color:var(--text-2); margin-bottom:6px}
+#chart-wrap{position:relative; height:220px}
+#chart{position:absolute; inset:0; width:100%; height:100%; display:block}
+#chart-tip{position:absolute; display:none; background:#0d1729; border:1px solid var(--border);
+  border-radius:7px; padding:7px 10px; font-size:12px; pointer-events:none; z-index:20;
+  box-shadow:0 4px 16px rgba(0,0,0,.5)}
+#resumen-cierre{display:flex; gap:26px; flex-wrap:wrap; margin-top:8px;
+  font-size:12.5px; color:var(--text-2)}
+#resumen-cierre .mono{color:var(--text)}
+
+/* ---------------- [CSS-5] Bloques de panel ---------------- */
+.bloque{background:var(--panel-2); border:1px solid var(--border); border-radius:9px;
+  padding:11px 12px; margin-bottom:11px}
+.bloque h3{font-size:12px; text-transform:uppercase; letter-spacing:.7px;
+  color:var(--text-2); margin-bottom:8px}
+.bloque .aclara{font-size:11.5px; color:var(--text-2); line-height:1.45;
+  margin:-4px 0 8px}
+.fila{display:flex; justify-content:space-between; align-items:baseline; padding:2.5px 0; gap:10px}
+.fila .k{color:var(--text-2)}
+.fila .k small{color:#8194ab; font-size:11.5px}
+.fila .v{font-family:var(--mono); font-size:13.5px; white-space:nowrap}
+.total{border-top:1px solid var(--border); margin-top:5px; padding-top:6px; font-weight:600}
+.kpi-grande{font-family:var(--mono); font-size:34px; font-weight:700; color:var(--mint);
+  line-height:1.1}
+.kpi-grande.rojo{color:var(--rojo)}
+.pill{display:inline-block; border-radius:20px; padding:2px 11px; font-size:12px; font-weight:600}
+.pill.ok{background:#0f2b1d; color:#4ade80; border:1px solid #1d5c3a}
+.pill.warn{background:#2e2308; color:var(--ambar); border:1px solid #6b5310}
+.pill.crit{background:#331313; color:var(--rojo); border:1px solid #7a2727}
+.sem-verde{color:#4ade80} .sem-ambar{color:var(--ambar)} .sem-rojo{color:var(--rojo)}
+.barra{height:7px; background:#0b1322; border-radius:4px; overflow:hidden; margin-top:3px}
+.barra i{display:block; height:100%; border-radius:4px}
+label.campo{display:block; font-size:12px; color:var(--text-2); margin:7px 0 3px}
+input[type="datetime-local"], input[type="number"], input[type="text"], select{
+  background:#0b1322; border:1px solid var(--border); color:var(--text);
+  border-radius:6px; padding:5px 8px; font-family:var(--mono); font-size:13px; width:100%;
+}
+input.num-corto{width:64px; text-align:right}
+.sem-config{display:flex; align-items:center; gap:8px; padding:3px 0; font-size:13px}
+.sem-config .dot{width:11px; height:11px; border-radius:50%; flex:0 0 auto}
+
+/* Biblioteca de datos cargados */
+.mes{display:flex; align-items:center; gap:8px; padding:5px 0; border-bottom:1px dashed #1c2c45}
+.mes:last-of-type{border-bottom:none}
+.mes .nombre{font-family:var(--mono); font-size:12.5px; flex:0 0 auto; min-width:56px}
+.mes .marcas{display:flex; gap:5px; flex:1 1 auto; flex-wrap:wrap}
+.marca-arch{font-size:10.5px; font-weight:600; border-radius:5px; padding:1.5px 6px; white-space:nowrap}
+.marca-arch.cargado{color:#4ade80; background:#0f2b1d}
+.marca-arch.faltante{color:var(--rojo); background:#331313}
+.marca-arch.invalido{color:var(--ambar); background:#2e2308}
+.mes button{background:none; border:1px solid var(--border); color:var(--azul);
+  border-radius:5px; font-size:10.5px; padding:2px 6px}
+.mes button:hover{border-color:var(--azul)}
+.nota-panel{font-size:11.5px; color:var(--text-2); line-height:1.5; margin-top:8px;
+  border-left:2px solid var(--border); padding-left:8px}
+.nota-panel.warn{border-left-color:var(--ambar); color:var(--ambar)}
+.nota-panel.info{border-left-color:var(--azul)}
+#msg-archivos{font-size:12.5px; color:var(--rojo); margin-top:8px; line-height:1.5}
+#btn-iniciar{
+  width:100%; margin-top:12px; padding:10px; border:none; border-radius:8px;
+  background:var(--mint); color:#052e1c; font-size:15px; font-weight:700;
+}
+#btn-iniciar:disabled{background:#24364f; color:#8194ab; cursor:not-allowed}
+details.formato{margin-top:9px; font-size:12.5px}
+details.formato summary{color:var(--azul); cursor:pointer; font-size:12.5px}
+details.formato .ej{background:#0b1322; border:1px solid var(--border); border-radius:6px;
+  padding:7px 9px; margin:7px 0; font-family:var(--mono); font-size:12px; color:var(--mint);
+  overflow-x:auto; white-space:nowrap}
+details.formato dl{display:grid; grid-template-columns:auto 1fr; gap:2px 10px; margin:4px 0 10px}
+details.formato dt{font-family:var(--mono); color:var(--azul)}
+details.formato dd{color:var(--text-2)}
+table.flota{width:100%; border-collapse:collapse; font-size:12.5px}
+table.flota th{color:var(--text-2); font-weight:600; text-align:right; padding:3px 4px;
+  border-bottom:1px solid var(--border)}
+table.flota th:first-child, table.flota td:first-child{text-align:left}
+table.flota td{padding:3.5px 4px; text-align:right; font-family:var(--mono);
+  font-size:12.5px; white-space:nowrap}
+table.flota td:first-child{font-family:var(--sans)}
+/* Lista de incidencias */
+.incid{display:flex; align-items:center; gap:9px; width:100%; text-align:left;
+  background:#0b1322; border:1px solid var(--border); border-radius:8px;
+  padding:8px 10px; margin-bottom:7px; color:var(--text)}
+.incid:hover{border-color:var(--azul)}
+.incid canvas{width:22px; height:22px; flex:0 0 auto}
+.incid .tit{font-size:13px; font-weight:600}
+.incid .sub{font-size:11.5px; color:var(--text-2); font-family:var(--mono)}
+.incid .est{margin-left:auto; font-size:11px; font-weight:600; white-space:nowrap}
+.incid .est.activo{color:var(--rojo)} .incid .est.resuelta{color:#4ade80}
+/* Pedidos recientes (día a día) */
+.ped-rec{display:flex; gap:8px; align-items:baseline; padding:4px 0;
+  border-bottom:1px dashed #1c2c45; font-size:12.5px}
+.ped-rec:last-child{border-bottom:none}
+.ped-rec .h{font-family:var(--mono); color:var(--text-2); flex:0 0 auto}
+.ped-rec .d{flex:1 1 auto}
+.ped-rec .q{font-family:var(--mono); color:var(--text-2)}
+
+/* ---------------- [CSS-6] Detalle de incidencia y banners ---------------- */
+#backdrop{position:fixed; inset:0; background:rgba(4,8,15,.62); display:none; z-index:40}
+#detalle{
+  position:fixed; top:0; right:0; bottom:0; width:450px; max-width:92vw; z-index:50;
+  background:var(--panel); border-left:1px solid var(--mint);
+  box-shadow:-14px 0 40px rgba(0,0,0,.6); display:none; flex-direction:column;
+}
+body.captura #backdrop, body.captura #detalle{position:absolute}
+#detalle .cab{display:flex; align-items:center; gap:10px; padding:13px 16px;
+  border-bottom:1px solid var(--border)}
+#detalle .cab h2{font-size:15px}
+#detalle .cab canvas{width:26px; height:26px; flex:0 0 auto}
+#detalle .cab .mono{color:var(--text-2); font-size:12px}
+#detalle .cab button{margin-left:auto; background:none; border:1px solid var(--border);
+  color:var(--text-2); border-radius:6px; width:28px; height:28px; font-size:15px}
+#detalle .cuerpo{padding:14px 16px; overflow-y:auto}
+#detalle h3{font-size:12px; text-transform:uppercase; letter-spacing:.7px;
+  color:var(--text-2); margin:13px 0 6px}
+#detalle h3:first-child{margin-top:0}
+#detalle .dato{display:flex; gap:10px; padding:3px 0; font-size:13.5px}
+#detalle .dato .k{flex:0 0 152px; color:var(--text-2)}
+#detalle .dato .v{flex:1}
+.reasig{background:#0b1322; border:1px solid var(--border); border-radius:7px;
+  padding:8px 10px; margin-bottom:7px; font-size:12.5px}
+.reasig .quien{font-family:var(--mono); font-size:12.5px; margin-bottom:3px}
+.reasig .quien b{color:var(--mint)}
+.reasig .motivo{color:var(--text-2); line-height:1.45}
+.delta-pos{color:var(--ambar); font-family:var(--mono)}
+/* Banner de detención: distingue colapso de falta de datos */
+/* Franja superior: ocupa el ancho completo para no tapar ni la leyenda
+   ni los nodos del mapa. Cuando está visible, la leyenda baja. */
+#banner{
+  position:absolute; left:0; right:0; top:0; z-index:20;
+  border-radius:0 0 10px 10px; padding:8px 18px; display:none; align-items:center; gap:16px;
+  box-shadow:0 6px 22px rgba(0,0,0,.5);
+}
+#map-wrap.con-banner #leyenda{ top:74px }
+#banner.colapso{background:#3a1113; border:1px solid #b91c1c}
+#banner.sin-datos{background:#33280a; border:1px solid #a16207}
+#banner .tit{font-size:14.5px; font-weight:700; letter-spacing:.4px}
+#banner.colapso .tit{color:#fca5a5}
+#banner.sin-datos .tit{color:#fcd34d}
+#banner .txt{font-size:12.5px; color:var(--text); line-height:1.45}
+
+/* ---------------- [CSS-7] Vistas de mantenimiento ---------------- */
+#vista-mant{flex:1 1 auto; overflow-y:auto; padding:20px 26px; display:none}
+#vista-mant h1{font-size:19px; font-weight:600; margin-bottom:3px}
+#vista-mant .sub{color:var(--text-2); font-size:13px; margin-bottom:16px; max-width:900px; line-height:1.5}
+.mant-cols{display:flex; gap:20px; align-items:flex-start; flex-wrap:wrap}
+.mant-tabla{flex:1 1 620px; min-width:0; background:var(--panel);
+  border:1px solid var(--border); border-radius:10px; overflow:hidden}
+.mant-tabla .cabt{display:flex; align-items:center; gap:10px; padding:10px 14px;
+  border-bottom:1px solid var(--border)}
+.mant-tabla .cabt h3{font-size:13px; text-transform:uppercase; letter-spacing:.7px; color:var(--text-2)}
+.mant-tabla .cabt .cnt{font-size:12px; color:var(--text-2); margin-left:auto; font-family:var(--mono)}
+.tabla-scroll{overflow-x:auto; max-height:calc(100vh - 330px)}
+table.datos{width:100%; border-collapse:collapse; font-size:12.5px}
+table.datos th{position:sticky; top:0; background:var(--panel-2); color:var(--text-2);
+  font-weight:600; text-align:left; padding:7px 11px; border-bottom:1px solid var(--border);
+  white-space:nowrap; font-size:11.5px; text-transform:uppercase; letter-spacing:.5px}
+table.datos td{padding:7px 11px; border-bottom:1px solid #1a2940; white-space:nowrap}
+table.datos tr:hover td{background:#132135}
+table.datos tr.sel td{background:#16304a}
+table.datos td.mono{font-family:var(--mono)}
+table.datos .acc{background:none; border:1px solid var(--border); color:var(--azul);
+  border-radius:5px; font-size:11px; padding:2px 8px}
+table.datos .acc:hover{border-color:var(--azul)}
+.mant-form{flex:0 0 316px; background:var(--panel); border:1px solid var(--border);
+  border-radius:10px; padding:14px 16px}
+.mant-form h3{font-size:13px; text-transform:uppercase; letter-spacing:.7px;
+  color:var(--text-2); margin-bottom:4px}
+.mant-form .hint{font-size:11.5px; color:var(--text-2); line-height:1.45; margin-bottom:8px}
+.mant-form .acciones{display:flex; gap:8px; margin-top:14px}
+.mant-form button{flex:1 1 auto; padding:8px; border-radius:7px; font-size:13px; font-weight:600;
+  border:1px solid var(--border); background:var(--panel-2); color:var(--text)}
+.mant-form button.primario{background:var(--mint); color:#052e1c; border-color:var(--mint)}
+.mant-form button:hover{border-color:var(--azul)}
+.badge{font-size:11px; font-weight:600; border-radius:5px; padding:1.5px 7px}
+.badge.ok{color:#4ade80; background:#0f2b1d}
+.badge.warn{color:var(--ambar); background:#2e2308}
+.badge.crit{color:var(--rojo); background:#331313}
+.badge.neutro{color:var(--text-2); background:#1a2940}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- ===================== CABECERA ===================== -->
+  <header>
+    <div id="marca">
+      <span class="logo" id="logo">Paq<b>Rap</b> · Planificador de rutas</span>
+      <span class="esc" id="hdr-escenario">Seleccione un escenario</span>
+    </div>
+    <div id="hdr-derecha">
+      <div class="hdr-item" id="hdr-turno-box">
+        <span class="lbl">Turno vigente</span>
+        <span class="val" id="hdr-turno">—</span>
+      </div>
+      <!-- 1.5 · día simulado y reloj contiguos -->
+      <div id="bloque-tiempo">
+        <div class="hdr-item">
+          <span class="lbl">Día simulado</span>
+          <span class="val" id="hdr-dia">—</span>
+          <span class="tag-sin-termino" id="hdr-tag" style="display:none">sin término predefinido</span>
+        </div>
+        <div id="reloj-box">
+          <span id="hdr-fecha">—</span>
+          <span id="reloj">00:00:00</span>
+        </div>
+      </div>
+      <div class="hdr-item" id="hdr-periodo-box">
+        <span class="lbl" id="hdr-periodo-lbl">Periodo</span>
+        <span class="val mono" id="hdr-periodo" style="font-size:12.5px">—</span>
+      </div>
+      <button class="btn-hdr" id="btn-mant">Mantenimiento</button>
+      <button class="btn-hdr" id="btn-captura" title="Fija el lienzo a 1920×1080 px para capturas uniformes">⛶ 1920×1080</button>
+    </div>
+  </header>
+
+  <!-- ============ BARRA CONTEXTUAL (láminas / pestañas) ============ -->
+  <nav id="barra"></nav>
+
+  <!-- ===================== VISTA: SELECTOR ===================== -->
+  <section id="vista-selector">
+    <h1>Seleccione el escenario de trabajo</h1>
+    <p class="sub">Los tres escenarios comparten el mismo motor de planificación, el mismo mapa
+      y los mismos indicadores. Lo único que cambia entre ellos es de dónde proviene la demanda,
+      cuál es la condición de término y qué indicadores tienen sentido mostrar.
+      Una vez iniciada la corrida el escenario no puede cambiarse.</p>
+    <div id="cards"></div>
+    <h2 class="sec">Resto de funcionalidades · mantenimiento de datos maestros</h2>
+    <div id="mant-lista"></div>
+  </section>
+
+  <!-- ===================== VISTA: ESCENARIO ===================== -->
+  <section id="vista-escenario" style="display:none">
+    <aside id="col-izq">
+      <div class="cab">
+        <h2 id="titulo-izq">Parámetros</h2>
+        <button class="btn-colapsar" id="btn-col-izq" title="Ocultar / mostrar panel">⟨</button>
+      </div>
+      <div class="cuerpo" id="cuerpo-izq"></div>
+    </aside>
+
+    <section id="centro">
+      <div id="map-wrap">
+        <canvas id="mapa"></canvas>
+        <div id="leyenda">
+          <div class="cabl"><b>Leyenda</b><button id="btn-leyenda">ocultar</button></div>
+          <div class="grid" id="leyenda-grid"></div>
+          <div class="pie">Ruta: tramo recorrido punteado, tramo pendiente en línea llena.
+            Los iconos se dibujan a tamaño fijo en píxeles, por lo que siguen siendo legibles
+            con el mapa completo de 70 × 50 km a la vista.</div>
+        </div>
+        <div id="banner"><div><div class="tit" id="banner-tit"></div><div class="txt" id="banner-txt"></div></div></div>
+        <div id="coords" class="mono">x: — · y: —</div>
+        <div id="tooltip"></div>
+      </div>
+      <div id="panel-cierre">
+        <h3 id="cierre-titulo">Evolución</h3>
+        <div id="chart-wrap"><canvas id="chart"></canvas><div id="chart-tip"></div></div>
+        <div id="resumen-cierre"></div>
+      </div>
+    </section>
+
+    <aside id="col-der">
+      <div class="cab">
+        <button class="btn-colapsar" id="btn-col-der" title="Ocultar / mostrar panel">⟩</button>
+        <h2>Indicadores</h2>
+      </div>
+      <div class="cuerpo" id="cuerpo-der"></div>
+    </aside>
+  </section>
+
+  <!-- ===================== VISTA: MANTENIMIENTO ===================== -->
+  <section id="vista-mant"></section>
+</div>
+
+<div id="backdrop"></div>
+<aside id="detalle">
+  <div class="cab">
+    <canvas id="det-icono" width="52" height="52"></canvas>
+    <div>
+      <h2 id="det-titulo">Detalle</h2>
+      <span class="mono" id="det-sub"></span>
+    </div>
+    <button id="det-cerrar" title="Cerrar y volver a la lámina anterior">✕</button>
+  </div>
+  <div class="cuerpo" id="det-cuerpo"></div>
+</aside>
+
+<script>
+"use strict";
+/* ================================================================
+ * [JS-1] CONTRATO DE DATOS — ESTADO_SIMULACION
+ * ================================================================
+ * Este objeto describe POR COMPLETO cada lámina de cada escenario.
+ * El resto del archivo se limita a LEERLO y DIBUJARLO. Cuando exista
+ * el planificador en Java, su API deberá devolver un objeto con esta
+ * misma forma y la capa de presentación no cambiará.
+ *
+ * Agregar un escenario nuevo debe ser agregar DATOS, no código de
+ * dibujo: el motor del mapa es único y recibe el estado por parámetro.
+ *
+ * ESTADO_SIMULACION = {
+ *   escenarioActivo: 'diaadia' | 'sim5d' | 'colapso' | null,
+ *   escenarios: { <id>: { laminas: { <n>: LAMINA } } }
+ * }
+ *
+ * LAMINA = {
+ *   titulo:   nombre de la lámina en la barra de navegación,
+ *
+ *   instante: {
+ *     dia:        número de día de la corrida (1..N),
+ *     fecha:      fecha calendario "dd/mm/aaaa" del reloj,
+ *     hora:       reloj de simulación "HH:MM:SS",
+ *     turno:      turno vigente "HH:MM–HH:MM" (cambios 07:00/15:00/23:00),
+ *     progresoPct:  avance del periodo 0..100  — SOLO cuando el escenario
+ *                   tiene duración conocida (simulación de 5 días),
+ *     transcurrido: tiempo desde el inicio de la corrida, "H h MM min"
+ *                   — escenarios sin término predefinido,
+ *     relojEnVivo:  true si el reloj debe avanzar con el tiempo real
+ *                   (operación día a día); la simulación avanza sola,
+ *                   NO existe ningún control de reproducción,
+ *     detenido:     true si el reloj quedó congelado (colapso)
+ *   },
+ *
+ *   almacenes: [{
+ *     id, nombre, x, y,       — nodo de la retícula (coordenadas enteras)
+ *     central: bool,          — dibuja el icono de almacén central
+ *     stock,                  — unidades disponibles; null = inventario infinito
+ *     capacidad,              — tope de recarga; null = infinito
+ *     nota                    — texto libre opcional (recarga inminente, etc.)
+ *   }],
+ *
+ *   unidades: [{
+ *     id, tipo,               — 'auto' | 'moto' | 'bicicleta'
+ *     estado,                 — 'en_ruta' | 'refrigerio' | 'en_almacen'
+ *                               | 'estacionada' | 'averiada'
+ *     x, y,                   — posición actual; si hay ruta, SIEMPRE cae
+ *                               sobre uno de sus tramos
+ *     carga, capacidad,       — paquetes a bordo / capacidad del tipo
+ *     ruta: {                 — null si no hay ruta activa. La ruta es
+ *                               COMPLETA: nace en un almacén y termina en
+ *                               el destino inmediato.
+ *       origen,               — id del almacén del que salió la unidad
+ *       modo,                 — 'entrega' (va hacia un cliente) |
+ *                               'retorno' (va a recargar a un almacén)
+ *       destino: { tipo:'cliente'|'almacen', etiqueta, x, y },
+ *       pedido,               — id del pedido en reparto, o null
+ *       nodos: [[x,y],...],   — polilínea con tramos SOLO horizontales o
+ *                               verticales; nunca una diagonal
+ *       alternativa: bool     — true si es un desvío por bloqueo
+ *     },
+ *     proximaEntrega,         — hora estimada de la siguiente entrega
+ *     nota                    — texto libre opcional (refrigerio, avería…)
+ *   }],
+ *
+ *   pedidos: [{               — pedidos EN CURSO, visibles en el mapa
+ *     id, cliente, x, y,      — cliente 'c####' y nodo de entrega
+ *     cantidad,               — unidades del producto P
+ *     plazoHoras,             — plazo comprometido (36 regular; 4/8/12/18 prior.)
+ *     llegada, vence,         — "dd/mm HH:MM" de registro y de vencimiento
+ *     restanteHoras           — horas hasta el vencimiento; el color del
+ *                               semáforo se calcula con los umbrales vigentes
+ *   }],
+ *
+ *   pedidosRecientes: [{ hora, id, cliente, cantidad, plazoHoras }]
+ *                           — SOLO operación día a día: pedidos que acaban
+ *                             de registrarse (la demanda no viene de un
+ *                             archivo cerrado, ingresa conforme ocurre)
+ *
+ *   bloqueos: [{              — tramos bloqueados ACTIVOS en este instante
+ *     id, nodos:[[x,y],[x,y]],— extremos del tramo (recto, sin diagonales)
+ *     desde, hasta            — ventana "dd/mm HH:MM"
+ *   }],
+ *
+ *   incidencias: [{           — lista del panel derecho; el clic abre el detalle
+ *     id, tipo,               — 'bloqueo' | 'averia'
+ *     titulo, momento, estado,
+ *     detalle: {...}          — contenido del panel de detalle:
+ *       · bloqueo: tramo, ventana, origen (registro del archivo),
+ *         rutasAfectadas[], alternativa{trazo, originalKm, alternativaKm,
+ *         deltaKm, deltaCosto}
+ *       · avería: unidad, tipoAveria (1|2|3), regla, lugar, indisponibilidad,
+ *         retorno, cargaAfectada, reasignaciones[{pedido, a, motivo}]
+ *   }],
+ *
+ *   kpis: {
+ *     entregasEnPlazo,        — entregas realizadas dentro de plazo
+ *     estadoOperacion,        — 'ok' | 'colapso'. Al primer incumplimiento la
+ *                               corrida COLAPSA, por eso NO existe contador
+ *                               de retrasadas acumuladas.
+ *     holguraMinima: {horas, pedido} | null,   — menor tiempo restante entre
+ *                               los pedidos en curso: anticipa el colapso
+ *     distanciaKm: {autos, motos, bicicletas}, — desglose por tipo
+ *     costoSoles:  {autos, motos, bicicletas}, — = distancia × tarifa del tipo
+ *     utilizacionPct: {autos, motos, bicicletas}
+ *   },
+ *
+ *   detencion: {              — presente solo si la corrida se detuvo
+ *     motivo,                 — 'colapso' | 'sin_datos'
+ *     titulo, texto,          — mensaje que se muestra en el banner
+ *     pedido: {...}           — pedido que originó el colapso, si aplica
+ *   },
+ *
+ *   cierre: {                 — panel inferior con el gráfico de evolución
+ *     titulo,
+ *     paneles: [{titulo, clave, color, fmt, semaforo}],
+ *                             — 'clave' apunta a una serie; 'fmt' es
+ *                               'num' | 'soles' | 'horas'
+ *     series: { dias:[...], <clave>:[...] },
+ *     resumen: [{k, v}]       — pares que se listan bajo el gráfico
+ *   }
+ * }
+ * ================================================================ */
+
+/* ================================================================
+ * [JS-2] PARÁMETROS DEL CASO Y BIBLIOTECA DE DATOS
+ * ================================================================ */
+
+/* Constantes del enunciado. La capacidad y la tarifa por kilómetro son
+ * ESTÁTICAS: no cambian nunca durante una corrida. */
+const CONFIG = {
+  ciudad: { anchoKm: 70, altoKm: 50 },          // retícula 71×51 nodos, 1 km/celda
+  semaforo: { verdeMayorQue: 18, rojoMenorQue: 4 },  // horas restantes (editable)
+  /* Acondicionamiento: 1 hora POR ENTREGA, no por pedido. Un pedido
+     atendido con dos entregas parciales suma 2 h, independientemente
+     de la cantidad de productos de cada entrega. Ese tiempo no cuenta
+     dentro del plazo comprometido. */
+  acondicionamientoHorasPorEntrega: 1,
+  flota: [
+    { tipo:"auto",      plural:"Autos",      clave:"autos",      nDefecto:4, capacidad:24, velDefecto:40, costoKm:8 },
+    { tipo:"moto",      plural:"Motos",      clave:"motos",      nDefecto:6, capacidad:8,  velDefecto:25, costoKm:6 },
+    { tipo:"bicicleta", plural:"Bicicletas", clave:"bicicletas", nDefecto:3, capacidad:4,  velDefecto:12, costoKm:3 }
+  ]
+};
+
+/* ----------------------------------------------------------------
+ * PARÁMETROS DE FLOTA MODIFICABLES
+ * ----------------------------------------------------------------
+ * · velocidad — editable EN CALIENTE, por tipo de unidad. El cambio
+ *   aplica a partir de la siguiente planificación: las unidades que
+ *   ya están en ruta conservan la velocidad con la que fueron
+ *   planificadas.
+ * · n (tamaño de la flota) — solo se puede cambiar ANTES de iniciar
+ *   una ejecución. Durante la corrida la composición es de solo
+ *   lectura.
+ * · capacidad y tarifa — estáticas, viven en CONFIG.
+ * ---------------------------------------------------------------- */
+const PARAM_FLOTA = {};
+CONFIG.flota.forEach(f => {
+  PARAM_FLOTA[f.tipo] = {
+    n: f.nDefecto,
+    velocidad: f.velDefecto,
+    /* velocidad con la que se planificaron las rutas actualmente en
+       curso; si difiere de 'velocidad', hay un cambio pendiente de
+       aplicarse en la siguiente planificación */
+    velocidadVigente: f.velDefecto
+  };
+});
+function flotaDe(tipo){ return CONFIG.flota.find(f => f.tipo === tipo); }
+
+/* ----------------------------------------------------------------
+ * BIBLIOTECA DE DATOS CARGADOS  (corrección 1.2)
+ * ----------------------------------------------------------------
+ * Los archivos de entrada son MENSUALES y se cargan una sola vez:
+ * quedan disponibles para todas las corridas posteriores. Por eso la
+ * biblioteca no se deriva del periodo, sino que es un inventario
+ * propio del sistema.
+ *
+ * Esto permite que el escenario de colapso —cuya duración no se
+ * conoce por adelantado— funcione igual: se exige el mes inicial y
+ * los meses siguientes se solicitan conforme la corrida avanza.
+ *
+ * Estado de cada archivo: 'cargado' | 'faltante' | 'invalido'.
+ * Se persiste en sessionStorage para que sobreviva entre corridas.
+ * ---------------------------------------------------------------- */
+const BIBLIOTECA_INICIAL = {
+  "202608": { pedidos:"cargado",  bloqueos:"invalido" },
+  "202609": { pedidos:"faltante", bloqueos:"cargado"  },
+  /* 202610 se conoce pero aún no se ha cargado: es el mes que la
+     simulación de colapso pedirá cuando la corrida cruce a octubre. */
+  "202610": { pedidos:"faltante", bloqueos:"faltante" }
+};
+let BIBLIOTECA = (() => {
+  try {
+    const g = sessionStorage.getItem("pq_biblioteca");
+    if (g) return JSON.parse(g);
+  } catch(e){ /* sessionStorage puede no estar disponible; se usa la semilla */ }
+  return JSON.parse(JSON.stringify(BIBLIOTECA_INICIAL));
+})();
+function guardarBiblioteca(){
+  try { sessionStorage.setItem("pq_biblioteca", JSON.stringify(BIBLIOTECA)); } catch(e){}
+}
+/* Meses presentes en la biblioteca, ordenados */
+function mesesBiblioteca(){ return Object.keys(BIBLIOTECA).sort(); }
+/* Último mes con AMBOS archivos correctamente cargados */
+function ultimoMesCompleto(){
+  const ok = mesesBiblioteca().filter(m =>
+    BIBLIOTECA[m].pedidos === "cargado" && BIBLIOTECA[m].bloqueos === "cargado");
+  return ok.length ? ok[ok.length - 1] : null;
+}
+function mesCompleto(m){
+  const e = BIBLIOTECA[m];
+  return !!e && e.pedidos === "cargado" && e.bloqueos === "cargado";
+}
+
+/* ================================================================
+ * [JS-3] DEFINICIÓN DE ESCENARIOS Y CONDICIONES DE TÉRMINO
+ * ================================================================ */
+
+/* Metadatos de presentación de cada escenario. */
+const ESCENARIOS = {
+  diaadia: {
+    id:"diaadia",
+    nombre:"Operación día a día",
+    corto:"Día a día",
+    icono:"auto",
+    resumen:"Ejecución en tiempo real de la operación vigente. Los pedidos ingresan " +
+            "conforme se registran, no desde un archivo cerrado, y la operación no " +
+            "tiene fecha de término.",
+    duracionDias:null,          // sin término
+    inicioISO:"2026-09-08T07:00",
+    progreso:"transcurrido",    // el indicador de progreso no aplica
+    laminas:[1,2]
+  },
+  sim5d: {
+    id:"sim5d",
+    nombre:"Simulación de cinco días",
+    corto:"Simulación 5D",
+    icono:"moto",
+    resumen:"Corrida cerrada sobre un periodo de cinco días a partir de los archivos " +
+            "mensuales de pedidos y bloqueos. Sirve para dimensionar la flota y " +
+            "comparar planificaciones.",
+    duracionDias:5,
+    inicioISO:"2026-08-30T07:00",
+    progreso:"periodo",
+    laminas:[1,2,3,4,5]
+  },
+  colapso: {
+    id:"colapso",
+    nombre:"Simulación hasta el colapso logístico",
+    corto:"Colapso",
+    icono:"bicicleta",
+    resumen:"Corrida sin fecha de término que se detiene en el instante del primer " +
+            "incumplimiento de un plazo comprometido. La holgura mínima es aquí el " +
+            "indicador protagonista: es lo que anticipa el colapso mientras la " +
+            "operación todavía es corregible.",
+    duracionDias:null,          // sin término predefinido
+    /* Arranca el 25/09 a propósito: la corrida cruza a octubre sin que
+       se sepa de antemano cuántos meses hará falta cargar. */
+    inicioISO:"2026-09-25T07:00",
+    progreso:"transcurrido",
+    laminas:[1,2,3]
+  }
+};
+
+/* ----------------------------------------------------------------
+ * CONDICIONES DE TÉRMINO — ÚNICO LUGAR DEL ARCHIVO
+ * ----------------------------------------------------------------
+ * Estructuralmente, lo único que distingue a los tres escenarios es
+ * cuándo termina la corrida. Todo lo demás (mapa, paneles, KPIs,
+ * incidencias) es común y se alimenta del mismo objeto de estado.
+ *
+ * Si mañana aparece un cuarto escenario, se agrega una entrada aquí
+ * y sus datos en ESTADO_SIMULACION. No se toca el motor de dibujo.
+ * ---------------------------------------------------------------- */
+const CONDICIONES_TERMINO = {
+  diaadia: {
+    etiqueta:"Sin término predefinido",
+    descripcion:"La operación es continua: no termina por sí sola. Solo se detiene si " +
+                "faltan datos de la red vial para el mes en curso.",
+    requiereMesInicial:true,
+    requiereTodoElPeriodo:false,
+    /* Devuelve {terminada, motivo}. El motivo viaja en el estado como
+       'detencion' y determina qué banner se muestra. */
+    evaluar: lam => lam.detencion ? { terminada:true, motivo:lam.detencion.motivo }
+                                  : { terminada:false, motivo:null }
+  },
+  sim5d: {
+    etiqueta:"Periodo fijo de cinco días",
+    descripcion:"La corrida termina al cumplirse las 120 horas del periodo elegido. " +
+                "Como la duración se conoce de antemano, el sistema puede exigir por " +
+                "adelantado todos los meses que el periodo cruza.",
+    requiereMesInicial:true,
+    requiereTodoElPeriodo:true,
+    evaluar: lam => lam.detencion ? { terminada:true, motivo:lam.detencion.motivo }
+           : (lam.instante.progresoPct >= 100 ? { terminada:true, motivo:"periodo_cumplido" }
+                                              : { terminada:false, motivo:null })
+  },
+  colapso: {
+    etiqueta:"Primer incumplimiento de un plazo comprometido",
+    descripcion:"No hay acumulación de pedidos retrasados: o el contador de retrasados " +
+                "está en cero, o la corrida terminó. Como la duración no se conoce, " +
+                "solo se exige el mes inicial y los siguientes se piden conforme avanza.",
+    requiereMesInicial:true,
+    requiereTodoElPeriodo:false,
+    evaluar: lam => lam.detencion ? { terminada:true, motivo:lam.detencion.motivo }
+                                  : { terminada:false, motivo:null }
+  }
+};
+
+/* ================================================================
+ * [JS-4] ESTADO_SIMULACION — datos de ejemplo por escenario
+ * ================================================================
+ * Coherencia garantizada en los tres escenarios:
+ *   · toda ruta nace en un almacén y termina en su destino inmediato,
+ *     con tramos exclusivamente horizontales o verticales;
+ *   · la posición de cada unidad cae sobre uno de los tramos de su ruta;
+ *   · costo = distancia × tarifa del tipo (S/ 8, 6 y 3 por km);
+ *   · ninguna unidad lleva más carga que su capacidad;
+ *   · las horas respetan los turnos 07–15 / 15–23 / 23–07 y la ventana
+ *     de refrigerio.
+ * ================================================================ */
+
+/* Atajo para las 13 unidades detenidas en un almacén (láminas de reposo) */
+function unidadesEnAlmacen(ids, x, y, nota){
+  return ids.map(id => ({
+    id,
+    tipo: id[0] === "A" ? "auto" : id[0] === "M" ? "moto" : "bicicleta",
+    estado:"estacionada", x, y,
+    carga:0, capacidad: id[0] === "A" ? 24 : id[0] === "M" ? 8 : 4,
+    ruta:null, proximaEntrega:"—", nota
+  }));
+}
+/* Los tres almacenes en reposo, con stock lleno */
+const ALMACENES_LLENOS = [
+  { id:"AC", nombre:"Central",              x:25, y:15, central:true,  stock:null, capacidad:null },
+  { id:"A1", nombre:"Intermedio Nor-Oeste", x:12, y:38, central:false, stock:1000, capacidad:1000 },
+  { id:"A2", nombre:"Intermedio Este",      x:55, y:27, central:false, stock:1000, capacidad:1000 }
+];
+const KPIS_CERO = {
+  entregasEnPlazo:0, estadoOperacion:"ok", holguraMinima:null,
+  distanciaKm:{autos:0, motos:0, bicicletas:0},
+  costoSoles:{autos:0, motos:0, bicicletas:0},
+  utilizacionPct:{autos:0, motos:0, bicicletas:0}
+};
+
+const ESTADO_SIMULACION = {
+  escenarioActivo: null,
+  escenarios: {
+
+  /* ============================================================
+   * ESCENARIO A · OPERACIÓN DÍA A DÍA
+   * Ejecución en tiempo real, sin fecha de término. La demanda no
+   * proviene de un archivo cerrado: los pedidos ingresan conforme
+   * se registran. Dos láminas.
+   * ============================================================ */
+  diaadia: { laminas: {
+
+    1: {
+      titulo:"Configuración e inicio",
+      instante:{ dia:1, fecha:"08/09/2026", hora:"07:00:00", turno:"07:00–15:00",
+                 transcurrido:"0 h 00 min" },
+      almacenes: JSON.parse(JSON.stringify(ALMACENES_LLENOS)),
+      unidades: unidadesEnAlmacen(
+        ["A01","A02","A03","A04","M01","M02","M03","M04","M05","M06","B01","B02","B03"],
+        25, 15, "Estacionada en AC · lista para el primer despacho"),
+      pedidos: [], pedidosRecientes: [], bloqueos: [], incidencias: [],
+      kpis: JSON.parse(JSON.stringify(KPIS_CERO))
+    },
+
+    2: {
+      titulo:"Operación en curso",
+      instante:{ dia:1, fecha:"08/09/2026", hora:"10:17:33", turno:"07:00–15:00",
+                 transcurrido:"3 h 17 min", relojEnVivo:true },
+      almacenes: [
+        { id:"AC", nombre:"Central",              x:25, y:15, central:true,  stock:null, capacidad:null },
+        { id:"A1", nombre:"Intermedio Nor-Oeste", x:12, y:38, central:false, stock:912, capacidad:1000 },
+        { id:"A2", nombre:"Intermedio Este",      x:55, y:27, central:false, stock:874, capacidad:1000 }
+      ],
+      unidades: [
+        { id:"A01", tipo:"auto", estado:"en_ruta", x:31, y:20, carga:16, capacidad:24,
+          ruta:{ origen:"AC", modo:"entrega", pedido:"P-1043",
+                 destino:{tipo:"cliente", etiqueta:"c2214", x:38, y:26},
+                 nodos:[[25,15],[25,20],[38,20],[38,26]] },
+          proximaEntrega:"10:36" },
+        { id:"A02", tipo:"auto", estado:"en_ruta", x:18, y:32, carga:9, capacidad:24,
+          ruta:{ origen:"AC", modo:"entrega", pedido:"P-1051",
+                 destino:{tipo:"cliente", etiqueta:"c8890", x:14, y:34},
+                 nodos:[[25,15],[25,32],[14,32],[14,34]] },
+          proximaEntrega:"10:44" },
+        { id:"A03", tipo:"auto", estado:"en_almacen", x:25, y:15, carga:22, capacidad:24,
+          ruta:null, proximaEntrega:"despacho 10:25", nota:"Cargando en AC" },
+        { id:"A04", tipo:"auto", estado:"en_ruta", x:48, y:27, carga:0, capacidad:24,
+          ruta:{ origen:"AC", modo:"retorno", pedido:null,
+                 destino:{tipo:"almacen", etiqueta:"A2 · recarga", x:55, y:27},
+                 nodos:[[25,15],[25,27],[55,27]] },
+          proximaEntrega:"11:05 (tras recargar en A2, 10:28)" },
+        { id:"M01", tipo:"moto", estado:"en_ruta", x:29, y:11, carga:6, capacidad:8,
+          ruta:{ origen:"AC", modo:"entrega", pedido:"P-1047",
+                 destino:{tipo:"cliente", etiqueta:"c3391", x:33, y:8},
+                 nodos:[[25,15],[25,11],[33,11],[33,8]] },
+          proximaEntrega:"10:29" },
+        { id:"M02", tipo:"moto", estado:"en_ruta", x:59, y:22, carga:4, capacidad:8,
+          ruta:{ origen:"A2", modo:"entrega", pedido:"P-1039",
+                 destino:{tipo:"cliente", etiqueta:"c7025", x:63, y:19},
+                 nodos:[[55,27],[55,22],[63,22],[63,19]] },
+          proximaEntrega:"10:31" },
+        { id:"M03", tipo:"moto", estado:"en_ruta", x:20, y:23, carga:5, capacidad:8,
+          ruta:{ origen:"AC", modo:"entrega", pedido:"P-1052",
+                 destino:{tipo:"cliente", etiqueta:"c1560", x:17, y:26},
+                 nodos:[[25,15],[25,23],[17,23],[17,26]] },
+          proximaEntrega:"10:42" },
+        { id:"M04", tipo:"moto", estado:"en_almacen", x:25, y:15, carga:0, capacidad:8,
+          ruta:null, proximaEntrega:"despacho 10:30", nota:"Cargando en AC" },
+        { id:"M05", tipo:"moto", estado:"en_ruta", x:41, y:15, carga:7, capacidad:8,
+          ruta:{ origen:"AC", modo:"entrega", pedido:"P-1044",
+                 destino:{tipo:"cliente", etiqueta:"c6118", x:46, y:11},
+                 nodos:[[25,15],[46,15],[46,11]] },
+          proximaEntrega:"10:38" },
+        { id:"M06", tipo:"moto", estado:"en_ruta", x:12, y:33, carga:0, capacidad:8,
+          ruta:{ origen:"AC", modo:"retorno", pedido:null,
+                 destino:{tipo:"almacen", etiqueta:"A1 · recarga", x:12, y:38},
+                 nodos:[[25,15],[12,15],[12,38]] },
+          proximaEntrega:"11:12 (tras recargar en A1, 10:32)" },
+        { id:"B01", tipo:"bicicleta", estado:"en_ruta", x:25, y:19, carga:3, capacidad:4,
+          ruta:{ origen:"AC", modo:"entrega", pedido:"P-1050",
+                 destino:{tipo:"cliente", etiqueta:"c4402", x:28, y:21},
+                 nodos:[[25,15],[25,21],[28,21]] },
+          proximaEntrega:"10:34" },
+        { id:"B02", tipo:"bicicleta", estado:"en_ruta", x:22, y:12, carga:2, capacidad:4,
+          ruta:{ origen:"AC", modo:"entrega", pedido:"P-1048",
+                 destino:{tipo:"cliente", etiqueta:"c9903", x:20, y:10},
+                 nodos:[[25,15],[25,12],[20,12],[20,10]] },
+          proximaEntrega:"10:33" },
+        { id:"B03", tipo:"bicicleta", estado:"estacionada", x:25, y:15, carga:0, capacidad:4,
+          ruta:null, proximaEntrega:"despacho 11:00", nota:"Estacionada en AC · turno de reserva" }
+      ],
+      pedidos: [
+        { id:"P-1043", cliente:"c2214", x:38, y:26, cantidad:16, plazoHoras:36,
+          llegada:"07/09 22:10", vence:"09/09 10:10", restanteHoras:23.9 },
+        { id:"P-1051", cliente:"c8890", x:14, y:34, cantidad:9,  plazoHoras:36,
+          llegada:"08/09 08:45", vence:"09/09 20:45", restanteHoras:34.5 },
+        { id:"P-1047", cliente:"c3391", x:33, y:8,  cantidad:6,  plazoHoras:12,
+          llegada:"08/09 06:20", vence:"08/09 18:20", restanteHoras:8.0 },
+        { id:"P-1039", cliente:"c7025", x:63, y:19, cantidad:4,  plazoHoras:18,
+          llegada:"08/09 01:55", vence:"08/09 19:55", restanteHoras:9.6 },
+        { id:"P-1052", cliente:"c1560", x:17, y:26, cantidad:5,  plazoHoras:36,
+          llegada:"08/09 09:30", vence:"09/09 21:30", restanteHoras:35.2 },
+        { id:"P-1044", cliente:"c6118", x:46, y:11, cantidad:7,  plazoHoras:8,
+          llegada:"08/09 09:12", vence:"08/09 17:12", restanteHoras:6.9 },
+        { id:"P-1050", cliente:"c4402", x:28, y:21, cantidad:3,  plazoHoras:36,
+          llegada:"08/09 08:58", vence:"09/09 20:58", restanteHoras:34.7 },
+        { id:"P-1048", cliente:"c9903", x:20, y:10, cantidad:2,  plazoHoras:36,
+          llegada:"08/09 08:40", vence:"09/09 20:40", restanteHoras:34.4 },
+        { id:"P-1055", cliente:"c5507", x:52, y:38, cantidad:11, plazoHoras:36,
+          llegada:"08/09 10:14", vence:"09/09 22:14", restanteHoras:35.9 }
+      ],
+      /* La demanda ingresa conforme se registra: no hay archivo cerrado */
+      pedidosRecientes: [
+        { hora:"10:14", id:"P-1055", cliente:"c5507", cantidad:11, plazoHoras:36 },
+        { hora:"09:30", id:"P-1052", cliente:"c1560", cantidad:5,  plazoHoras:36 },
+        { hora:"09:12", id:"P-1044", cliente:"c6118", cantidad:7,  plazoHoras:8  },
+        { hora:"08:58", id:"P-1050", cliente:"c4402", cantidad:3,  plazoHoras:36 },
+        { hora:"08:45", id:"P-1051", cliente:"c8890", cantidad:9,  plazoHoras:36 }
+      ],
+      bloqueos: [
+        { id:"BLQ-104", nodos:[[44,33],[49,33]], desde:"08/09 06:00", hasta:"08/09 14:00" }
+      ],
+      incidencias: [
+        { id:"BLQ-104", tipo:"bloqueo", titulo:"Bloqueo de tramo (44,33)–(49,33)",
+          momento:"08/09 06:00", estado:"activo",
+          detalle:{
+            tramo:[[44,33],[49,33]],
+            ventana:"08/09 06:00 – 08/09 14:00",
+            origen:"202609.bloqueadas · 08d06h00m-08d14h00m:44,33,49,33",
+            rutasAfectadas:["Despacho 10:25 de A03 → P-1055 · c5507 (52,38)"],
+            alternativa:{
+              trazo:"(25,15) → (25,36) → (52,36) → (52,38)",
+              originalKm:52, alternativaKm:50, deltaKm:-2, deltaCosto:-16 }
+          } }
+      ],
+      kpis: {
+        entregasEnPlazo:27, estadoOperacion:"ok",
+        holguraMinima:{ horas:6.9, pedido:"P-1044 · c6118" },
+        /* 212×8 = 1 696 · 168×6 = 1 008 · 44×3 = 132 */
+        distanciaKm:{autos:212, motos:168, bicicletas:44},
+        costoSoles:{autos:1696, motos:1008, bicicletas:132},
+        utilizacionPct:{autos:71, motos:63, bicicletas:48}
+      }
+    }
+
+  }},
+
+  /* ============================================================
+   * ESCENARIO B · SIMULACIÓN DE CINCO DÍAS
+   * Los cinco estados ya validados, con las correcciones de la
+   * Parte 1 aplicadas (rutas completas, destino inmediato, etc.).
+   * ============================================================ */
+  sim5d: { laminas: {
+
+    /* ---- Lámina 1 · Configuración e inicio ---- */
+    1: {
+      titulo:"Configuración e inicio",
+      instante:{ dia:1, fecha:"30/08/2026", hora:"07:00:24", turno:"07:00–15:00",
+                 progresoPct:0 },
+      almacenes: JSON.parse(JSON.stringify(ALMACENES_LLENOS)),
+      unidades: unidadesEnAlmacen(
+        ["A01","A02","A03","A04","M01","M02","M03","M04","M05","M06","B01","B02","B03"],
+        25, 15, "Estacionada en AC · todas las unidades salen la primera vez del Central"),
+      pedidos: [], bloqueos: [], incidencias: [],
+      kpis: JSON.parse(JSON.stringify(KPIS_CERO))
+    },
+
+    /* ---- Lámina 2 · Ejecución y monitoreo ---- */
+    2: {
+      titulo:"Ejecución y monitoreo",
+      instante:{ dia:2, fecha:"31/08/2026", hora:"12:30:40", turno:"07:00–15:00",
+                 progresoPct:24.6 },
+      almacenes: [
+        { id:"AC", nombre:"Central",              x:25, y:15, central:true,  stock:null, capacidad:null },
+        { id:"A1", nombre:"Intermedio Nor-Oeste", x:12, y:38, central:false, stock:743, capacidad:1000 },
+        { id:"A2", nombre:"Intermedio Este",      x:55, y:27, central:false, stock:655, capacidad:1000 }
+      ],
+      unidades: [
+        { id:"A01", tipo:"auto", estado:"en_ruta", x:33, y:22, carga:18, capacidad:24,
+          ruta:{ origen:"AC", modo:"entrega", pedido:"P-0243",
+                 destino:{tipo:"cliente", etiqueta:"c1042", x:45, y:28},
+                 nodos:[[25,15],[25,22],[45,22],[45,28]] },
+          proximaEntrega:"12:58" },
+        { id:"A02", tipo:"auto", estado:"en_ruta", x:52, y:30, carga:2, capacidad:24,
+          ruta:{ origen:"AC", modo:"retorno", pedido:null,
+                 destino:{tipo:"almacen", etiqueta:"A2 · recarga", x:55, y:27},
+                 nodos:[[25,15],[25,30],[55,30],[55,27]] },
+          proximaEntrega:"13:40 (tras recargar en A2, 12:39)" },
+        { id:"A03", tipo:"auto", estado:"en_almacen", x:25, y:15, carga:21, capacidad:24,
+          ruta:null, proximaEntrega:"despacho 12:45", nota:"Cargando en AC" },
+        { id:"A04", tipo:"auto", estado:"en_ruta", x:45, y:40, carga:12, capacidad:24,
+          ruta:{ origen:"AC", modo:"entrega", pedido:"P-0214",
+                 destino:{tipo:"cliente", etiqueta:"c9167 · CRÍTICO", x:45, y:43},
+                 nodos:[[25,15],[45,15],[45,43]] },
+          proximaEntrega:"12:35" },
+        { id:"M01", tipo:"moto", estado:"en_ruta", x:30, y:8, carga:7, capacidad:8,
+          ruta:{ origen:"AC", modo:"entrega", pedido:"P-0231",
+                 destino:{tipo:"cliente", etiqueta:"c6021", x:36, y:5},
+                 nodos:[[25,15],[25,8],[36,8],[36,5]] },
+          proximaEntrega:"12:52" },
+        { id:"M02", tipo:"moto", estado:"en_ruta", x:58, y:20, carga:5, capacidad:8,
+          ruta:{ origen:"A2", modo:"entrega", pedido:"P-0228",
+                 destino:{tipo:"cliente", etiqueta:"c8402", x:62, y:18},
+                 nodos:[[55,27],[55,20],[62,20],[62,18]] },
+          proximaEntrega:"12:45" },
+        { id:"M03", tipo:"moto", estado:"refrigerio", x:20, y:30, carga:3, capacidad:8,
+          ruta:{ origen:"AC", modo:"entrega", pedido:"P-0245",
+                 destino:{tipo:"cliente", etiqueta:"c7311", x:24, y:33},
+                 nodos:[[25,15],[25,30],[20,30],[20,33],[24,33]] },
+          proximaEntrega:"13:25 (reanuda 13:00)",
+          nota:"Refrigerio 12:00–13:00 · ventana permitida 08:00–14:00" },
+        { id:"M04", tipo:"moto", estado:"en_ruta", x:10, y:12, carga:6, capacidad:8,
+          ruta:{ origen:"AC", modo:"entrega", pedido:"P-0237",
+                 destino:{tipo:"cliente", etiqueta:"c1188", x:5, y:9},
+                 nodos:[[25,15],[25,12],[10,12],[10,9],[5,9]] },
+          proximaEntrega:"12:55" },
+        { id:"M05", tipo:"moto", estado:"en_almacen", x:55, y:27, carga:0, capacidad:8,
+          ruta:null, proximaEntrega:"despacho 12:50",
+          nota:"Avería tipo 1 (09:12) ya resuelta a las 11:12" },
+        { id:"M06", tipo:"moto", estado:"en_ruta", x:40, y:32, carga:4, capacidad:8,
+          ruta:{ origen:"AC", modo:"entrega", pedido:"P-0240",
+                 destino:{tipo:"cliente", etiqueta:"c5560", x:38, y:39},
+                 nodos:[[25,15],[40,15],[40,35],[38,35],[38,39]] },
+          proximaEntrega:"12:49" },
+        { id:"B01", tipo:"bicicleta", estado:"en_ruta", x:22, y:18, carga:2, capacidad:4,
+          ruta:{ origen:"AC", modo:"entrega", pedido:"P-0225",
+                 destino:{tipo:"cliente", etiqueta:"c2077", x:19, y:20},
+                 nodos:[[25,15],[22,15],[22,20],[19,20]] },
+          proximaEntrega:"12:53" },
+        { id:"B02", tipo:"bicicleta", estado:"averiada", x:25, y:15, carga:0, capacidad:4,
+          ruta:null, proximaEntrega:"—",
+          nota:"Avería tipo 3 (30/08 09:30) · en taller del AC · retorno 01/09 15:00" },
+        { id:"B03", tipo:"bicicleta", estado:"en_ruta", x:60, y:32, carga:3, capacidad:4,
+          ruta:{ origen:"A2", modo:"entrega", pedido:"P-0233",
+                 destino:{tipo:"cliente", etiqueta:"c7714", x:64, y:30},
+                 nodos:[[55,27],[55,32],[64,32],[64,30]] },
+          proximaEntrega:"13:10" }
+      ],
+      pedidos: [
+        { id:"P-0214", cliente:"c9167", x:45, y:43, cantidad:12, plazoHoras:36,
+          llegada:"30/08 03:04", vence:"31/08 15:04", restanteHoras:2.57 },
+        { id:"P-0243", cliente:"c1042", x:45, y:28, cantidad:9,  plazoHoras:36,
+          llegada:"31/08 08:02", vence:"01/09 20:02", restanteHoras:31.5 },
+        { id:"P-0231", cliente:"c6021", x:36, y:5,  cantidad:7,  plazoHoras:12,
+          llegada:"31/08 09:40", vence:"31/08 21:40", restanteHoras:9.15 },
+        { id:"P-0228", cliente:"c8402", x:62, y:18, cantidad:5,  plazoHoras:36,
+          llegada:"31/08 04:20", vence:"01/09 16:20", restanteHoras:27.8 },
+        { id:"P-0237", cliente:"c1188", x:5,  y:9,  cantidad:6,  plazoHoras:8,
+          llegada:"31/08 10:44", vence:"31/08 18:44", restanteHoras:6.2 },
+        { id:"P-0240", cliente:"c5560", x:38, y:39, cantidad:4,  plazoHoras:36,
+          llegada:"31/08 06:55", vence:"01/09 18:55", restanteHoras:30.4 },
+        { id:"P-0225", cliente:"c2077", x:19, y:20, cantidad:2,  plazoHoras:36,
+          llegada:"31/08 02:31", vence:"01/09 14:31", restanteHoras:26.0 },
+        { id:"P-0233", cliente:"c7714", x:64, y:30, cantidad:3,  plazoHoras:18,
+          llegada:"31/08 10:10", vence:"01/09 04:10", restanteHoras:15.7 },
+        { id:"P-0245", cliente:"c7311", x:24, y:33, cantidad:5,  plazoHoras:36,
+          llegada:"31/08 09:55", vence:"01/09 21:55", restanteHoras:33.4 },
+        { id:"P-0246", cliente:"c3320", x:8,  y:44, cantidad:10, plazoHoras:36,
+          llegada:"31/08 11:30", vence:"01/09 23:30", restanteHoras:35.0 },
+        { id:"P-0248", cliente:"c4310", x:52, y:44, cantidad:6,  plazoHoras:36,
+          llegada:"31/08 12:05", vence:"02/09 00:05", restanteHoras:35.6 }
+      ],
+      bloqueos: [],
+      incidencias: [
+        { id:"AV-005", tipo:"averia", titulo:"Avería tipo 1 · M05",
+          momento:"31/08 09:12", estado:"resuelta",
+          detalle:{ unidad:"M05 (moto)", tipoAveria:1,
+            regla:"Tipo 1: la unidad queda no disponible 2 horas.",
+            lugar:[48,24], indisponibilidad:"2 h", retorno:"31/08 11:12 (cumplido)",
+            cargaAfectada:"6 paquetes",
+            reasignaciones:[
+              { pedido:"P-0219 · c4098 (51,22) · 6 uds", a:"M02",
+                motivo:"Única moto de la zona este con capacidad libre ≥ 6 y holgura de plazo suficiente." }
+            ] } },
+        { id:"AV-002", tipo:"averia", titulo:"Avería tipo 3 · B02",
+          momento:"30/08 09:30", estado:"activo",
+          detalle:{ unidad:"B02 (bicicleta)", tipoAveria:3,
+            regla:"Tipo 3: no disponible al menos 2 días; retorna a operación en el turno de 15:00 a 23:00.",
+            lugar:[27,19], indisponibilidad:"≥ 48 h (taller)", retorno:"01/09 15:00 (estimado)",
+            cargaAfectada:"2 paquetes",
+            reasignaciones:[
+              { pedido:"P-0203 · c1873 (30,24) · 2 uds", a:"B01",
+                motivo:"Mismo tipo de unidad con ruta contigua; sin impacto en la holgura del pedido." }
+            ] } }
+      ],
+      kpis: {
+        entregasEnPlazo:118, estadoOperacion:"ok",
+        holguraMinima:{ horas:2.57, pedido:"P-0214 · c9167" },
+        /* 640×8 = 5 120 · 480×6 = 2 880 · 130×3 = 390 → total S/ 8 390 */
+        distanciaKm:{autos:640, motos:480, bicicletas:130},
+        costoSoles:{autos:5120, motos:2880, bicicletas:390},
+        utilizacionPct:{autos:78, motos:65, bicicletas:52}
+      }
+    },
+
+    /* ---- Lámina 3 · Cambio de turno e incidencias ---- */
+    3: {
+      titulo:"Turno e incidencias",
+      instante:{ dia:3, fecha:"01/09/2026", hora:"23:59:52", turno:"23:00–07:00",
+                 progresoPct:54.2 },
+      almacenes: [
+        { id:"AC", nombre:"Central",              x:25, y:15, central:true,  stock:null, capacidad:null },
+        { id:"A1", nombre:"Intermedio Nor-Oeste", x:12, y:38, central:false, stock:240, capacidad:1000,
+          nota:"Recarga a 1 000 en 7 s (23:59:59)" },
+        { id:"A2", nombre:"Intermedio Este",      x:55, y:27, central:false, stock:415, capacidad:1000,
+          nota:"Recarga a 1 000 en 7 s (23:59:59)" }
+      ],
+      unidades: [
+        /* Las rutas pueden cruzar turnos: el relevo del conductor se hace
+           en el punto donde ocurre el cambio de turno (aquí, las 23:00),
+           con tiempo de cambio despreciable. La unidad NO se detiene. */
+        { id:"A01", tipo:"auto", estado:"en_ruta", x:50, y:30, carga:0, capacidad:24,
+          ruta:{ origen:"AC", modo:"retorno", pedido:null,
+                 destino:{tipo:"almacen", etiqueta:"A2 · recarga", x:55, y:27},
+                 nodos:[[25,15],[25,30],[55,30],[55,27]],
+                 relevos:[{ x:38, y:30, hora:"23:00", saliente:"D-06", entrante:"D-12" }] },
+          conductor:{ id:"D-12", turno:"23:00–07:00", desde:"23:00" },
+          proximaEntrega:"00:55 (tras recargar en A2, 00:08)" },
+        { id:"A02", tipo:"auto", estado:"averiada", x:38, y:25, carga:15, capacidad:24,
+          ruta:null, proximaEntrega:"—",
+          conductor:{ id:"D-03", turno:"23:00–07:00", desde:"23:00" },
+          nota:"Avería tipo 2 (22:41) · retorno 02/09 07:00 · carga en reasignación" },
+        { id:"A03", tipo:"auto", estado:"en_ruta", x:41, y:27, carga:6, capacidad:24,
+          ruta:{ origen:"AC", modo:"entrega", pedido:"P-0288",
+                 destino:{tipo:"cliente", etiqueta:"c2231", x:44, y:30},
+                 nodos:[[25,15],[41,15],[41,30],[44,30]],
+                 relevos:[{ x:41, y:22, hora:"23:00", saliente:"D-17", entrante:"D-21" }] },
+          conductor:{ id:"D-21", turno:"23:00–07:00", desde:"23:00" },
+          proximaEntrega:"00:22" },
+        { id:"A04", tipo:"auto", estado:"en_ruta", x:15, y:40, carga:8, capacidad:24,
+          ruta:{ origen:"A1", modo:"entrega", pedido:"P-0296",
+                 destino:{tipo:"cliente", etiqueta:"c7802", x:15, y:42},
+                 nodos:[[12,38],[15,38],[15,42]] },
+          conductor:{ id:"D-24", turno:"23:00–07:00", desde:"23:00" },
+          proximaEntrega:"00:14" },
+        { id:"M01", tipo:"moto", estado:"en_almacen", x:12, y:38, carga:0, capacidad:8,
+          ruta:null, proximaEntrega:"despacho 00:20",
+          conductor:{ id:"D-29", turno:"23:00–07:00", desde:"23:00" },
+          nota:"Esperando la recarga de A1 (23:59:59)" },
+        { id:"M02", tipo:"moto", estado:"en_ruta", x:33, y:23, carga:5, capacidad:8,
+          ruta:{ origen:"AC", modo:"entrega", pedido:"P-0281", alternativa:true,
+                 destino:{tipo:"cliente", etiqueta:"c3305", x:40, y:21},
+                 nodos:[[25,15],[25,21],[28,21],[28,23],[40,23],[40,21]],
+                 relevos:[{ x:28, y:23, hora:"23:00", saliente:"D-10", entrante:"D-33" }] },
+          conductor:{ id:"D-33", turno:"23:00–07:00", desde:"23:00" },
+          proximaEntrega:"00:31", nota:"Ruta alternativa por el bloqueo BLQ-021 (+4 km)" },
+        { id:"M03", tipo:"moto", estado:"en_ruta", x:52, y:12, carga:4, capacidad:8,
+          ruta:{ origen:"A2", modo:"entrega", pedido:"P-0293",
+                 destino:{tipo:"cliente", etiqueta:"c6650", x:42, y:12},
+                 nodos:[[55,27],[55,12],[42,12]],
+                 relevos:[{ x:55, y:16, hora:"23:00", saliente:"D-05", entrante:"D-14" }] },
+          conductor:{ id:"D-14", turno:"23:00–07:00", desde:"23:00" },
+          proximaEntrega:"00:24" },
+        { id:"M04", tipo:"moto", estado:"en_ruta", x:33, y:15, carga:5, capacidad:8,
+          ruta:{ origen:"AC", modo:"entrega", pedido:"P-0290",
+                 destino:{tipo:"cliente", etiqueta:"c5108", x:36, y:18},
+                 nodos:[[25,15],[36,15],[36,18]] },
+          conductor:{ id:"D-30", turno:"23:00–07:00", desde:"23:00" },
+          proximaEntrega:"00:12" },
+        { id:"M05", tipo:"moto", estado:"en_almacen", x:25, y:15, carga:0, capacidad:8,
+          ruta:null, proximaEntrega:"despacho 00:35",
+          conductor:{ id:"D-08", turno:"23:00–07:00", desde:"23:00" },
+          nota:"Cargando en AC" },
+        { id:"M06", tipo:"moto", estado:"en_almacen", x:55, y:27, carga:0, capacidad:8,
+          ruta:null, proximaEntrega:"despacho 00:10 → c4120 · 2.ª entrega parcial de P-0299",
+          conductor:{ id:"D-23", turno:"23:00–07:00", desde:"23:00" },
+          nota:"Esperando la recarga de A2 (23:59:59) para completar P-0299" },
+        { id:"B01", tipo:"bicicleta", estado:"en_ruta", x:25, y:10, carga:2, capacidad:4,
+          ruta:{ origen:"AC", modo:"entrega", pedido:"P-0297",
+                 destino:{tipo:"cliente", etiqueta:"c5211", x:26, y:7},
+                 nodos:[[25,15],[25,7],[26,7]] },
+          conductor:{ id:"D-16", turno:"23:00–07:00", desde:"23:00" },
+          proximaEntrega:"00:19" },
+        { id:"B02", tipo:"bicicleta", estado:"en_ruta", x:30, y:33, carga:2, capacidad:4,
+          ruta:{ origen:"AC", modo:"entrega", pedido:"P-0294",
+                 destino:{tipo:"cliente", etiqueta:"c1873", x:33, y:36},
+                 nodos:[[25,15],[30,15],[30,36],[33,36]],
+                 relevos:[{ x:30, y:28, hora:"23:00", saliente:"D-20", entrante:"D-25" }] },
+          conductor:{ id:"D-25", turno:"23:00–07:00", desde:"23:00" },
+          proximaEntrega:"00:41", nota:"Reincorporada a las 15:00 tras la avería tipo 3" },
+        { id:"B03", tipo:"bicicleta", estado:"en_almacen", x:25, y:15, carga:0, capacidad:4,
+          ruta:null, proximaEntrega:"despacho 06:30",
+          conductor:{ id:"D-01", turno:"23:00–07:00", desde:"23:00" },
+          nota:"Estacionada en AC" }
+      ],
+      pedidos: [
+        { id:"P-0281", cliente:"c3305", x:40, y:21, cantidad:5, plazoHoras:36,
+          llegada:"01/09 10:25", vence:"02/09 22:25", restanteHoras:22.4 },
+        { id:"P-0288", cliente:"c2231", x:44, y:30, cantidad:6, plazoHoras:12,
+          llegada:"01/09 16:55", vence:"02/09 04:55", restanteHoras:4.92 },
+        { id:"P-0290", cliente:"c5108", x:36, y:18, cantidad:5, plazoHoras:18,
+          llegada:"01/09 14:55", vence:"02/09 08:55", restanteHoras:8.9 },
+        { id:"P-0293", cliente:"c6650", x:42, y:12, cantidad:4, plazoHoras:36,
+          llegada:"01/09 00:18", vence:"02/09 12:18", restanteHoras:12.3 },
+        { id:"P-0296", cliente:"c7802", x:15, y:42, cantidad:8, plazoHoras:36,
+          llegada:"01/09 05:30", vence:"02/09 17:30", restanteHoras:17.5 },
+        { id:"P-0297", cliente:"c5211", x:26, y:7,  cantidad:2, plazoHoras:36,
+          llegada:"01/09 21:00", vence:"03/09 09:00", restanteHoras:33.0 },
+        { id:"P-0294", cliente:"c1873", x:33, y:36, cantidad:2, plazoHoras:36,
+          llegada:"01/09 19:55", vence:"03/09 07:55", restanteHoras:31.9 },
+        { id:"P-0298", cliente:"c9440", x:57, y:10, cantidad:3, plazoHoras:18,
+          llegada:"01/09 19:05", vence:"02/09 13:05", restanteHoras:13.1 },
+        /* ENTREGA PARCIAL · 30 unidades superan la capacidad de cualquier
+           unidad de reparto (el máximo es 24 de un auto), así que el
+           pedido se atiende con dos entregas. El acondicionamiento es de
+           1 hora POR ENTREGA: 2 entregas → 2 h en total, sin importar
+           cuántos productos lleve cada una. */
+        { id:"P-0299", cliente:"c4120", x:52, y:20, cantidad:30, plazoHoras:36,
+          llegada:"01/09 12:40", vence:"03/09 00:40", restanteHoras:24.7,
+          parcial:true, entregado:24, enCamino:6, entregasPrevistas:2, acondicionamientoH:2,
+          entregas:[
+            { n:1, cantidad:24, unidad:"A01", estado:"entregada",
+              hora:"01/09 22:10", acondicionamiento:"22:10–23:10 · 1 h" },
+            { n:2, cantidad:6,  unidad:"M06", estado:"en_camino",
+              hora:"02/09 00:10 (estimada)", acondicionamiento:"00:10–01:10 · 1 h" }
+          ] }
+      ],
+      bloqueos: [
+        { id:"BLQ-021", nodos:[[31,21],[34,21]], desde:"01/09 20:00", hasta:"02/09 06:00" }
+      ],
+      incidencias: [
+        { id:"BLQ-021", tipo:"bloqueo", titulo:"Bloqueo de tramo (31,21)–(34,21)",
+          momento:"01/09 20:00", estado:"activo",
+          detalle:{
+            tramo:[[31,21],[34,21]],
+            ventana:"01/09 20:00 – 02/09 06:00",
+            origen:"202609.bloqueadas · 01d20h00m-02d06h00m:31,21,34,21",
+            rutasAfectadas:["M02 → P-0281 · c3305 (40,21)"],
+            alternativa:{
+              trazo:"(25,15) → (25,21) → (28,21) → (28,23) → (40,23) → (40,21)",
+              /* original AC→c3305 por y=21: 6 + 15 = 21 km · alternativa: 6+3+2+12+2 = 25 km */
+              originalKm:21, alternativaKm:25, deltaKm:4, deltaCosto:24 }
+          } },
+        { id:"AV-007", tipo:"averia", titulo:"Avería tipo 2 · A02",
+          momento:"01/09 22:41", estado:"activo",
+          detalle:{ unidad:"A02 (auto)", tipoAveria:2,
+            regla:"Tipo 2: no disponible hasta el final del turno siguiente, permaneciendo detenida en el lugar un máximo de 4 horas.",
+            lugar:[38,25],
+            indisponibilidad:"Hasta el fin del turno 23:00–07:00 · retiro del punto a más tardar 02:41",
+            retorno:"02/09 07:00",
+            cargaAfectada:"15 paquetes (3 pedidos)",
+            reasignaciones:[
+              { pedido:"P-0288 · c2231 (44,30) · 6 uds", a:"A03",
+                motivo:"Menor holgura del grupo (vence 02/09 04:55); A03 estaba en AC con 24 de capacidad libre." },
+              { pedido:"P-0290 · c5108 (36,18) · 5 uds", a:"M04",
+                motivo:"Unidad más cercana al nodo de entrega con capacidad ≥ 5." },
+              { pedido:"P-0293 · c6650 (42,12) · 4 uds", a:"M03",
+                motivo:"En ruta de retorno por la zona; el desvío es menor a 3 km." }
+            ] } },
+        { id:"AV-005", tipo:"averia", titulo:"Avería tipo 1 · M05",
+          momento:"31/08 09:12", estado:"resuelta",
+          detalle:{ unidad:"M05 (moto)", tipoAveria:1,
+            regla:"Tipo 1: la unidad queda no disponible 2 horas.",
+            lugar:[48,24], indisponibilidad:"2 h", retorno:"31/08 11:12 (cumplido)",
+            cargaAfectada:"6 paquetes",
+            reasignaciones:[
+              { pedido:"P-0219 · c4098 (51,22) · 6 uds", a:"M02",
+                motivo:"Única moto de la zona este con capacidad libre ≥ 6." }
+            ] } },
+        { id:"AV-002", tipo:"averia", titulo:"Avería tipo 3 · B02",
+          momento:"30/08 09:30", estado:"resuelta",
+          detalle:{ unidad:"B02 (bicicleta)", tipoAveria:3,
+            regla:"Tipo 3: no disponible al menos 2 días; retorna a operación en el turno de 15:00 a 23:00.",
+            lugar:[27,19], indisponibilidad:"51.5 h (taller)", retorno:"01/09 15:00 (cumplido)",
+            cargaAfectada:"2 paquetes",
+            reasignaciones:[
+              { pedido:"P-0203 · c1873 (30,24) · 2 uds", a:"B01",
+                motivo:"Mismo tipo de unidad con ruta contigua." }
+            ] } }
+      ],
+      kpis: {
+        entregasEnPlazo:215, estadoOperacion:"ok",
+        holguraMinima:{ horas:4.92, pedido:"P-0288 · c2231" },
+        /* 966×8 = 7 728 · 790×6 = 4 740 · 164×3 = 492 → total S/ 12 960 */
+        distanciaKm:{autos:966, motos:790, bicicletas:164},
+        costoSoles:{autos:7728, motos:4740, bicicletas:492},
+        utilizacionPct:{autos:74, motos:66, bicicletas:58}
+      }
+    },
+
+    /* ---- Lámina 4 · Detalle de incidencia ----
+     * Es la lámina 3 con el panel de detalle abierto. Comparte los
+     * mismos datos: el visualizador solo abre el panel lateral. ---- */
+
+    /* ---- Lámina 5 · Cierre de la simulación ---- */
+    5: {
+      titulo:"Cierre de la simulación",
+      instante:{ dia:5, fecha:"04/09/2026", hora:"07:00:00",
+                 turno:"— · simulación finalizada", progresoPct:100 },
+      almacenes: JSON.parse(JSON.stringify(ALMACENES_LLENOS)),
+      unidades: [
+        ...unidadesEnAlmacen(["A01","A02","A03","A04","M03","M04","M05","B01","B03"],
+                             25, 15, "De vuelta en el Almacén Central"),
+        ...unidadesEnAlmacen(["M01","B02"], 12, 38, "De vuelta en A1"),
+        ...unidadesEnAlmacen(["M02","M06"], 55, 27, "De vuelta en A2")
+      ],
+      pedidos: [], bloqueos: [], incidencias: [],
+      kpis: {
+        entregasEnPlazo:342, estadoOperacion:"ok",
+        holguraMinima:null,   /* sin pedidos en curso al cierre */
+        /* 1 544×8 = 12 352 · 1 238×6 = 7 428 · 306×3 = 918 → total S/ 20 698 */
+        distanciaKm:{autos:1544, motos:1238, bicicletas:306},
+        costoSoles:{autos:12352, motos:7428, bicicletas:918},
+        utilizacionPct:{autos:81, motos:68, bicicletas:55}
+      },
+      cierre: {
+        titulo:"Evolución del periodo — días 1 a 5",
+        paneles:[
+          { titulo:"Entregas acumuladas",       clave:"entregasAcum", color:"#199e70", fmt:"num" },
+          { titulo:"Costo acumulado (S/)",      clave:"costoAcum",    color:"#3987e5", fmt:"num" },
+          { titulo:"Holgura mínima del día (h)",clave:"holguraMinDia",color:"#a7b6c9", fmt:"horas1",
+            semaforo:true }
+        ],
+        series:{
+          dias:[1,2,3,4,5],
+          entregasAcum:[58, 142, 215, 290, 342],
+          costoAcum:[3810, 9480, 12960, 17240, 20698],
+          holguraMinDia:[21.5, 2.6, 4.9, 9.4, 12.1]
+        },
+        resumen:[
+          { k:"Tiempo de cómputo del planificador", v:"38.4 s" },
+          { k:"Archivos consumidos", v:"ventas202608 · ventas202609 · 202608.bloqueadas · 202609.bloqueadas" }
+        ]
+      }
+    }
+
+  }},
+
+  /* ============================================================
+   * ESCENARIO C · SIMULACIÓN HASTA EL COLAPSO LOGÍSTICO
+   * Sin fecha de término: la corrida se detiene en el instante del
+   * primer incumplimiento de un plazo comprometido.
+   *
+   * El periodo de ejemplo arranca el 25/09/2026 y colapsa el día 9
+   * (03/10/2026) A PROPÓSITO: la corrida cruza de mes sin que se
+   * sepa de antemano cuántos archivos mensuales harán falta, que es
+   * justamente lo que la carga por demanda tiene que resolver.
+   *
+   * La lámina 3 tiene dos variantes, elegidas por el estado de la
+   * biblioteca de datos (ver resolverLamina):
+   *   · 202610 completo  → COLAPSO (el desenlace propio del escenario)
+   *   · 202610 ausente   → DETENCIÓN POR FALTA DE DATOS al terminar
+   *                        el último mes disponible
+   * Son los dos mensajes de término que el escenario debe distinguir.
+   * ============================================================ */
+  colapso: { laminas: {
+
+    /* ---- Lámina 1 · Configuración, sin fecha de término ---- */
+    1: {
+      titulo:"Configuración e inicio",
+      instante:{ dia:1, fecha:"25/09/2026", hora:"07:00:00", turno:"07:00–15:00",
+                 transcurrido:"0 h 00 min" },
+      almacenes: JSON.parse(JSON.stringify(ALMACENES_LLENOS)),
+      unidades: unidadesEnAlmacen(
+        ["A01","A02","A03","A04","M01","M02","M03","M04","M05","M06","B01","B02","B03"],
+        25, 15, "Estacionada en AC · a la espera del primer despacho"),
+      pedidos: [], bloqueos: [], incidencias: [],
+      kpis: JSON.parse(JSON.stringify(KPIS_CERO))
+    },
+
+    /* ---- Lámina 2 · Operación bajo presión ----
+     * Día 6 (30/09/2026): la holgura mínima ya cayó por debajo de las
+     * 2 horas y hay varios pedidos en ámbar y rojo. Todavía es
+     * corregible: este es el momento que el indicador anticipa. ---- */
+    2: {
+      titulo:"Operación bajo presión",
+      instante:{ dia:6, fecha:"30/09/2026", hora:"21:40:18", turno:"15:00–23:00",
+                 transcurrido:"5 d 14 h 40 min" },
+      almacenes: [
+        { id:"AC", nombre:"Central",              x:25, y:15, central:true,  stock:null, capacidad:null },
+        { id:"A1", nombre:"Intermedio Nor-Oeste", x:12, y:38, central:false, stock:96,  capacidad:1000,
+          nota:"Stock bajo · recarga a 1 000 a las 23:59:59" },
+        { id:"A2", nombre:"Intermedio Este",      x:55, y:27, central:false, stock:41,  capacidad:1000,
+          nota:"Stock crítico · recarga a 1 000 a las 23:59:59" }
+      ],
+      unidades: [
+        { id:"A01", tipo:"auto", estado:"en_ruta", x:52, y:22, carga:24, capacidad:24,
+          ruta:{ origen:"AC", modo:"entrega", pedido:"P-1150",
+                 destino:{tipo:"cliente", etiqueta:"c6688", x:60, y:22},
+                 nodos:[[25,15],[25,22],[60,22]] },
+          conductor:{ id:"D-11", turno:"15:00–23:00" },
+          proximaEntrega:"22:00" },
+        { id:"A02", tipo:"auto", estado:"en_ruta", x:33, y:40, carga:18, capacidad:24,
+          ruta:{ origen:"AC", modo:"entrega", pedido:"P-1162",
+                 destino:{tipo:"cliente", etiqueta:"c2907", x:33, y:45},
+                 nodos:[[25,15],[33,15],[33,45]] },
+          conductor:{ id:"D-04", turno:"15:00–23:00" },
+          proximaEntrega:"21:55" },
+        { id:"A03", tipo:"auto", estado:"en_ruta", x:19, y:15, carga:0, capacidad:24,
+          ruta:{ origen:"A1", modo:"retorno", pedido:null,
+                 destino:{tipo:"almacen", etiqueta:"AC · recarga", x:25, y:15},
+                 nodos:[[12,38],[12,15],[25,15]] },
+          conductor:{ id:"D-19", turno:"15:00–23:00" },
+          proximaEntrega:"22:38 (tras recargar en AC, 21:55)" },
+        { id:"A04", tipo:"auto", estado:"en_ruta", x:44, y:31, carga:16, capacidad:24,
+          ruta:{ origen:"A2", modo:"entrega", pedido:"P-1171",
+                 destino:{tipo:"cliente", etiqueta:"c1204", x:44, y:36},
+                 nodos:[[55,27],[44,27],[44,36]] },
+          conductor:{ id:"D-22", turno:"15:00–23:00" },
+          proximaEntrega:"21:52" },
+        { id:"M01", tipo:"moto", estado:"en_ruta", x:25, y:26, carga:8, capacidad:8,
+          ruta:{ origen:"AC", modo:"entrega", pedido:"P-1168",
+                 destino:{tipo:"cliente", etiqueta:"c8115", x:21, y:29},
+                 nodos:[[25,15],[25,29],[21,29]] },
+          conductor:{ id:"D-07", turno:"15:00–23:00" },
+          proximaEntrega:"21:56" },
+        { id:"M02", tipo:"moto", estado:"en_ruta", x:60, y:33, carga:6, capacidad:8,
+          ruta:{ origen:"A2", modo:"entrega", pedido:"P-1159",
+                 destino:{tipo:"cliente", etiqueta:"c9930", x:64, y:36},
+                 nodos:[[55,27],[55,33],[64,33],[64,36]] },
+          conductor:{ id:"D-15", turno:"15:00–23:00" },
+          proximaEntrega:"22:04" },
+        { id:"M03", tipo:"moto", estado:"averiada", x:37, y:9, carga:5, capacidad:8,
+          ruta:null, proximaEntrega:"—",
+          conductor:{ id:"D-26", turno:"15:00–23:00" },
+          nota:"Avería tipo 1 (21:18) · retorno 23:18 · carga en reasignación" },
+        { id:"M04", tipo:"moto", estado:"en_ruta", x:25, y:19, carga:7, capacidad:8,
+          ruta:{ origen:"AC", modo:"entrega", pedido:"P-1174",
+                 destino:{tipo:"cliente", etiqueta:"c3382", x:30, y:23},
+                 nodos:[[25,15],[25,23],[30,23]] },
+          conductor:{ id:"D-31", turno:"15:00–23:00" },
+          proximaEntrega:"21:58" },
+        { id:"M05", tipo:"moto", estado:"en_ruta", x:48, y:15, carga:8, capacidad:8,
+          /* Segunda entrega parcial del pedido P-1155 (ver pedidos) */
+          ruta:{ origen:"AC", modo:"entrega", pedido:"P-1155",
+                 destino:{tipo:"cliente", etiqueta:"c5043", x:53, y:11},
+                 nodos:[[25,15],[53,15],[53,11]] },
+          conductor:{ id:"D-09", turno:"15:00–23:00" },
+          proximaEntrega:"22:12", nota:"Lleva la 2.ª entrega parcial de P-1155 (8 de 26 uds)" },
+        { id:"M06", tipo:"moto", estado:"refrigerio", x:15, y:22, carga:4, capacidad:8,
+          ruta:{ origen:"AC", modo:"entrega", pedido:"P-1177",
+                 destino:{tipo:"cliente", etiqueta:"c7756", x:11, y:25},
+                 nodos:[[25,15],[15,15],[15,25],[11,25]] },
+          conductor:{ id:"D-18", turno:"15:00–23:00" },
+          proximaEntrega:"22:40 (reanuda 22:00)",
+          nota:"Refrigerio 21:00–22:00 · ventana permitida 16:00–22:00" },
+        { id:"B01", tipo:"bicicleta", estado:"en_ruta", x:25, y:12, carga:4, capacidad:4,
+          ruta:{ origen:"AC", modo:"entrega", pedido:"P-1179",
+                 destino:{tipo:"cliente", etiqueta:"c2288", x:28, y:11},
+                 nodos:[[25,15],[25,11],[28,11]] },
+          conductor:{ id:"D-02", turno:"15:00–23:00" },
+          proximaEntrega:"22:06" },
+        { id:"B02", tipo:"bicicleta", estado:"en_ruta", x:22, y:15, carga:3, capacidad:4,
+          ruta:{ origen:"AC", modo:"entrega", pedido:"P-1181",
+                 destino:{tipo:"cliente", etiqueta:"c6001", x:20, y:18},
+                 nodos:[[25,15],[20,15],[20,18]] },
+          conductor:{ id:"D-27", turno:"15:00–23:00" },
+          proximaEntrega:"22:15" },
+        { id:"B03", tipo:"bicicleta", estado:"en_almacen", x:25, y:15, carga:0, capacidad:4,
+          ruta:null, proximaEntrega:"despacho 22:10", nota:"Cargando en AC" }
+      ],
+      pedidos: [
+        /* Entrega parcial: 26 unidades no caben en una sola unidad de
+           reparto, así que el pedido se atiende con dos entregas y el
+           acondicionamiento es de 1 h POR ENTREGA (2 h en total). */
+        { id:"P-1155", cliente:"c5043", x:53, y:11, cantidad:26, plazoHoras:36,
+          llegada:"29/09 20:15", vence:"01/10 08:15", restanteHoras:10.6,
+          parcial:true, entregado:18, enCamino:8, entregasPrevistas:2, acondicionamientoH:2,
+          entregas:[
+            { n:1, cantidad:18, unidad:"A01", estado:"entregada",
+              hora:"30/09 18:40", acondicionamiento:"18:40–19:40 · 1 h" },
+            { n:2, cantidad:8,  unidad:"M05", estado:"en_camino",
+              hora:"30/09 22:12 (estimada)", acondicionamiento:"22:12–23:12 · 1 h" }
+          ] },
+        { id:"P-1150", cliente:"c6688", x:60, y:22, cantidad:24, plazoHoras:36,
+          llegada:"29/09 14:05", vence:"01/10 02:05", restanteHoras:4.4 },
+        { id:"P-1162", cliente:"c2907", x:33, y:45, cantidad:18, plazoHoras:18,
+          llegada:"30/09 08:30", vence:"01/10 02:30", restanteHoras:4.8 },
+        { id:"P-1171", cliente:"c1204", x:44, y:36, cantidad:16, plazoHoras:12,
+          llegada:"30/09 12:20", vence:"01/10 00:20", restanteHoras:2.7 },
+        { id:"P-1168", cliente:"c8115", x:21, y:29, cantidad:8,  plazoHoras:8,
+          llegada:"30/09 15:32", vence:"30/09 23:32", restanteHoras:1.87 },
+        { id:"P-1159", cliente:"c9930", x:64, y:36, cantidad:6,  plazoHoras:18,
+          llegada:"30/09 06:10", vence:"01/10 00:10", restanteHoras:2.5 },
+        { id:"P-1174", cliente:"c3382", x:30, y:23, cantidad:7,  plazoHoras:12,
+          llegada:"30/09 13:45", vence:"01/10 01:45", restanteHoras:4.1 },
+        { id:"P-1177", cliente:"c7756", x:11, y:25, cantidad:4,  plazoHoras:18,
+          llegada:"30/09 10:05", vence:"01/10 04:05", restanteHoras:6.4 },
+        { id:"P-1179", cliente:"c2288", x:28, y:11, cantidad:4,  plazoHoras:36,
+          llegada:"30/09 09:50", vence:"01/10 21:50", restanteHoras:24.2 },
+        { id:"P-1181", cliente:"c6001", x:20, y:18, cantidad:3,  plazoHoras:36,
+          llegada:"30/09 11:15", vence:"01/10 23:15", restanteHoras:25.6 },
+        { id:"P-1183", cliente:"c4906", x:8,  y:44, cantidad:12, plazoHoras:36,
+          llegada:"30/09 19:40", vence:"02/10 07:40", restanteHoras:34.0 }
+      ],
+      bloqueos: [
+        { id:"BLQ-088", nodos:[[40,18],[46,18]], desde:"30/09 18:00", hasta:"01/10 02:00" }
+      ],
+      incidencias: [
+        { id:"AV-031", tipo:"averia", titulo:"Avería tipo 1 · M03",
+          momento:"30/09 21:18", estado:"activo",
+          detalle:{ unidad:"M03 (moto)", tipoAveria:1,
+            regla:"Tipo 1: la unidad queda no disponible 2 horas.",
+            lugar:[37,9], indisponibilidad:"2 h", retorno:"30/09 23:18 (estimado)",
+            cargaAfectada:"5 paquetes",
+            reasignaciones:[
+              { pedido:"P-1174 · c3382 (30,23) · 7 uds", a:"M04",
+                motivo:"Holgura de 2 h 42 min: era el pedido con menor margen entre los afectados." },
+              { pedido:"P-1179 · c2288 (28,11) · 4 uds", a:"B01",
+                motivo:"Bicicleta libre en AC a 5 km del nodo; el pedido tiene 24 h de holgura." }
+            ] } },
+        { id:"BLQ-088", tipo:"bloqueo", titulo:"Bloqueo de tramo (40,18)–(46,18)",
+          momento:"30/09 18:00", estado:"activo",
+          detalle:{
+            tramo:[[40,18],[46,18]],
+            ventana:"30/09 18:00 – 01/10 02:00",
+            origen:"202609.bloqueadas · 30d18h00m-01d02h00m:40,18,46,18",
+            rutasAfectadas:["M05 → P-1155 (2.ª entrega parcial) · c5043 (53,11)"],
+            alternativa:{
+              trazo:"(25,15) → (53,15) → (53,11)",
+              /* original por y=18: 3+28+7 = 38 km · alternativa por y=15: 28+4 = 32 km */
+              originalKm:38, alternativaKm:32, deltaKm:-6, deltaCosto:-36 }
+          } }
+      ],
+      kpis: {
+        entregasEnPlazo:318, estadoOperacion:"ok",
+        holguraMinima:{ horas:1.87, pedido:"P-1168 · c8115" },
+        /* 1 518×8 = 12 144 · 1 146×6 = 6 876 · 388×3 = 1 164 → total S/ 20 184 */
+        distanciaKm:{autos:1518, motos:1146, bicicletas:388},
+        costoSoles:{autos:12144, motos:6876, bicicletas:1164},
+        utilizacionPct:{autos:94, motos:89, bicicletas:76}
+      }
+    },
+
+    /* ---- Lámina 3 · Colapso logístico ----
+     * Reloj detenido en el instante exacto del primer incumplimiento. ---- */
+    3: {
+      titulo:"Colapso logístico",
+      instante:{ dia:9, fecha:"03/10/2026", hora:"14:38:12", turno:"07:00–15:00",
+                 transcurrido:"8 d 07 h 38 min", detenido:true },
+      almacenes: [
+        { id:"AC", nombre:"Central",              x:25, y:15, central:true,  stock:null, capacidad:null },
+        { id:"A1", nombre:"Intermedio Nor-Oeste", x:12, y:38, central:false, stock:12, capacidad:1000,
+          nota:"Prácticamente agotado al momento del colapso" },
+        { id:"A2", nombre:"Intermedio Este",      x:55, y:27, central:false, stock:0,  capacidad:1000,
+          nota:"Sin stock · no admite recargas hasta las 23:59:59" }
+      ],
+      unidades: [
+        { id:"A01", tipo:"auto", estado:"en_ruta", x:39, y:34, carga:24, capacidad:24,
+          ruta:{ origen:"AC", modo:"entrega", pedido:"P-1204",
+                 destino:{tipo:"cliente", etiqueta:"c7120", x:39, y:41},
+                 nodos:[[25,15],[39,15],[39,41]] },
+          conductor:{ id:"D-11", turno:"07:00–15:00" },
+          proximaEntrega:"14:49" },
+        { id:"A02", tipo:"auto", estado:"en_ruta", x:29, y:15, carga:21, capacidad:24,
+          ruta:{ origen:"AC", modo:"entrega", pedido:"P-1198",
+                 destino:{tipo:"cliente", etiqueta:"c3344", x:36, y:20},
+                 nodos:[[25,15],[36,15],[36,20]] },
+          conductor:{ id:"D-04", turno:"07:00–15:00" },
+          proximaEntrega:"14:52" },
+        { id:"A03", tipo:"auto", estado:"en_ruta", x:19, y:34, carga:20, capacidad:24,
+          ruta:{ origen:"AC", modo:"entrega", pedido:"P-1201",
+                 destino:{tipo:"cliente", etiqueta:"c9074", x:14, y:34},
+                 nodos:[[25,15],[25,34],[14,34]] },
+          conductor:{ id:"D-19", turno:"07:00–15:00" },
+          proximaEntrega:"14:47" },
+        { id:"A04", tipo:"auto", estado:"averiada", x:47, y:33, carga:19, capacidad:24,
+          ruta:null, proximaEntrega:"—",
+          conductor:{ id:"D-22", turno:"07:00–15:00" },
+          nota:"Avería tipo 3 (02/10 16:05) · fuera de operación al menos 2 días" },
+        { id:"M01", tipo:"moto", estado:"en_ruta", x:25, y:20, carga:8, capacidad:8,
+          ruta:{ origen:"AC", modo:"entrega", pedido:"P-1209",
+                 destino:{tipo:"cliente", etiqueta:"c5512", x:31, y:25},
+                 nodos:[[25,15],[25,25],[31,25]] },
+          conductor:{ id:"D-07", turno:"07:00–15:00" },
+          proximaEntrega:"14:55" },
+        { id:"M02", tipo:"moto", estado:"en_ruta", x:44, y:27, carga:0, capacidad:8,
+          ruta:{ origen:"AC", modo:"retorno", pedido:null,
+                 destino:{tipo:"almacen", etiqueta:"A2 · sin stock", x:55, y:27},
+                 nodos:[[25,15],[25,27],[55,27]] },
+          conductor:{ id:"D-15", turno:"07:00–15:00" },
+          proximaEntrega:"—", nota:"A2 quedó sin stock: no puede recargar aquí" },
+        { id:"M03", tipo:"moto", estado:"en_ruta", x:41, y:11, carga:7, capacidad:8,
+          ruta:{ origen:"AC", modo:"entrega", pedido:"P-1206",
+                 destino:{tipo:"cliente", etiqueta:"c8890", x:46, y:8},
+                 nodos:[[25,15],[25,11],[46,11],[46,8]] },
+          conductor:{ id:"D-26", turno:"07:00–15:00" },
+          proximaEntrega:"14:58" },
+        { id:"M04", tipo:"moto", estado:"en_almacen", x:55, y:27, carga:0, capacidad:8,
+          ruta:null, proximaEntrega:"14:09 · liberada, sin stock para cargar",
+          conductor:{ id:"D-31", turno:"07:00–15:00" },
+          nota:"Unidad más próxima al pedido P-1187: llegaría 15:26, 48 min tarde" },
+        { id:"M05", tipo:"moto", estado:"en_ruta", x:20, y:15, carga:6, capacidad:8,
+          ruta:{ origen:"AC", modo:"entrega", pedido:"P-1211",
+                 destino:{tipo:"cliente", etiqueta:"c1122", x:16, y:19},
+                 nodos:[[25,15],[16,15],[16,19]] },
+          conductor:{ id:"D-09", turno:"07:00–15:00" },
+          proximaEntrega:"14:51" },
+        { id:"M06", tipo:"moto", estado:"en_ruta", x:12, y:33, carga:5, capacidad:8,
+          ruta:{ origen:"A1", modo:"entrega", pedido:"P-1213",
+                 destino:{tipo:"cliente", etiqueta:"c4455", x:9, y:33},
+                 nodos:[[12,38],[12,33],[9,33]] },
+          conductor:{ id:"D-18", turno:"07:00–15:00" },
+          proximaEntrega:"14:45" },
+        { id:"B01", tipo:"bicicleta", estado:"en_ruta", x:25, y:18, carga:4, capacidad:4,
+          ruta:{ origen:"AC", modo:"entrega", pedido:"P-1215",
+                 destino:{tipo:"cliente", etiqueta:"c2299", x:27, y:20},
+                 nodos:[[25,15],[25,20],[27,20]] },
+          conductor:{ id:"D-02", turno:"07:00–15:00" },
+          proximaEntrega:"14:53" },
+        { id:"B02", tipo:"bicicleta", estado:"en_ruta", x:23, y:15, carga:3, capacidad:4,
+          ruta:{ origen:"AC", modo:"entrega", pedido:"P-1216",
+                 destino:{tipo:"cliente", etiqueta:"c7788", x:21, y:12},
+                 nodos:[[25,15],[21,15],[21,12]] },
+          conductor:{ id:"D-27", turno:"07:00–15:00" },
+          proximaEntrega:"14:56" },
+        { id:"B03", tipo:"bicicleta", estado:"en_ruta", x:27, y:15, carga:4, capacidad:4,
+          ruta:{ origen:"AC", modo:"entrega", pedido:"P-1218",
+                 destino:{tipo:"cliente", etiqueta:"c3030", x:29, y:13},
+                 nodos:[[25,15],[29,15],[29,13]] },
+          conductor:{ id:"D-13", turno:"07:00–15:00" },
+          proximaEntrega:"14:54" }
+      ],
+      pedidos: [
+        /* Pedido que originó el colapso: su plazo venció sin unidad disponible */
+        { id:"P-1187", cliente:"c4471", x:68, y:46, cantidad:9, plazoHoras:4,
+          llegada:"03/10 10:38", vence:"03/10 14:38", restanteHoras:0, colapsante:true },
+        { id:"P-1204", cliente:"c7120", x:39, y:41, cantidad:24, plazoHoras:36,
+          llegada:"02/10 22:10", vence:"04/10 10:10", restanteHoras:19.5 },
+        { id:"P-1198", cliente:"c3344", x:36, y:20, cantidad:21, plazoHoras:18,
+          llegada:"03/10 04:15", vence:"03/10 22:15", restanteHoras:7.6 },
+        { id:"P-1201", cliente:"c9074", x:14, y:34, cantidad:20, plazoHoras:12,
+          llegada:"03/10 07:40", vence:"03/10 19:40", restanteHoras:5.0 },
+        { id:"P-1209", cliente:"c5512", x:31, y:25, cantidad:8,  plazoHoras:8,
+          llegada:"03/10 09:55", vence:"03/10 17:55", restanteHoras:3.3 },
+        { id:"P-1206", cliente:"c8890", x:46, y:8,  cantidad:7,  plazoHoras:12,
+          llegada:"03/10 06:20", vence:"03/10 18:20", restanteHoras:3.7 },
+        { id:"P-1211", cliente:"c1122", x:16, y:19, cantidad:6,  plazoHoras:18,
+          llegada:"03/10 02:05", vence:"03/10 20:05", restanteHoras:5.5 },
+        { id:"P-1213", cliente:"c4455", x:9,  y:33, cantidad:5,  plazoHoras:36,
+          llegada:"02/10 12:30", vence:"04/10 00:30", restanteHoras:9.9 },
+        { id:"P-1215", cliente:"c2299", x:27, y:20, cantidad:4,  plazoHoras:36,
+          llegada:"02/10 18:45", vence:"04/10 06:45", restanteHoras:16.1 },
+        { id:"P-1216", cliente:"c7788", x:21, y:12, cantidad:3,  plazoHoras:36,
+          llegada:"02/10 20:00", vence:"04/10 08:00", restanteHoras:17.4 },
+        { id:"P-1218", cliente:"c3030", x:29, y:13, cantidad:4,  plazoHoras:36,
+          llegada:"02/10 21:15", vence:"04/10 09:15", restanteHoras:18.6 }
+      ],
+      bloqueos: [
+        { id:"BLQ-097", nodos:[[58,38],[64,38]], desde:"03/10 06:00", hasta:"03/10 18:00" }
+      ],
+      incidencias: [
+        { id:"COL-001", tipo:"colapso", titulo:"Incumplimiento de plazo · P-1187",
+          momento:"03/10 14:38", estado:"activo",
+          detalle:{
+            pedido:"P-1187 · c4471 (68,46) · 9 unidades",
+            plazo:"4 h (pedido priorizado)",
+            registro:"03/10 10:38",
+            vencimiento:"03/10 14:38",
+            arriboEstimado:"03/10 15:26",
+            retraso:"48 min",
+            causa:"Al vencer el plazo no había ninguna unidad disponible con capacidad libre " +
+                  "y holgura suficiente. La más próxima, M04, quedó liberada a las 14:09 en A2 " +
+                  "(55,27), a 32 km del nodo de entrega; a 25 km/h son 1 h 17 min, con arribo " +
+                  "a las 15:26. El almacén A2 además estaba sin stock, por lo que M04 no pudo " +
+                  "cargar las 9 unidades allí.",
+            flota:"13 unidades en operación: 11 en ruta con carga, 1 averiada (A04, tipo 3), " +
+                  "1 sin posibilidad de carga (M04)",
+            almacenes:"A2 sin stock, A1 con 12 unidades, AC con inventario infinito" } },
+        { id:"AV-042", tipo:"averia", titulo:"Avería tipo 3 · A04",
+          momento:"02/10 16:05", estado:"activo",
+          detalle:{ unidad:"A04 (auto)", tipoAveria:3,
+            regla:"Tipo 3: no disponible al menos 2 días; retorna a operación en el turno de 15:00 a 23:00.",
+            lugar:[47,33], indisponibilidad:"≥ 48 h (taller)", retorno:"04/10 15:00 (estimado)",
+            cargaAfectada:"19 paquetes (2 pedidos)",
+            reasignaciones:[
+              { pedido:"P-1204 · c7120 (39,41) · 24 uds", a:"A01",
+                motivo:"Único auto con capacidad para las 24 unidades del pedido completo." },
+              { pedido:"P-1187 · c4471 (68,46) · 9 uds", a:"—",
+                motivo:"NO SE PUDO REASIGNAR: con A04 fuera de servicio y A2 sin stock, ninguna " +
+                       "unidad podía cubrir el plazo de 4 horas. Este es el origen del colapso." }
+            ] } },
+        { id:"BLQ-097", tipo:"bloqueo", titulo:"Bloqueo de tramo (58,38)–(64,38)",
+          momento:"03/10 06:00", estado:"activo",
+          detalle:{
+            tramo:[[58,38],[64,38]],
+            ventana:"03/10 06:00 – 03/10 18:00",
+            origen:"202610.bloqueadas · 03d06h00m-03d18h00m:58,38,64,38",
+            rutasAfectadas:["Acceso nor-este hacia c4471 (68,46), el nodo del pedido colapsante"],
+            alternativa:{
+              trazo:"(55,27) → (68,27) → (68,46)",
+              /* original por y=38: 3+13+19 = 35 km (bloqueado) · alternativa: 13+19 = 32 km */
+              originalKm:35, alternativaKm:32, deltaKm:-3, deltaCosto:-18 }
+          } }
+      ],
+      kpis: {
+        entregasEnPlazo:463, estadoOperacion:"colapso",
+        holguraMinima:{ horas:0, pedido:"P-1187 · c4471" },
+        /* 2 280×8 = 18 240 · 1 710×6 = 10 260 · 580×3 = 1 740 → total S/ 30 240 */
+        distanciaKm:{autos:2280, motos:1710, bicicletas:580},
+        costoSoles:{autos:18240, motos:10260, bicicletas:1740},
+        utilizacionPct:{autos:97, motos:93, bicicletas:81}
+      },
+      detencion:{
+        motivo:"colapso",
+        titulo:"COLAPSO LOGÍSTICO · corrida terminada",
+        texto:"Primer incumplimiento de un plazo comprometido: el pedido P-1187 (c4471) venció " +
+              "el 03/10/2026 a las 14:38 y su arribo más temprano posible era 15:26. " +
+              "La simulación se detiene aquí: no existe acumulación de pedidos retrasados."
+      },
+      cierre:{
+        titulo:"Evolución hasta el colapso — días 1 a 9",
+        paneles:[
+          { titulo:"Entregas acumuladas",        clave:"entregasAcum",  color:"#199e70", fmt:"num" },
+          { titulo:"Costo acumulado (S/)",       clave:"costoAcum",     color:"#3987e5", fmt:"num" },
+          { titulo:"Holgura mínima del día (h)", clave:"holguraMinDia", color:"#a7b6c9", fmt:"horas1",
+            semaforo:true }
+        ],
+        series:{
+          dias:[1,2,3,4,5,6,7,8,9],
+          entregasAcum:[46, 98, 156, 214, 268, 318, 372, 419, 463],
+          costoAcum:[2980, 6420, 10180, 13940, 17420, 20184, 24120, 27380, 30240],
+          /* La holgura mínima llega a cero: ese es el instante del colapso */
+          holguraMinDia:[22.4, 17.3, 13.8, 9.6, 6.2, 1.9, 4.1, 2.3, 0.0]
+        },
+        resumen:[
+          { k:"Días completados", v:"8 días 07 h 38 min (9.º día en curso)" },
+          { k:"Entregas realizadas dentro de plazo", v:"463" },
+          { k:"Tiempo de cómputo del planificador", v:"71.2 s" },
+          { k:"Archivos consumidos", v:"ventas202609 · 202609.bloqueadas · ventas202610 · 202610.bloqueadas" }
+        ]
+      }
+    }
+
+  },
+
+  /* ---- Variante de término alternativa para la lámina 3 ----
+   * Si el mes 202610 no está en la biblioteca, la corrida no puede
+   * pasar del 30/09/2026 y se detiene POR FALTA DE DATOS, no por
+   * colapso. Es el otro mensaje de término que el escenario debe
+   * saber distinguir. 'base' indica de qué lámina hereda el resto. */
+  variantes: {
+    sinDatos: {
+      base:2,
+      titulo:"Detención por falta de datos",
+      instante:{ dia:6, fecha:"30/09/2026", hora:"23:59:59", turno:"23:00–07:00",
+                 transcurrido:"5 d 16 h 59 min", detenido:true },
+      detencion:{
+        motivo:"sin_datos",
+        titulo:"SIMULACIÓN DETENIDA · faltan datos de entrada",
+        texto:"La corrida agotó el último mes disponible en la biblioteca (202609) y necesita " +
+              "ventas202610 y 202610.bloqueadas para continuar. Esto NO es un colapso: no hubo " +
+              "ningún incumplimiento de plazo. Cargue el mes 202610 en la biblioteca de datos " +
+              "para que la corrida pueda seguir hasta su desenlace."
+      },
+      cierre:{
+        titulo:"Evolución hasta la detención — días 1 a 6",
+        paneles:[
+          { titulo:"Entregas acumuladas",        clave:"entregasAcum",  color:"#199e70", fmt:"num" },
+          { titulo:"Costo acumulado (S/)",       clave:"costoAcum",     color:"#3987e5", fmt:"num" },
+          { titulo:"Holgura mínima del día (h)", clave:"holguraMinDia", color:"#a7b6c9", fmt:"horas1",
+            semaforo:true }
+        ],
+        series:{
+          dias:[1,2,3,4,5,6],
+          entregasAcum:[46, 98, 156, 214, 268, 318],
+          costoAcum:[2980, 6420, 10180, 13940, 17420, 20184],
+          holguraMinDia:[22.4, 17.3, 13.8, 9.6, 6.2, 1.9]
+        },
+        resumen:[
+          { k:"Motivo de la detención", v:"Falta de datos de entrada (no es colapso)" },
+          { k:"Último mes disponible", v:"202609" },
+          { k:"Meses solicitados y no disponibles", v:"202610" }
+        ]
+      }
+    }
+  }}
+
+  }
+};
+
+/* ================================================================
+ * [JS-5] DATOS DE LAS VISTAS DE MANTENIMIENTO
+ * ================================================================
+ * Cada sección es una lista con formulario de alta y edición. No
+ * implementan lógica real: representan la funcionalidad y trabajan
+ * en memoria sobre estos mismos arreglos.
+ * ================================================================ */
+const MANTENIMIENTO = {
+  pedidos: {
+    titulo:"Registro de pedidos",
+    descripcion:"Los pedidos llegan normalmente desde el archivo mensual <span class='mono'>ventasaaaamm</span>. " +
+      "Esta vista permite además el alta manual de un pedido y la corrección de los ya registrados. " +
+      "El plazo regular es de 36 horas; los priorizados son de 4, 8, 12 o 18 horas.",
+    columnas:[
+      {k:"id", t:"Pedido", mono:true}, {k:"registro", t:"Registro", mono:true},
+      {k:"cliente", t:"Cliente", mono:true}, {k:"nodo", t:"Nodo", mono:true},
+      {k:"cantidad", t:"Cant.", mono:true}, {k:"plazo", t:"Plazo (h)", mono:true},
+      {k:"entregas", t:"Entregas", mono:true}, {k:"estado", t:"Estado", badge:true}
+    ],
+    campos:[
+      {k:"id", t:"Identificador", ph:"P-0300"},
+      {k:"registro", t:"Registro (##d##h##m)", ph:"11d13h31m"},
+      {k:"cliente", t:"Cliente", ph:"c9167"},
+      {k:"nodo", t:"Nodo de entrega (x,y)", ph:"45,43"},
+      {k:"cantidad", t:"Cantidad del producto P", tipo:"number", ph:"12"},
+      {k:"plazo", t:"Plazo comprometido (h)", tipo:"select", opciones:["4","8","12","18","36"]},
+      {k:"entregas", t:"Entregas previstas (1 h de acondicionamiento c/u)", tipo:"select", opciones:["1","2","3"]},
+      {k:"estado", t:"Estado", tipo:"select",
+       opciones:["Registrado","En ruta","Entrega parcial","Entregado"]}
+    ],
+    filas:[
+      {id:"P-0281", registro:"01d10h25m", cliente:"c3305", nodo:"40,21", cantidad:5,  plazo:36, entregas:1, estado:"En ruta"},
+      {id:"P-0288", registro:"01d16h55m", cliente:"c2231", nodo:"44,30", cantidad:6,  plazo:12, entregas:1, estado:"En ruta"},
+      {id:"P-0290", registro:"01d14h55m", cliente:"c5108", nodo:"36,18", cantidad:5,  plazo:18, entregas:1, estado:"En ruta"},
+      {id:"P-0296", registro:"01d05h30m", cliente:"c7802", nodo:"15,42", cantidad:8,  plazo:36, entregas:1, estado:"En ruta"},
+      {id:"P-0299", registro:"01d12h40m", cliente:"c4120", nodo:"52,20", cantidad:30, plazo:36, entregas:2, estado:"Entrega parcial"},
+      {id:"P-0214", registro:"30d03h04m", cliente:"c9167", nodo:"45,43", cantidad:12, plazo:36, entregas:1, estado:"Entregado"},
+      {id:"P-0231", registro:"31d09h40m", cliente:"c6021", nodo:"36,5",  cantidad:7,  plazo:12, entregas:1, estado:"Entregado"},
+      {id:"P-0298", registro:"01d19h05m", cliente:"c9440", nodo:"57,10", cantidad:3,  plazo:18, entregas:1, estado:"Registrado"}
+    ]
+  },
+
+  clientes: {
+    titulo:"Clientes",
+    descripcion:"Los clientes se ubican siempre sobre un nodo de la retícula, con coordenadas enteras. " +
+      "El nodo registrado aquí es el que el planificador usa como punto de entrega.",
+    columnas:[
+      {k:"id", t:"Cliente", mono:true}, {k:"nombre", t:"Razón social"},
+      {k:"nodo", t:"Nodo", mono:true}, {k:"zona", t:"Zona"},
+      {k:"pedidos", t:"Pedidos", mono:true}, {k:"estado", t:"Estado", badge:true}
+    ],
+    campos:[
+      {k:"id", t:"Identificador", ph:"c9167"},
+      {k:"nombre", t:"Razón social", ph:"Bodega San Martín"},
+      {k:"nodo", t:"Nodo (x,y)", ph:"45,43"},
+      {k:"zona", t:"Zona", tipo:"select", opciones:["Centro","Norte","Sur","Este","Oeste"]},
+      {k:"pedidos", t:"Pedidos históricos", tipo:"number", ph:"0"},
+      {k:"estado", t:"Estado", tipo:"select", opciones:["Activo","Suspendido"]}
+    ],
+    filas:[
+      {id:"c9167", nombre:"Bodega San Martín",     nodo:"45,43", zona:"Norte",  pedidos:34, estado:"Activo"},
+      {id:"c1042", nombre:"Minimarket El Roble",   nodo:"45,28", zona:"Este",   pedidos:21, estado:"Activo"},
+      {id:"c3305", nombre:"Distribuidora Aurora",  nodo:"40,21", zona:"Centro", pedidos:57, estado:"Activo"},
+      {id:"c2231", nombre:"Comercial Los Andes",   nodo:"44,30", zona:"Este",   pedidos:18, estado:"Activo"},
+      {id:"c4120", nombre:"Almacenes Vega S.A.",   nodo:"52,20", zona:"Este",   pedidos:63, estado:"Activo"},
+      {id:"c5108", nombre:"Bodega Central",        nodo:"36,18", zona:"Centro", pedidos:29, estado:"Activo"},
+      {id:"c7802", nombre:"Market Nor-Oeste",      nodo:"15,42", zona:"Norte",  pedidos:12, estado:"Activo"},
+      {id:"c1188", nombre:"Abarrotes Del Sur",     nodo:"5,9",   zona:"Sur",    pedidos:8,  estado:"Suspendido"},
+      {id:"c6021", nombre:"Tienda La Esquina",     nodo:"36,5",  zona:"Sur",    pedidos:15, estado:"Activo"},
+      {id:"c8402", nombre:"Depósito Oriente",      nodo:"62,18", zona:"Este",   pedidos:41, estado:"Activo"}
+    ]
+  },
+
+  vehiculos: {
+    titulo:"Vehículos de la flota",
+    descripcion:"La capacidad y la tarifa por kilómetro son datos estáticos del tipo de unidad. " +
+      "La velocidad puede modificarse en caliente por tipo desde el panel de flota y aplica a partir " +
+      "de la siguiente planificación. El tamaño de la flota solo puede cambiarse antes de iniciar una ejecución.",
+    columnas:[
+      {k:"id", t:"Unidad", mono:true}, {k:"tipo", t:"Tipo"},
+      {k:"capacidad", t:"Capacidad", mono:true}, {k:"velocidad", t:"Velocidad", mono:true},
+      {k:"tarifa", t:"Tarifa", mono:true}, {k:"base", t:"Almacén base", mono:true},
+      {k:"estado", t:"Estado", badge:true}
+    ],
+    campos:[
+      {k:"id", t:"Identificador", ph:"A05"},
+      {k:"tipo", t:"Tipo de unidad", tipo:"select", opciones:["Auto","Moto","Bicicleta"]},
+      {k:"capacidad", t:"Capacidad (paquetes) · estática", tipo:"number", ph:"24"},
+      {k:"velocidad", t:"Velocidad (km/h)", tipo:"number", ph:"40"},
+      {k:"tarifa", t:"Tarifa (S/ por km) · estática", ph:"8.00"},
+      {k:"base", t:"Almacén base", tipo:"select", opciones:["AC","A1","A2"]},
+      {k:"estado", t:"Estado", tipo:"select", opciones:["Disponible","En ruta","Averiada","En taller"]}
+    ],
+    filas:[
+      {id:"A01", tipo:"Auto", capacidad:24, velocidad:40, tarifa:"8.00", base:"AC", estado:"En ruta"},
+      {id:"A02", tipo:"Auto", capacidad:24, velocidad:40, tarifa:"8.00", base:"AC", estado:"Averiada"},
+      {id:"A03", tipo:"Auto", capacidad:24, velocidad:40, tarifa:"8.00", base:"AC", estado:"En ruta"},
+      {id:"A04", tipo:"Auto", capacidad:24, velocidad:40, tarifa:"8.00", base:"AC", estado:"En ruta"},
+      {id:"M01", tipo:"Moto", capacidad:8,  velocidad:25, tarifa:"6.00", base:"A1", estado:"Disponible"},
+      {id:"M02", tipo:"Moto", capacidad:8,  velocidad:25, tarifa:"6.00", base:"AC", estado:"En ruta"},
+      {id:"M03", tipo:"Moto", capacidad:8,  velocidad:25, tarifa:"6.00", base:"A2", estado:"En ruta"},
+      {id:"M04", tipo:"Moto", capacidad:8,  velocidad:25, tarifa:"6.00", base:"AC", estado:"En ruta"},
+      {id:"M05", tipo:"Moto", capacidad:8,  velocidad:25, tarifa:"6.00", base:"AC", estado:"Disponible"},
+      {id:"M06", tipo:"Moto", capacidad:8,  velocidad:25, tarifa:"6.00", base:"A2", estado:"Disponible"},
+      {id:"B01", tipo:"Bicicleta", capacidad:4, velocidad:12, tarifa:"3.00", base:"AC", estado:"En ruta"},
+      {id:"B02", tipo:"Bicicleta", capacidad:4, velocidad:12, tarifa:"3.00", base:"AC", estado:"En ruta"},
+      {id:"B03", tipo:"Bicicleta", capacidad:4, velocidad:12, tarifa:"3.00", base:"AC", estado:"Disponible"}
+    ]
+  },
+
+  almacenes: {
+    titulo:"Almacenes",
+    descripcion:"El Almacén Central tiene inventario infinito. Los dos intermedios recargan a 1 000 " +
+      "unidades de forma instantánea cada día a las 23:59:59 y no pueden abastecer a una unidad si están sin stock.",
+    columnas:[
+      {k:"id", t:"Almacén", mono:true}, {k:"nombre", t:"Nombre"},
+      {k:"nodo", t:"Nodo", mono:true}, {k:"capacidad", t:"Capacidad", mono:true},
+      {k:"recarga", t:"Recarga", mono:true}, {k:"estado", t:"Estado", badge:true}
+    ],
+    campos:[
+      {k:"id", t:"Identificador", ph:"A3"},
+      {k:"nombre", t:"Nombre", ph:"Intermedio Sur"},
+      {k:"nodo", t:"Nodo (x,y)", ph:"30,6"},
+      {k:"capacidad", t:"Capacidad (unidades)", ph:"1000"},
+      {k:"recarga", t:"Hora de recarga diaria", ph:"23:59:59"},
+      {k:"estado", t:"Estado", tipo:"select", opciones:["Operativo","Sin stock","Fuera de servicio"]}
+    ],
+    filas:[
+      {id:"AC", nombre:"Central",              nodo:"25,15", capacidad:"∞",     recarga:"—",        estado:"Operativo"},
+      {id:"A1", nombre:"Intermedio Nor-Oeste", nodo:"12,38", capacidad:"1 000", recarga:"23:59:59", estado:"Operativo"},
+      {id:"A2", nombre:"Intermedio Este",      nodo:"55,27", capacidad:"1 000", recarga:"23:59:59", estado:"Operativo"}
+    ]
+  },
+
+  redvial: {
+    titulo:"Red vial · tramos bloqueados",
+    descripcion:"Los bloqueos son siempre planificados con antelación, nunca aleatorios. Un nodo bloqueado " +
+      "no se puede atravesar y no permite girar, así que una unidad que llega a él debe dar media vuelta. " +
+      "Provienen del archivo mensual <span class='mono'>aaaamm.bloqueadas</span>.",
+    columnas:[
+      {k:"id", t:"Bloqueo", mono:true}, {k:"tramo", t:"Tramo (nodos)", mono:true},
+      {k:"desde", t:"Desde", mono:true}, {k:"hasta", t:"Hasta", mono:true},
+      {k:"origen", t:"Archivo", mono:true}, {k:"estado", t:"Estado", badge:true}
+    ],
+    campos:[
+      {k:"id", t:"Identificador", ph:"BLQ-105"},
+      {k:"tramo", t:"Tramo (x1,y1,x2,y2)", ph:"31,21,34,21"},
+      {k:"desde", t:"Desde (##d##h##m)", ph:"01d06h00m"},
+      {k:"hasta", t:"Hasta (##d##h##m)", ph:"01d15h00m"},
+      {k:"origen", t:"Archivo de origen", ph:"202609.bloqueadas"},
+      {k:"estado", t:"Estado", tipo:"select", opciones:["Vigente","Programado","Expirado"]}
+    ],
+    filas:[
+      {id:"BLQ-021", tramo:"31,21 → 34,21", desde:"01d20h00m", hasta:"02d06h00m", origen:"202609.bloqueadas", estado:"Vigente"},
+      {id:"BLQ-088", tramo:"40,18 → 46,18", desde:"30d18h00m", hasta:"01d02h00m", origen:"202609.bloqueadas", estado:"Vigente"},
+      {id:"BLQ-097", tramo:"58,38 → 64,38", desde:"03d06h00m", hasta:"03d18h00m", origen:"202610.bloqueadas", estado:"Programado"},
+      {id:"BLQ-104", tramo:"44,33 → 49,33", desde:"08d06h00m", hasta:"08d14h00m", origen:"202609.bloqueadas", estado:"Vigente"},
+      {id:"BLQ-112", tramo:"12,30 → 12,36", desde:"05d09h00m", hasta:"05d17h00m", origen:"202610.bloqueadas", estado:"Programado"},
+      {id:"BLQ-007", tramo:"31,21 → 34,21", desde:"01d06h00m", hasta:"01d15h00m", origen:"202608.bloqueadas", estado:"Expirado"}
+    ]
+  }
+};
+const ORDEN_MANT = ["pedidos","clientes","vehiculos","almacenes","redvial"];
+const ETIQUETA_MANT = {
+  pedidos:"Pedidos", clientes:"Clientes", vehiculos:"Vehículos",
+  almacenes:"Almacenes", redvial:"Red vial"
+};
+
+/* ================================================================
+ * [JS-6] UTILIDADES DE FORMATO, FECHAS Y RESOLUCIÓN DE LÁMINAS
+ * ================================================================
+ * A partir de aquí es SOLO capa de presentación: lee los objetos de
+ * arriba y los dibuja. No contiene datos del caso.
+ * ================================================================ */
+const $ = s => document.querySelector(s);
+const fmtNum  = n => n.toLocaleString("es-PE");
+const fmtSol  = n => "S/ " + n.toLocaleString("es-PE", {minimumFractionDigits:2, maximumFractionDigits:2});
+const fmtHoras = h => { const H = Math.floor(h), M = Math.round((h - H) * 60);
+                        return `${H} h ${String(M).padStart(2,"0")} min`; };
+const cap1 = s => s.charAt(0).toUpperCase() + s.slice(1);
+const FORMATOS = { num:fmtNum, soles:fmtSol, horas1:v => v.toFixed(1).replace(".",",") };
+
+const dd = n => String(n).padStart(2,"0");
+const fmtFecha     = d => `${dd(d.getDate())}/${dd(d.getMonth()+1)}/${d.getFullYear()}`;
+const fmtFechaHora = d => `${fmtFecha(d)} ${dd(d.getHours())}:${dd(d.getMinutes())}`;
+const mesDe        = d => `${d.getFullYear()}${dd(d.getMonth()+1)}`;
+function addDias(d, n){ const x = new Date(d); x.setDate(x.getDate() + n); return x; }
+
+/* ---- Estado de la interfaz (nunca de la simulación) ---- */
+const UI = {
+  vista:"selector",           // 'selector' | 'escenario' | 'mant'
+  escenario:null,             // id del escenario de la corrida en curso
+  corridaIniciada:false,      // una vez true, el escenario no puede cambiarse
+  lamina:1,
+  laminaBoton:1,
+  incidenciaAbierta:null,
+  mantSeccion:"pedidos",
+  mantSel:null,
+  semaforo:{ ...CONFIG.semaforo },
+  inicios:{ diaadia:ESCENARIOS.diaadia.inicioISO,
+            sim5d:ESCENARIOS.sim5d.inicioISO,
+            colapso:ESCENARIOS.colapso.inicioISO },
+  relojTimer:null,
+  relojSeg:0
+};
+
+const esc      = () => ESCENARIOS[UI.escenario];
+const datosEsc = () => ESTADO_SIMULACION.escenarios[UI.escenario];
+
+/* ----------------------------------------------------------------
+ * resolverLamina — aplica la CONDICIÓN DE TÉRMINO a los datos.
+ * Es el único punto donde el estado mostrado depende del escenario:
+ * en la simulación de colapso, si el mes que la corrida necesitaría
+ * no está en la biblioteca, la lámina final es la de detención por
+ * falta de datos en lugar de la del colapso.
+ * ---------------------------------------------------------------- */
+function resolverLamina(n){
+  const d = datosEsc();
+  if (UI.escenario === "colapso" && n === 3 && !mesCompleto("202610")){
+    const v = d.variantes.sinDatos;
+    return Object.assign({}, d.laminas[v.base], v);
+  }
+  return d.laminas[n];
+}
+function laminaActual(){ return resolverLamina(UI.lamina); }
+
+/* Semáforo de criticidad: se aplica al TIEMPO RESTANTE hasta el plazo
+   comprometido de cada pedido, con los umbrales vigentes del panel. */
+function semaforoDe(horas){
+  if (horas == null) return null;
+  if (horas > UI.semaforo.verdeMayorQue) return "verde";
+  if (horas < UI.semaforo.rojoMenorQue)  return "rojo";
+  return "ambar";
+}
+const SEM_FILL = { verde:"#22c55e", ambar:"#f59e0b", rojo:"#ef4444" };
+const SEM_TXT  = { verde:"sem-verde", ambar:"sem-ambar", rojo:"sem-rojo" };
+
+/* ---- Meses de archivos que el escenario necesita ---- */
+function mesesRequeridos(escId){
+  const e = ESCENARIOS[escId], ini = new Date(UI.inicios[escId]);
+  const cond = CONDICIONES_TERMINO[escId];
+  if (cond.requiereTodoElPeriodo && e.duracionDias){
+    /* Duración conocida: se pueden exigir por adelantado todos los
+       meses que el periodo cruza. */
+    const fin = addDias(ini, e.duracionDias), meses = [];
+    const c = new Date(ini.getFullYear(), ini.getMonth(), 1);
+    while (c <= fin){ meses.push(mesDe(c)); c.setMonth(c.getMonth() + 1); }
+    return meses;
+  }
+  /* Duración desconocida: solo se exige el mes inicial; los siguientes
+     se solicitan conforme la corrida avanza. */
+  return [mesDe(ini)];
+}
+/* Archivos requeridos que impiden iniciar la corrida */
+function problemasDeInicio(escId){
+  const out = [];
+  for (const m of mesesRequeridos(escId)){
+    const e = BIBLIOTECA[m] || { pedidos:"faltante", bloqueos:"faltante" };
+    if (e.pedidos  !== "cargado") out.push({ archivo:`ventas${m}`,     mes:m, campo:"pedidos",  estado:e.pedidos });
+    if (e.bloqueos !== "cargado") out.push({ archivo:`${m}.bloqueadas`, mes:m, campo:"bloqueos", estado:e.bloqueos });
+  }
+  return out;
+}
+
+/* ================================================================
+ * [JS-7] ICONOS EN CANVAS
+ * ================================================================
+ * Todos son paths dibujados a mano: no hay librerías ni fuentes de
+ * iconos. Se dibujan a TAMAÑO FIJO EN PÍXELES, no en kilómetros, así
+ * que siguen siendo legibles con el mapa completo de 70 × 50 km a la
+ * vista, donde una celda mide apenas unos píxeles.
+ * ================================================================ */
+const COLOR_UNIDAD = { auto:"#60a5fa", moto:"#a78bfa", bicicleta:"#e8eef7" };
+const BORDE = "#0a111e";
+
+/* Subpath circular independiente (evita la línea que arrastra arc()) */
+function circ(ctx, x, y, r){ ctx.moveTo(x + r, y); ctx.arc(x, y, r, 0, Math.PI * 2); }
+function rectR(ctx, x, y, w, h, r){
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y,     x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x,     y + h, r);
+  ctx.arcTo(x,     y + h, x,     y,     r);
+  ctx.arcTo(x,     y,     x + w, y,     r);
+  ctx.closePath();
+}
+
+const ICONOS = {
+  /* --- Auto: carrocería con cabina y dos ruedas --- */
+  auto(ctx, x, y, color){
+    ctx.save(); ctx.translate(x, y);
+    ctx.strokeStyle = BORDE; ctx.lineWidth = 1.3; ctx.fillStyle = color;
+    ctx.beginPath();                                   // cabina
+    ctx.moveTo(-4.6,-2.5); ctx.lineTo(-3,-6.4); ctx.lineTo(3.4,-6.4); ctx.lineTo(5,-2.5);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); rectR(ctx, -9.5, -2.5, 19, 6.2, 2); ctx.fill(); ctx.stroke();  // carrocería
+    ctx.fillStyle = BORDE;                             // ruedas
+    ctx.beginPath(); circ(ctx, -5.2, 4.2, 2.4); circ(ctx, 5.2, 4.2, 2.4); ctx.fill();
+    ctx.restore();
+  },
+  /* --- Moto: ruedas pequeñas, cuadro bajo y manubrio --- */
+  moto(ctx, x, y, color){
+    ctx.save(); ctx.translate(x, y);
+    ctx.strokeStyle = color; ctx.lineWidth = 1.9; ctx.lineJoin = "round"; ctx.lineCap = "round";
+    ctx.beginPath(); circ(ctx, -5.6, 2.6, 2.9); circ(ctx, 5.6, 2.6, 2.9); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(-5.6, 2.6); ctx.lineTo(-1.2,-1.6); ctx.lineTo(3.2,-1.6); ctx.lineTo(5.6, 2.6);
+    ctx.moveTo(-3.4,-3.8); ctx.lineTo(0.8,-3.8);
+    ctx.moveTo(4.2,-1.6);  ctx.lineTo(6.6,-4.4);
+    ctx.stroke(); ctx.lineCap = "butt";
+    ctx.restore();
+  },
+  /* --- Bicicleta: ruedas grandes y finas, cuadro triangular --- */
+  bicicleta(ctx, x, y, color){
+    ctx.save(); ctx.translate(x, y);
+    ctx.strokeStyle = color; ctx.lineWidth = 1.4; ctx.lineJoin = "round"; ctx.lineCap = "round";
+    ctx.beginPath(); circ(ctx, -5.8, 2.4, 3.9); circ(ctx, 5.8, 2.4, 3.9); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(-5.8, 2.4); ctx.lineTo(-0.4,-2.8); ctx.lineTo(5.8, 2.4);
+    ctx.moveTo(-0.4,-2.8); ctx.lineTo(-1.6, 2.4);
+    ctx.moveTo(-2.6,-4.4); ctx.lineTo(0.6,-4.4);
+    ctx.moveTo(5.8, 2.4);  ctx.lineTo(4.4,-4.2); ctx.lineTo(6.8,-4.8);
+    ctx.stroke(); ctx.lineCap = "butt";
+    ctx.restore();
+  },
+  /* --- Almacén: nave con techo a dos aguas. El central lleva una
+         franja distintiva y se dibuja algo más grande. --- */
+  almacen(ctx, x, y, central){
+    ctx.save(); ctx.translate(x, y); if (central) ctx.scale(1.2, 1.2);
+    ctx.fillStyle = "#34d399"; ctx.strokeStyle = BORDE; ctx.lineWidth = 1.3;
+    ctx.beginPath(); ctx.moveTo(-9.5,-2); ctx.lineTo(0,-8.8); ctx.lineTo(9.5,-2);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.rect(-7.8,-2, 15.6, 9.4); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = "#042416";
+    ctx.fillRect(-2.6, 2, 5.2, 5.4);                       // portón
+    if (central) ctx.fillRect(-6, -0.6, 12, 1.7);          // franja del central
+    ctx.restore();
+  },
+  /* --- Cliente: pin de mapa coloreado por el semáforo.
+         Con entrega parcial pendiente lleva un anillo punteado ámbar
+         y un arco que indica la fracción ya recibida. --- */
+  cliente(ctx, x, y, color, parcial, fraccion){
+    ctx.save(); ctx.translate(x, y);
+    if (parcial){
+      ctx.setLineDash([3, 2.6]); ctx.strokeStyle = "#fbbf24"; ctx.lineWidth = 1.5;
+      ctx.beginPath(); circ(ctx, 0, -5.6, 9.6); ctx.stroke(); ctx.setLineDash([]);
+      ctx.strokeStyle = "#34d399"; ctx.lineWidth = 2.6;
+      ctx.beginPath();
+      ctx.arc(0, -5.6, 9.6, -Math.PI/2, -Math.PI/2 + (fraccion || 0) * Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.fillStyle = color; ctx.strokeStyle = BORDE; ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.arc(0, -6.6, 4.4, Math.PI * 0.86, Math.PI * 2.14);
+    ctx.lineTo(0, 0.6); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = BORDE; ctx.beginPath(); circ(ctx, 0, -6.6, 1.7); ctx.fill();
+    ctx.restore();
+  },
+  /* --- Bloqueo: señal de prohibido el paso --- */
+  bloqueo(ctx, x, y){
+    ctx.save();
+    ctx.fillStyle = "#ef4444"; ctx.strokeStyle = BORDE; ctx.lineWidth = 1.3;
+    ctx.beginPath(); circ(ctx, x, y, 6.6); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = "#ffffff"; ctx.fillRect(x - 3.9, y - 1.2, 7.8, 2.4);
+    ctx.restore();
+  },
+  /* --- Avería: señal de advertencia --- */
+  averia(ctx, x, y){
+    ctx.save();
+    ctx.fillStyle = "#f59e0b"; ctx.strokeStyle = BORDE; ctx.lineWidth = 1.3;
+    ctx.beginPath(); ctx.moveTo(x, y - 7.2); ctx.lineTo(x + 6.8, y + 4.6);
+    ctx.lineTo(x - 6.8, y + 4.6); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = "#2a1d02";
+    ctx.fillRect(x - 0.9, y - 3.4, 1.8, 4.6); ctx.fillRect(x - 0.9, y + 2.2, 1.8, 1.8);
+    ctx.restore();
+  },
+  /* --- Relevo de conductor: punto de la ruta donde ocurre el cambio
+         de turno. La unidad no se detiene; el cambio es despreciable. --- */
+  relevo(ctx, x, y){
+    ctx.save();
+    ctx.fillStyle = "#a78bfa"; ctx.strokeStyle = BORDE; ctx.lineWidth = 1.3;
+    ctx.beginPath(); circ(ctx, x, y, 6.2); ctx.fill(); ctx.stroke();
+    ctx.strokeStyle = "#1b1033"; ctx.lineWidth = 1.5; ctx.lineCap = "round"; ctx.lineJoin = "round";
+    ctx.beginPath();
+    ctx.moveTo(x - 3, y - 1.7); ctx.lineTo(x + 3, y - 1.7);
+    ctx.moveTo(x + 1.5, y - 3.2); ctx.lineTo(x + 3, y - 1.7); ctx.lineTo(x + 1.5, y - 0.2);
+    ctx.moveTo(x + 3, y + 1.7); ctx.lineTo(x - 3, y + 1.7);
+    ctx.moveTo(x - 1.5, y + 0.2); ctx.lineTo(x - 3, y + 1.7); ctx.lineTo(x - 1.5, y + 3.2);
+    ctx.stroke(); ctx.lineCap = "butt";
+    ctx.restore();
+  },
+  /* --- Destino inmediato: diana si es un cliente, banderín si es
+         un almacén. Se dibuja al final del tramo pendiente. --- */
+  destinoCliente(ctx, x, y, color){
+    ctx.save();
+    ctx.strokeStyle = color; ctx.lineWidth = 2;
+    ctx.beginPath(); circ(ctx, x, y, 8.4); ctx.stroke();
+    ctx.fillStyle = color; ctx.beginPath(); circ(ctx, x, y, 2.6); ctx.fill();
+    ctx.restore();
+  },
+  destinoAlmacen(ctx, x, y){
+    ctx.save();
+    ctx.strokeStyle = "#34d399"; ctx.lineWidth = 2; ctx.lineCap = "round";
+    ctx.beginPath(); ctx.moveTo(x, y + 7); ctx.lineTo(x, y - 9); ctx.stroke();
+    ctx.fillStyle = "#34d399"; ctx.fillRect(x + 1.4, y - 9, 9, 6.2);
+    ctx.lineCap = "butt"; ctx.restore();
+  }
+};
+
+/* Ítems de la leyenda: [dibujante, etiqueta] */
+const LEYENDA = [
+  [c => ICONOS.auto(c, 13, 10, COLOR_UNIDAD.auto),        "Auto · 24 paq."],
+  [c => ICONOS.almacen(c, 13, 10, true),                  "Almacén central"],
+  [c => ICONOS.moto(c, 13, 10, COLOR_UNIDAD.moto),        "Moto · 8 paq."],
+  [c => ICONOS.almacen(c, 13, 10, false),                 "Almacén intermedio"],
+  [c => ICONOS.bicicleta(c, 13, 10, COLOR_UNIDAD.bicicleta), "Bicicleta · 4 paq."],
+  [c => ICONOS.cliente(c, 13, 13, SEM_FILL.verde),        "Cliente (semáforo)"],
+  [c => ICONOS.destinoCliente(c, 13, 10, "#60a5fa"),      "Destino: cliente"],
+  [c => ICONOS.cliente(c, 13, 13, SEM_FILL.ambar, true, 0.6), "Entrega parcial"],
+  [c => ICONOS.destinoAlmacen(c, 9, 10),                  "Destino: almacén"],
+  [c => ICONOS.bloqueo(c, 13, 10),                        "Tramo bloqueado"],
+  [c => ICONOS.relevo(c, 13, 10),                         "Relevo de conductor"],
+  [c => ICONOS.averia(c, 13, 10),                         "Unidad averiada"]
+];
+function pintarLeyenda(){
+  const cont = $("#leyenda-grid");
+  cont.innerHTML = LEYENDA.map(() =>
+    `<div class="it"><canvas width="52" height="40"></canvas><span></span></div>`).join("");
+  cont.querySelectorAll(".it").forEach((it, i) => {
+    const cv = it.querySelector("canvas"), c = cv.getContext("2d");
+    c.setTransform(2, 0, 0, 2, 0, 0);          // 2× para pantallas densas
+    LEYENDA[i][0](c);
+    it.querySelector("span").textContent = LEYENDA[i][1];
+  });
+}
+
+/* ================================================================
+ * [JS-8] MOTOR DE DIBUJO DEL MAPA  —  ÚNICO EN TODO EL ARCHIVO
+ * ================================================================
+ * Recibe el estado por parámetro. No conoce escenarios: dibuja lo
+ * que el objeto le entrega. Si algún día hiciera falta una segunda
+ * función de dibujo, sería señal de que el contrato de datos está mal.
+ *
+ * Retícula: 70 × 50 km con celdas de 1 km → 71 líneas verticales y 51
+ * horizontales, dibujadas como LÍNEAS CONTINUAS (no 3 621 marcadores).
+ * El origen (0,0) está abajo a la izquierda: como en Canvas el eje Y
+ * crece hacia abajo, se invierte al proyectar.
+ * ================================================================ */
+const mapa = $("#mapa"), mctx = mapa.getContext("2d");
+const MAPA_PAD = 34;
+let geo = { s:8, ox:0, oy:0 };      // escala px/km y origen del dibujo
+
+function calcularGeometria(margenSuperior){
+  /* margenSuperior reserva la franja que ocupa el banner de detención,
+     para que ningún nodo del mapa quede dibujado debajo de él. */
+  const w = mapa.clientWidth, h = mapa.clientHeight;
+  const arriba = MAPA_PAD + (margenSuperior || 0);
+  const s = Math.min((w - 2*MAPA_PAD) / CONFIG.ciudad.anchoKm,
+                     (h - arriba - MAPA_PAD) / CONFIG.ciudad.altoKm);
+  geo = { s,
+    ox:(w - s*CONFIG.ciudad.anchoKm) / 2,
+    oy:arriba + (h - arriba - MAPA_PAD - s*CONFIG.ciudad.altoKm) / 2 };
+}
+const px = x => geo.ox + x * geo.s;
+const py = y => geo.oy + (CONFIG.ciudad.altoKm - y) * geo.s;
+function kmDesdePx(mx, my){
+  const x = Math.round((mx - geo.ox) / geo.s);
+  const y = Math.round(CONFIG.ciudad.altoKm - (my - geo.oy) / geo.s);
+  if (x < 0 || x > CONFIG.ciudad.anchoKm || y < 0 || y > CONFIG.ciudad.altoKm) return null;
+  return { x, y };
+}
+const fuente = (peso, tam, mono) =>
+  `${peso ? peso + " " : ""}${tam}px ${getComputedStyle(document.body)
+    .getPropertyValue(mono ? "--mono" : "--sans")}`;
+
+function etiqueta(ctx, texto, x, y, color, font){
+  ctx.font = font || fuente("", 12);
+  const w = ctx.measureText(texto).width;
+  ctx.fillStyle = "rgba(8,14,25,.86)";
+  ctx.fillRect(x - 3, y - 11, w + 6, 15);
+  ctx.fillStyle = color || "#e8eef7";
+  ctx.fillText(texto, x, y);
+}
+
+/* ¿El punto (ux,uy) cae sobre el tramo recto a→b? */
+function enSegmento(a, b, ux, uy){
+  if (a[0] === b[0] && ux === a[0])
+    return uy >= Math.min(a[1], b[1]) && uy <= Math.max(a[1], b[1]);
+  if (a[1] === b[1] && uy === a[1])
+    return ux >= Math.min(a[0], b[0]) && ux <= Math.max(a[0], b[0]);
+  return false;
+}
+/* Parte la ruta en el punto donde está la unidad: lo ya recorrido y
+   lo que queda pendiente hasta el destino inmediato. */
+function dividirRuta(nodos, ux, uy){
+  const rec = [[nodos[0][0], nodos[0][1]]], pend = [];
+  let cortado = false;
+  for (let i = 1; i < nodos.length; i++){
+    const a = nodos[i-1], b = nodos[i];
+    if (!cortado && enSegmento(a, b, ux, uy)){
+      rec.push([ux, uy]); pend.push([ux, uy]); pend.push([b[0], b[1]]); cortado = true;
+    } else if (!cortado){ rec.push([b[0], b[1]]); }
+    else { pend.push([b[0], b[1]]); }
+  }
+  return cortado ? { rec, pend } : { rec:nodos.map(n => [n[0], n[1]]), pend:[] };
+}
+function trazar(ctx, pts){
+  if (pts.length < 2) return;
+  ctx.beginPath(); ctx.moveTo(px(pts[0][0]), py(pts[0][1]));
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(px(pts[i][0]), py(pts[i][1]));
+  ctx.stroke();
+}
+
+function dibujarMapa(){
+  const L = laminaActual();
+  if (!L) return;
+  const dpr = window.devicePixelRatio || 1;
+  const w = mapa.clientWidth, h = mapa.clientHeight;
+  if (!w || !h) return;
+  mapa.width = w * dpr; mapa.height = h * dpr;
+  mctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  calcularGeometria(L.detencion ? 62 : 0);
+  mctx.clearRect(0, 0, w, h);
+
+  /* --- 1. Retícula de calles: solo líneas continuas --- */
+  mctx.lineWidth = 1;
+  for (let x = 0; x <= CONFIG.ciudad.anchoKm; x++){
+    mctx.strokeStyle = x % 10 === 0 ? "#2a3d5e" : "#1a2940";
+    mctx.beginPath(); mctx.moveTo(px(x), py(0)); mctx.lineTo(px(x), py(CONFIG.ciudad.altoKm)); mctx.stroke();
+  }
+  for (let y = 0; y <= CONFIG.ciudad.altoKm; y++){
+    mctx.strokeStyle = y % 10 === 0 ? "#2a3d5e" : "#1a2940";
+    mctx.beginPath(); mctx.moveTo(px(0), py(y)); mctx.lineTo(px(CONFIG.ciudad.anchoKm), py(y)); mctx.stroke();
+  }
+  mctx.strokeStyle = "#3b527a"; mctx.lineWidth = 1.5;
+  mctx.strokeRect(px(0), py(CONFIG.ciudad.altoKm),
+                  CONFIG.ciudad.anchoKm * geo.s, CONFIG.ciudad.altoKm * geo.s);
+  mctx.font = fuente("", 11, true); mctx.fillStyle = "#8194ab";
+  for (let x = 0; x <= CONFIG.ciudad.anchoKm; x += 10) mctx.fillText(x, px(x) - 6, py(0) + 16);
+  for (let y = 0; y <= CONFIG.ciudad.altoKm; y += 10) mctx.fillText(y, px(0) - 24, py(y) + 4);
+
+  /* --- 2. Tramos bloqueados sobre las líneas de la retícula --- */
+  for (const b of L.bloqueos || []){
+    const [a, z] = b.nodos;
+    mctx.strokeStyle = "#ef4444"; mctx.lineWidth = 5; mctx.lineCap = "round";
+    mctx.beginPath(); mctx.moveTo(px(a[0]), py(a[1])); mctx.lineTo(px(z[0]), py(z[1])); mctx.stroke();
+    mctx.lineCap = "butt";
+    ICONOS.bloqueo(mctx, px((a[0] + z[0]) / 2), py((a[1] + z[1]) / 2) - 14);
+    etiqueta(mctx, b.id, px((a[0] + z[0]) / 2) - 20, py((a[1] + z[1]) / 2) + 24,
+             "#f87171", fuente("600", 11));
+  }
+
+  /* --- 3. Rutas completas: tramo recorrido punteado y tenue,
+             tramo pendiente en línea llena --- */
+  for (const u of L.unidades){
+    if (!u.ruta) continue;
+    const { rec, pend } = dividirRuta(u.ruta.nodos, u.x, u.y);
+    const color = COLOR_UNIDAD[u.tipo];
+    if (u.ruta.alternativa && pend.length){        // realce de la ruta alternativa
+      mctx.strokeStyle = "#fbbf24"; mctx.globalAlpha = .22; mctx.lineWidth = 7;
+      trazar(mctx, pend); mctx.globalAlpha = 1;
+    }
+    mctx.strokeStyle = color; mctx.globalAlpha = .34; mctx.lineWidth = 2;
+    mctx.setLineDash([3, 4]); trazar(mctx, rec); mctx.setLineDash([]);
+    mctx.globalAlpha = .9; mctx.lineWidth = 2.6; trazar(mctx, pend);
+    mctx.globalAlpha = 1;
+  }
+
+  /* --- 4. Marcadores de destino inmediato y de relevo de conductor --- */
+  for (const u of L.unidades){
+    if (!u.ruta) continue;
+    const d = u.ruta.destino;
+    if (d.tipo === "cliente") ICONOS.destinoCliente(mctx, px(d.x), py(d.y), COLOR_UNIDAD[u.tipo]);
+    else                      ICONOS.destinoAlmacen(mctx, px(d.x), py(d.y));
+    for (const r of u.ruta.relevos || []){
+      ICONOS.relevo(mctx, px(r.x), py(r.y));
+      u._relevo = r;
+    }
+  }
+
+  /* --- 5. Nodos de cliente con pedido activo, según el semáforo --- */
+  for (const p of L.pedidos || []){
+    const sem = semaforoDe(p.restanteHoras);
+    const frac = p.parcial ? (p.entregado / p.cantidad) : 0;
+    ICONOS.cliente(mctx, px(p.x), py(p.y), SEM_FILL[sem], !!p.parcial, frac);
+    p._px = px(p.x); p._py = py(p.y) - 6;
+    if (sem === "rojo" && !p.parcial){
+      mctx.strokeStyle = "#ef4444"; mctx.lineWidth = 1.5;
+      mctx.beginPath(); circ(mctx, px(p.x), py(p.y) - 5.6, 10); mctx.stroke();
+    }
+    const col = sem === "rojo" ? "#f87171" : sem === "ambar" ? "#fbbf24" : "#a7b6c9";
+    etiqueta(mctx, p.cliente + (p.parcial ? " ◐" : ""), px(p.x) + 11, py(p.y) - 8,
+             col, fuente("", 11, true));
+  }
+
+  /* --- 6. Almacenes, etiquetados con nombre y coordenada --- */
+  for (const a of L.almacenes){
+    const X = px(a.x), Y = py(a.y);
+    ICONOS.almacen(mctx, X, Y, a.central);
+    etiqueta(mctx, `${a.id} (${a.x},${a.y})`, X + 14, Y - 4, "#e8eef7", fuente("600", 12));
+    const stockTxt = a.stock == null ? "stock ∞" : `stock ${fmtNum(a.stock)}/${fmtNum(a.capacidad)}`;
+    etiqueta(mctx, stockTxt, X + 14, Y + 11,
+             a.stock != null && a.stock < 300 ? "#fbbf24" : "#a7b6c9", fuente("", 11, true));
+    if (a.nota) etiqueta(mctx, a.nota, X + 14, Y + 26,
+                         a.stock === 0 ? "#f87171" : "#fbbf24", fuente("", 11));
+  }
+
+  /* --- 7. Unidades de transporte --- */
+  const enBase = {};
+  const nodosAlmacen = new Set(L.almacenes.map(a => `${a.x},${a.y}`));
+  for (const u of L.unidades){
+    const clave = `${u.x},${u.y}`;
+    const estatica = u.estado === "estacionada" || u.estado === "en_almacen" ||
+                     (u.estado === "averiada" && nodosAlmacen.has(clave));
+    let X = px(u.x), Y = py(u.y);
+    if (estatica){                       // rejilla de estacionamiento junto al almacén
+      const idx = enBase[clave] = (enBase[clave] ?? -1) + 1;
+      X += 14 + (idx % 5) * 22; Y += 46 + Math.floor(idx / 5) * 20;
+    }
+    u._px = X; u._py = Y;
+    const color = u.estado === "averiada" ? "#f87171" : COLOR_UNIDAD[u.tipo];
+    ICONOS[u.tipo](mctx, X, Y, color);
+    if (u.estado === "refrigerio"){
+      mctx.strokeStyle = "#f59e0b"; mctx.lineWidth = 2.4;
+      mctx.beginPath(); circ(mctx, X, Y, 11.5); mctx.stroke();
+      etiqueta(mctx, "refrigerio", X + 13, Y + 16, "#fbbf24", fuente("", 11));
+    }
+    if (u.estado === "averiada"){
+      ICONOS.averia(mctx, X + 11, Y - 10);
+      if (!estatica) etiqueta(mctx, "avería", X + 20, Y + 14, "#f87171", fuente("600", 11));
+    }
+    if (!estatica) etiqueta(mctx, u.id, X - 9, Y - 12, "#e8eef7", fuente("600", 10.5, true));
+  }
+  /* Rótulo del estacionamiento bajo cada almacén con unidades detenidas */
+  for (const a of L.almacenes){
+    const n = enBase[`${a.x},${a.y}`];
+    if (n == null) continue;
+    etiqueta(mctx, `${n + 1} unidad${n ? "es" : ""} en ${a.id} · clic para ver el detalle`,
+             px(a.x) + 14, py(a.y) + 46 + (Math.floor(n / 5) + 1) * 20 + 4,
+             "#a7b6c9", fuente("", 11));
+  }
+
+  /* --- 8. Regla de escala --- */
+  const rx = px(0), ry = py(0) + 26, rl = 10 * geo.s;
+  mctx.strokeStyle = "#8194ab"; mctx.lineWidth = 1.5;
+  mctx.beginPath();
+  mctx.moveTo(rx, ry - 4); mctx.lineTo(rx, ry); mctx.lineTo(rx + rl, ry); mctx.lineTo(rx + rl, ry - 4);
+  mctx.moveTo(rx + rl/2, ry); mctx.lineTo(rx + rl/2, ry - 3);
+  mctx.stroke();
+  mctx.fillStyle = "#8194ab"; mctx.font = fuente("", 11, true);
+  mctx.fillText("10 km · celda = 1 km", rx + rl + 8, ry + 3);
+}
+
+/* ---- Interacción con el mapa ---- */
+mapa.addEventListener("mousemove", e => {
+  const r = mapa.getBoundingClientRect();
+  const p = kmDesdePx(e.clientX - r.left, e.clientY - r.top);
+  $("#coords").textContent = p ? `x: ${p.x} · y: ${p.y}` : "x: — · y: —";
+  const hit = objetoEn(e.clientX - r.left, e.clientY - r.top);
+  mapa.style.cursor = hit ? "pointer" : "crosshair";
+});
+mapa.addEventListener("mouseleave", () => { $("#coords").textContent = "x: — · y: —"; });
+
+/* Devuelve la unidad o el pedido más cercano al cursor */
+function objetoEn(mx, my){
+  const L = laminaActual();
+  if (!L) return null;
+  let mejor = null, mejorD = 14;
+  for (const u of L.unidades){
+    if (u._px == null) continue;
+    const d = Math.hypot(mx - u._px, my - u._py);
+    if (d < mejorD){ mejorD = d; mejor = { tipo:"unidad", obj:u }; }
+  }
+  for (const p of L.pedidos || []){
+    if (p._px == null) continue;
+    const d = Math.hypot(mx - p._px, my - p._py);
+    if (d < mejorD){ mejorD = d; mejor = { tipo:"pedido", obj:p }; }
+  }
+  return mejor;
+}
+
+mapa.addEventListener("click", e => {
+  const r = mapa.getBoundingClientRect();
+  const hit = objetoEn(e.clientX - r.left, e.clientY - r.top);
+  const tip = $("#tooltip");
+  if (!hit){ tip.style.display = "none"; return; }
+  tip.innerHTML = hit.tipo === "unidad" ? tooltipUnidad(hit.obj) : tooltipPedido(hit.obj);
+  const wrap = $("#map-wrap").getBoundingClientRect();
+  tip.style.display = "block";
+  let tx = e.clientX - wrap.left + 14, ty = e.clientY - wrap.top + 10;
+  if (tx + tip.offsetWidth + 10 > wrap.width) tx = Math.max(6, tx - tip.offsetWidth - 28);
+  if (ty + tip.offsetHeight + 10 > wrap.height) ty = Math.max(6, ty - tip.offsetHeight - 24);
+  tip.style.left = tx + "px"; tip.style.top = ty + "px";
+});
+
+const NOMBRE_ESTADO = { en_ruta:"En ruta", refrigerio:"En refrigerio", en_almacen:"En almacén",
+                        estacionada:"Estacionada", averiada:"Averiada" };
+
+function tooltipUnidad(u){
+  const L = laminaActual();
+  const alm = u.ruta ? (L.almacenes.find(a => a.id === u.ruta.origen) || {}) : null;
+  const d = u.ruta ? u.ruta.destino : null;
+  const rutaTxt = u.ruta ? u.ruta.nodos.map(n => `(${n[0]},${n[1]})`).join("→") : "";
+  return `
+    <h4><span class="mono">${u.id}</span> · ${cap1(u.tipo)}</h4>
+    <table>
+      <tr><td>Estado</td><td>${NOMBRE_ESTADO[u.estado]}</td></tr>
+      <tr><td>Carga</td><td><span class="mono">${u.carga} / ${u.capacidad}</span> paquetes</td></tr>
+      ${u.conductor ? `<tr><td>Conductor</td><td><span class="mono">${u.conductor.id}</span>
+        · turno ${u.conductor.turno}${u.conductor.desde ? ` (desde ${u.conductor.desde})` : ""}</td></tr>` : ""}
+      ${u._relevo ? `<tr><td>Relevo en ruta</td><td>Cambio de turno en
+        <span class="mono">(${u._relevo.x},${u._relevo.y})</span> a las
+        <span class="mono">${u._relevo.hora}</span>: ${u._relevo.saliente} → ${u._relevo.entrante}.
+        La unidad no se detiene.</td></tr>` : ""}
+      ${u.ruta ? `
+        <tr><td>Almacén de origen</td><td><span class="mono">${u.ruta.origen}</span>
+          ${alm.nombre ? "· " + alm.nombre : ""} <span class="mono">(${alm.x},${alm.y})</span></td></tr>
+        <tr><td>Sentido</td><td>${u.ruta.modo === "entrega"
+            ? "En <b>entrega</b> hacia un cliente"
+            : "En <b>retorno</b> a recargar en un almacén"}</td></tr>
+        <tr><td>Destino inmediato</td><td>${d.tipo === "cliente" ? "Cliente" : "Almacén"}
+          <span class="mono">${d.etiqueta}</span> <span class="mono">(${d.x},${d.y})</span></td></tr>
+        ${u.ruta.pedido ? `<tr><td>Pedido</td><td><span class="mono">${u.ruta.pedido}</span></td></tr>` : ""}
+        <tr><td>Ruta asignada</td><td><span class="mono" style="font-size:11px; color:var(--text-2)">${rutaTxt}</span>
+          ${u.ruta.alternativa ? '<br><span style="color:var(--ambar)">Ruta alternativa por bloqueo</span>' : ""}</td></tr>`
+        : `<tr><td>Ruta asignada</td><td>Sin ruta activa</td></tr>`}
+      <tr><td>Próx. entrega</td><td><span class="mono">${u.proximaEntrega}</span></td></tr>
+      ${u.nota ? `<tr><td>Nota</td><td>${u.nota}</td></tr>` : ""}
+    </table>`;
+}
+
+function tooltipPedido(p){
+  const sem = semaforoDe(p.restanteHoras);
+  let html = `
+    <h4><span class="mono">${p.id}</span> · cliente <span class="mono">${p.cliente}</span></h4>
+    <table>
+      <tr><td>Nodo de entrega</td><td><span class="mono">(${p.x},${p.y})</span></td></tr>
+      <tr><td>Cantidad</td><td><span class="mono">${p.cantidad}</span> unidades del producto P</td></tr>
+      <tr><td>Plazo comprometido</td><td><span class="mono">${p.plazoHoras} h</span>
+        ${p.plazoHoras === 36 ? "(regular)" : "(priorizado)"}</td></tr>
+      <tr><td>Registro / vence</td><td><span class="mono">${p.llegada}</span> →
+        <span class="mono">${p.vence}</span></td></tr>
+      <tr><td>Tiempo restante</td><td><span class="mono ${SEM_TXT[sem]}">${fmtHoras(p.restanteHoras)}</span></td></tr>`;
+  if (p.parcial){
+    html += `
+      <tr><td>Entrega parcial</td><td><b>${p.entregado}</b> de ${p.cantidad} recibidas ·
+        <b>${p.enCamino}</b> en camino</td></tr>`;
+    for (const e of p.entregas){
+      html += `<tr><td>Entrega ${e.n}</td><td><span class="mono">${e.cantidad} uds</span> ·
+        unidad <span class="mono">${e.unidad}</span> ·
+        ${e.estado === "entregada"
+          ? `<span class="sem-verde">entregada</span> ${e.hora}`
+          : `<span class="sem-ambar">en camino</span> ${e.hora}`}<br>
+        <span style="color:var(--text-2)">acondicionamiento ${e.acondicionamiento}</span></td></tr>`;
+    }
+    html += `<tr><td>Acondicionamiento</td><td><span class="mono">${p.acondicionamientoH} h</span> en total
+      (${p.entregasPrevistas} entregas × 1 h). No cuenta dentro del plazo.</td></tr>`;
+  } else {
+    html += `<tr><td>Acondicionamiento</td><td><span class="mono">1 h</span> (1 entrega × 1 h).
+      No cuenta dentro del plazo.</td></tr>`;
+  }
+  if (p.colapsante) html += `<tr><td>Estado</td><td><span class="sem-rojo"><b>Plazo incumplido ·
+    origen del colapso</b></span></td></tr>`;
+  return html + "</table>";
+}
+
+/* ================================================================
+ * [JS-9] GRÁFICO DE EVOLUCIÓN — Canvas, sin librerías
+ * ================================================================
+ * Un panel por serie con su propio eje: las tres magnitudes tienen
+ * escalas muy distintas y un eje doble sería ilegible y engañoso.
+ * ================================================================ */
+const chart = $("#chart"), cctx = chart.getContext("2d");
+let chartGeom = [];
+
+function dibujarChart(){
+  const L = laminaActual();
+  if (!L || !L.cierre) return;
+  const S = L.cierre.series, defs = L.cierre.paneles;
+  const dpr = window.devicePixelRatio || 1;
+  const w = chart.clientWidth, h = chart.clientHeight;
+  if (!w || !h) return;
+  chart.width = w * dpr; chart.height = h * dpr;
+  cctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  cctx.clearRect(0, 0, w, h);
+
+  const gap = 34, pw = (w - gap * (defs.length - 1)) / defs.length;
+  const top = 30, bottom = h - 30;
+  chartGeom = [];
+
+  defs.forEach((p, i) => {
+    const datos = S[p.clave], fmt = FORMATOS[p.fmt] || fmtNum;
+    const x0 = i * (pw + gap), x1 = x0 + pw;
+    const max = Math.max(...datos, 1) * 1.14;
+    const n = S.dias.length;
+    const X = d => x0 + 26 + (d - S.dias[0]) / Math.max(n - 1, 1) * (pw - 42);
+    const Y = v => bottom - (v / max) * (bottom - top);
+    chartGeom.push({ x0, x1, X });
+
+    cctx.font = fuente("600", 12); cctx.fillStyle = "#a7b6c9";
+    cctx.fillText(p.titulo, x0 + 2, 14);
+    cctx.strokeStyle = "#1c2c45"; cctx.lineWidth = 1;
+    for (let g = 0; g <= 3; g++){
+      const gy = top + (bottom - top) * g / 3;
+      cctx.beginPath(); cctx.moveTo(x0 + 20, gy); cctx.lineTo(x1, gy); cctx.stroke();
+    }
+    cctx.fillStyle = "#8194ab"; cctx.font = fuente("", 10.5, true);
+    S.dias.forEach(d => cctx.fillText("D" + d, X(d) - 7, bottom + 16));
+
+    cctx.strokeStyle = p.color; cctx.lineWidth = 2;
+    cctx.beginPath();
+    S.dias.forEach((d, j) => { const xx = X(d), yy = Y(datos[j]);
+      j ? cctx.lineTo(xx, yy) : cctx.moveTo(xx, yy); });
+    cctx.stroke();
+
+    S.dias.forEach((d, j) => {
+      const v = datos[j], xx = X(d), yy = Y(v);
+      cctx.fillStyle = p.semaforo ? SEM_FILL[semaforoDe(v)] : p.color;
+      cctx.beginPath(); circ(cctx, xx, yy, 4.4); cctx.fill();
+      cctx.strokeStyle = "#101b2d"; cctx.lineWidth = 2; cctx.stroke();
+      /* Etiqueta directa en tinta de texto, nunca en el color de la serie */
+      if (n <= 6 || j === 0 || j === n - 1 || j % 2 === 0){
+        cctx.fillStyle = "#c5d2e2"; cctx.font = fuente("", 10.5, true);
+        const et = fmt(v);
+        cctx.fillText(et, Math.min(Math.max(xx - et.length * 3, x0 + 20), x1 - et.length * 6.2), yy - 10);
+      }
+    });
+  });
+}
+chart.addEventListener("mousemove", e => {
+  const L = laminaActual();
+  if (!L || !L.cierre) return;
+  const r = chart.getBoundingClientRect(), mx = e.clientX - r.left;
+  const g = chartGeom.find(g => mx >= g.x0 && mx <= g.x1);
+  const tip = $("#chart-tip");
+  if (!g){ tip.style.display = "none"; return; }
+  const S = L.cierre.series;
+  let dia = S.dias[0], mejor = 1e9;
+  for (const d of S.dias){ const dx = Math.abs(g.X(d) - mx); if (dx < mejor){ mejor = dx; dia = d; } }
+  const i = S.dias.indexOf(dia);
+  const ini = new Date(UI.inicios[UI.escenario]);
+  tip.innerHTML = `<b>Día ${dia}</b> · ${fmtFecha(addDias(ini, dia - 1))}<br>` +
+    L.cierre.paneles.map(p => {
+      const v = S[p.clave][i], fmt = FORMATOS[p.fmt] || fmtNum;
+      const col = p.semaforo ? SEM_FILL[semaforoDe(v)] : p.color;
+      return `<span style="color:${col}">●</span> ${p.titulo.replace(/ \(.*\)/,"")}:
+              <span class="mono">${p.fmt === "horas1" ? fmtHoras(v) : fmt(v)}</span>`;
+    }).join("<br>");
+  tip.style.display = "block";
+  const wrap = $("#chart-wrap").getBoundingClientRect();
+  let tx = mx + 14; if (tx + 210 > wrap.width) tx -= 230;
+  tip.style.left = tx + "px";
+  tip.style.top = Math.min(e.clientY - wrap.top + 12, wrap.height - 96) + "px";
+});
+chart.addEventListener("mouseleave", () => { $("#chart-tip").style.display = "none"; });
+
+/* ================================================================
+ * [JS-10] PANELES: cabecera, columna izquierda y columna derecha
+ * ================================================================ */
+
+const hhmmss = s => { s = ((s % 86400) + 86400) % 86400;
+  return `${dd(Math.floor(s/3600))}:${dd(Math.floor(s/60)%60)}:${dd(s%60)}`; };
+const hhmmTranscurrido = s => {
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  return d ? `${d} d ${dd(h)} h ${dd(m)} min` : `${h} h ${dd(m)} min`;
+};
+
+/* ---------------- Cabecera ---------------- */
+function renderHeader(){
+  const hayEsc = UI.vista === "escenario" && UI.escenario;
+  ["#hdr-turno-box", "#bloque-tiempo", "#hdr-periodo-box"].forEach(s =>
+    $(s).style.display = hayEsc ? "" : "none");
+  $("#hdr-escenario").textContent = UI.escenario
+    ? "Escenario: " + esc().nombre
+    : "Seleccione un escenario";
+  $("#hdr-escenario").classList.toggle("activo", !!UI.escenario);
+  if (!hayEsc) return;
+
+  const L = laminaActual(), e = esc(), ini = new Date(UI.inicios[UI.escenario]);
+  $("#reloj").textContent = L.instante.hora;
+  $("#reloj").classList.toggle("detenido", !!L.instante.detenido);
+  $("#hdr-turno").textContent = L.instante.turno;
+  $("#hdr-fecha").textContent = L.instante.fecha;
+
+  /* 1.6 — el bloque de día se adapta al escenario */
+  if (e.duracionDias){
+    $("#hdr-dia").innerHTML = `Día <b class="mono">${L.instante.dia}</b> de ${e.duracionDias} · ${L.instante.fecha}`;
+    $("#hdr-tag").style.display = "none";
+    $("#hdr-periodo").textContent = `${fmtFechaHora(ini)} → ${fmtFechaHora(addDias(ini, e.duracionDias))}`;
+  } else {
+    $("#hdr-dia").innerHTML = `Día <b class="mono">${L.instante.dia}</b> · ${L.instante.fecha}`;
+    $("#hdr-tag").style.display = UI.escenario === "colapso" ? "" : "none";
+    const fin = L.detencion
+      ? (L.detencion.motivo === "colapso" ? `colapso ${L.instante.fecha} ${L.instante.hora.slice(0,5)}`
+                                          : `detenida ${L.instante.fecha} ${L.instante.hora.slice(0,5)}`)
+      : "en curso";
+    $("#hdr-periodo").textContent = `Inicio ${fmtFechaHora(ini)} → ${fin}`;
+  }
+}
+
+/* ---------------- Barra contextual ---------------- */
+function renderBarra(){
+  const b = $("#barra");
+  if (UI.vista === "selector"){ b.style.display = "none"; return; }
+  b.style.display = "flex";
+  if (UI.vista === "mant"){
+    b.innerHTML = `<span class="titulo">Mantenimiento</span>` +
+      ORDEN_MANT.map(k => `<button data-mant="${k}" class="${k === UI.mantSeccion ? "activa" : ""}">${ETIQUETA_MANT[k]}</button>`).join("") +
+      `<span class="nota">Datos maestros del sistema · alta y edición</span>`;
+    b.querySelectorAll("[data-mant]").forEach(x =>
+      x.addEventListener("click", () => { UI.mantSeccion = x.dataset.mant; UI.mantSel = null; renderAll(); }));
+    return;
+  }
+  const e = esc();
+  b.innerHTML = `<span class="titulo">Láminas</span>` +
+    e.laminas.map(n => {
+      const t = n === 4 ? "Detalle de incidencia" : (resolverLamina(n) || {}).titulo || "";
+      return `<button data-lam="${n}" class="${n === UI.laminaBoton ? "activa" : ""}">${n} · ${t}</button>`;
+    }).join("") +
+    `<span class="nota">La simulación avanza sola: no existen controles de reproducción.</span>`;
+  b.querySelectorAll("[data-lam]").forEach(x =>
+    x.addEventListener("click", () => irALamina(Number(x.dataset.lam))));
+}
+
+/* ---------------- Columna izquierda ---------------- */
+
+/* Biblioteca de datos: se carga una vez y persiste entre corridas */
+function bloqueBiblioteca(escId){
+  const req = mesesRequeridos(escId), reqSet = new Set(req);
+  const cond = CONDICIONES_TERMINO[escId];
+  const ultimo = ultimoMesCompleto();
+  const marca = (m, campo, nombre) => {
+    const st = (BIBLIOTECA[m] || {})[campo] || "faltante";
+    const txt = st === "cargado" ? "✓ " + nombre
+              : st === "invalido" ? "! " + nombre + " inválido" : "✗ " + nombre;
+    return `<span class="marca-arch ${st}">${txt}</span>`;
+  };
+  const filas = mesesBiblioteca().map(m => `
+    <div class="mes">
+      <span class="nombre">${m}</span>
+      <span class="marcas">${marca(m,"pedidos","pedidos")}${marca(m,"bloqueos","bloqueos")}</span>
+      ${mesCompleto(m) ? "" : `<button data-cargarmes="${m}">Cargar</button>`}
+      ${reqSet.has(m) ? '<span class="marca-arch cargado" style="background:#16304a;color:#93c5fd">requerido</span>' : ""}
+    </div>`).join("");
+
+  let derivacion;
+  if (cond.requiereTodoElPeriodo){
+    derivacion = `<div class="nota-panel info">Duración conocida: el sistema deriva del periodo
+      los meses que hacen falta y los exige por adelantado.<br>
+      Requeridos: <span class="mono">${req.join(" · ")}</span></div>`;
+  } else {
+    const sig = req[0].slice(0,4) * 100 + Number(req[0].slice(4));
+    derivacion = `<div class="nota-panel info">La duración de esta corrida no se conoce de antemano,
+      así que solo se exige el <b>mes inicial</b>: <span class="mono">${req[0]}</span>.
+      Los meses siguientes se solicitarán conforme la simulación avance.<br>
+      Último mes disponible en la biblioteca: <span class="mono">${ultimo || "ninguno"}</span>.</div>`;
+    if (escId === "colapso" && !mesCompleto("202610")){
+      derivacion += `<div class="nota-panel warn">Si la corrida supera el
+        <span class="mono">30/09/2026</span> necesitará <span class="mono">ventas202610</span> y
+        <span class="mono">202610.bloqueadas</span>, que aún no están cargados: la simulación se
+        detendría <b>por falta de datos</b>, que no es lo mismo que un colapso.</div>`;
+    }
+  }
+  return `
+    <div class="bloque"><h3>Biblioteca de datos cargados</h3>
+      <p class="aclara">Los archivos mensuales se cargan <b>una sola vez</b> y quedan disponibles
+        para todas las corridas: no hay que volver a cargarlos en cada ejecución.</p>
+      ${filas}
+      <div style="display:flex; gap:6px; margin-top:8px">
+        <input type="text" id="mes-nuevo" placeholder="aaaamm" maxlength="6" style="flex:1 1 auto">
+        <button class="acc" id="btn-mes-nuevo"
+          style="background:none;border:1px solid var(--border);color:var(--azul);border-radius:6px;padding:4px 10px;font-size:12px">
+          Agregar mes</button>
+      </div>
+      ${derivacion}
+      <details class="formato">
+        <summary>Ver formato esperado de los archivos</summary>
+        <p style="margin-top:8px"><b>Pedidos</b> — archivo mensual <span class="mono">ventasaaaamm</span>:</p>
+        <div class="ej">11d13h31m:45,43,c9167,12,36</div>
+        <dl>
+          <dt>11d13h31m</dt><dd>llegada: día 11, 13:31</dd>
+          <dt>45,43</dt><dd>nodo de entrega (x,y)</dd>
+          <dt>c9167</dt><dd>identificador del cliente</dd>
+          <dt>12</dt><dd>cantidad del producto P</dd>
+          <dt>36</dt><dd>plazo en horas (36 regular; 4/8/12/18 priorizado)</dd>
+        </dl>
+        <p><b>Bloqueos</b> — archivo mensual <span class="mono">aaaamm.bloqueadas</span>:</p>
+        <div class="ej">01d06h00m-01d15h00m:31,21,34,21</div>
+        <dl>
+          <dt>01d06h00m</dt><dd>inicio del bloqueo: día 1, 06:00</dd>
+          <dt>01d15h00m</dt><dd>fin del bloqueo: día 1, 15:00</dd>
+          <dt>31,21,34,21</dt><dd>polilínea de nodos del tramo: (31,21) → (34,21)</dd>
+        </dl>
+      </details>
+    </div>`;
+}
+
+/* Flota: el tamaño solo se edita antes de iniciar; la velocidad es
+   editable en caliente; capacidad y tarifa son estáticas siempre. */
+function bloqueFlota(editarTamano){
+  const pendiente = CONFIG.flota.some(f => PARAM_FLOTA[f.tipo].velocidad !== PARAM_FLOTA[f.tipo].velocidadVigente);
+  return `
+    <div class="bloque"><h3>Flota${editarTamano ? "" : " · composición de solo lectura"}</h3>
+      <table class="flota">
+        <tr><th>Tipo</th><th>Cant.</th><th>Cap.</th><th>Velocidad</th><th>Tarifa</th></tr>
+        ${CONFIG.flota.map(f => {
+          const p = PARAM_FLOTA[f.tipo];
+          return `<tr>
+            <td>${f.plural}</td>
+            <td>${editarTamano
+                  ? `<input type="number" class="num-corto" style="width:46px" min="0" max="99"
+                       data-flota-n="${f.tipo}" value="${p.n}">`
+                  : p.n}</td>
+            <td>${f.capacidad}</td>
+            <td><input type="number" class="num-corto" style="width:52px" min="1" max="120"
+                  data-flota-v="${f.tipo}" value="${p.velocidad}"> km/h</td>
+            <td>S/ ${f.costoKm.toFixed(2)}/km</td>
+          </tr>`;
+        }).join("")}
+      </table>
+      ${pendiente ? `<div class="nota-panel warn">Cambio de velocidad registrado. Se aplicará
+        <b>a partir de la siguiente planificación</b>: las unidades que ya están en ruta conservan
+        la velocidad con la que fueron planificadas.</div>` : ""}
+      <div class="nota-panel">La <b>velocidad</b> puede cambiarse en caliente por tipo de unidad y
+        aplica a partir de la siguiente planificación.<br>
+        La <b>capacidad</b> y la <b>tarifa por kilómetro</b> son datos estáticos del sistema:
+        no cambian durante la corrida.<br>
+        El <b>tamaño de la flota</b> ${editarTamano
+          ? "solo puede modificarse ahora, antes de iniciar la ejecución."
+          : "no puede modificarse con la ejecución en curso."}</div>
+    </div>`;
+}
+
+function bloqueSemaforo(editable){
+  const f = (id, val) => editable
+    ? `<input type="number" class="num-corto" id="${id}" value="${val}" min="0">`
+    : `<span class="mono">&nbsp;${val}&nbsp;</span>`;
+  return `
+    <div class="bloque"><h3>Semáforo de criticidad</h3>
+      <p class="aclara">Los rangos se aplican al <b>tiempo restante hasta el plazo comprometido
+        de cada pedido</b>, no a ninguna otra magnitud.</p>
+      <div class="sem-config"><span class="dot" style="background:${SEM_FILL.verde}"></span>
+        Verde: más de ${f("sem-verde", UI.semaforo.verdeMayorQue)} h restantes</div>
+      <div class="sem-config"><span class="dot" style="background:${SEM_FILL.ambar}"></span>
+        Ámbar: entre <span class="mono">${UI.semaforo.rojoMenorQue}</span> y
+        <span class="mono">${UI.semaforo.verdeMayorQue}</span> h</div>
+      <div class="sem-config"><span class="dot" style="background:${SEM_FILL.rojo}"></span>
+        Rojo: menos de ${f("sem-rojo", UI.semaforo.rojoMenorQue)} h</div>
+    </div>`;
+}
+
+function renderIzquierda(){
+  const cont = $("#cuerpo-izq"), e = esc(), cond = CONDICIONES_TERMINO[UI.escenario];
+  const ini = new Date(UI.inicios[UI.escenario]);
+  const esConfig = UI.lamina === 1;
+  $("#titulo-izq").textContent = esConfig ? "Parámetros" : "Parámetros · solo lectura";
+
+  /* 1.1 — dos campos y nada más: inicio editable y fin derivado */
+  const bloquePeriodo = `
+    <div class="bloque"><h3>Periodo de ${UI.escenario === "diaadia" ? "operación" : "simulación"}</h3>
+      <label class="campo" for="inicio">Inicio (fecha y hora)</label>
+      ${esConfig
+        ? `<input type="datetime-local" id="inicio" value="${UI.inicios[UI.escenario]}">`
+        : `<div class="mono" style="font-size:13px">${fmtFechaHora(ini)}</div>`}
+      <label class="campo">Fin</label>
+      ${e.duracionDias
+        ? `<div class="mono" style="font-size:13px">${fmtFechaHora(addDias(ini, e.duracionDias))}
+             <span style="font-family:var(--sans);color:var(--text-2);font-size:11.5px">
+             · calculado: inicio + ${e.duracionDias} días</span></div>`
+        : `<div style="font-size:13px; color:var(--ambar)">Sin término predefinido</div>
+           <div class="nota-panel">${cond.etiqueta}. ${cond.descripcion}</div>`}
+    </div>`;
+
+  if (esConfig){
+    const problemas = problemasDeInicio(UI.escenario);
+    cont.innerHTML =
+      bloquePeriodo +
+      bloqueBiblioteca(UI.escenario) +
+      bloqueSemaforo(true) +
+      bloqueFlota(true) +
+      (problemas.length
+        ? `<div id="msg-archivos">No se puede iniciar la corrida:${problemas.map(p =>
+            `<br>· <span class="mono">${p.archivo}</span> ${p.estado === "invalido"
+              ? "tiene formato inválido" : "no está cargado"}`).join("")}</div>`
+        : `<div style="font-size:12.5px; color:#4ade80; margin-top:8px">
+             ✓ Los archivos requeridos para iniciar están en la biblioteca.</div>`) +
+      `<button id="btn-iniciar" ${problemas.length ? "disabled" : ""}>▶ Iniciar ${e.corto}</button>`;
+
+    const inp = $("#inicio");
+    if (inp) inp.addEventListener("change", ev => { UI.inicios[UI.escenario] = ev.target.value; renderAll(); });
+    const bi = $("#btn-iniciar");
+    if (bi && !problemas.length) bi.addEventListener("click", iniciarCorrida);
+  } else {
+    /* Láminas de ejecución: resumen legible, con contraste normal */
+    cont.innerHTML =
+      bloquePeriodo +
+      `<div class="bloque"><h3>Datos en uso</h3>
+        ${mesesRequeridos(UI.escenario).map(m =>
+          `<div class="mes"><span class="nombre">${m}</span>
+            <span class="marcas"><span class="marca-arch cargado">✓ pedidos</span>
+            <span class="marca-arch cargado">✓ bloqueos</span></span></div>`).join("")}
+        ${!CONDICIONES_TERMINO[UI.escenario].requiereTodoElPeriodo
+          ? `<div class="nota-panel info">Los meses siguientes se solicitan a la biblioteca
+              conforme la corrida avanza.</div>` : ""}
+      </div>` +
+      bloqueSemaforo(false) +
+      bloqueFlota(false);
+  }
+
+  /* Enlaces de los controles recién insertados */
+  cont.querySelectorAll("[data-cargarmes]").forEach(b =>
+    b.addEventListener("click", () => {
+      BIBLIOTECA[b.dataset.cargarmes] = { pedidos:"cargado", bloqueos:"cargado" };
+      guardarBiblioteca(); renderAll();
+    }));
+  const bmn = $("#btn-mes-nuevo");
+  if (bmn) bmn.addEventListener("click", () => {
+    const v = ($("#mes-nuevo").value || "").trim();
+    if (!/^\d{6}$/.test(v)) return;
+    BIBLIOTECA[v] = BIBLIOTECA[v] || { pedidos:"faltante", bloqueos:"faltante" };
+    guardarBiblioteca(); renderAll();
+  });
+  const sv = $("#sem-verde"), sr = $("#sem-rojo");
+  if (sv) sv.addEventListener("change", () => { UI.semaforo.verdeMayorQue = Number(sv.value); renderAll(); });
+  if (sr) sr.addEventListener("change", () => { UI.semaforo.rojoMenorQue  = Number(sr.value); renderAll(); });
+  cont.querySelectorAll("[data-flota-n]").forEach(i =>
+    i.addEventListener("change", () => {
+      PARAM_FLOTA[i.dataset.flotaN].n = Math.max(0, Number(i.value) || 0); renderAll();
+    }));
+  cont.querySelectorAll("[data-flota-v]").forEach(i =>
+    i.addEventListener("change", () => {
+      const t = i.dataset.flotaV;
+      PARAM_FLOTA[t].velocidad = Math.max(1, Number(i.value) || 1);
+      /* Antes de iniciar la corrida el cambio es inmediato; durante la
+         ejecución queda pendiente para la siguiente planificación. */
+      if (!UI.corridaIniciada) PARAM_FLOTA[t].velocidadVigente = PARAM_FLOTA[t].velocidad;
+      renderAll();
+    }));
+}
+
+/* ---------------- Columna derecha ---------------- */
+const barra = (pct, color) => `<div class="barra"><i style="width:${pct}%; background:${color}"></i></div>`;
+
+function bloqueDesglose(titulo, datos, fmt, color){
+  const total = datos.autos + datos.motos + datos.bicicletas;
+  return `<div class="bloque"><h3>${titulo}</h3>
+    ${CONFIG.flota.map(f => `<div class="fila">
+       <span class="k">${f.plural} <small>(${PARAM_FLOTA[f.tipo].n})</small></span>
+       <span class="v" style="color:${color}">${fmt(datos[f.clave])}</span></div>`).join("")}
+    <div class="fila total"><span class="k">Total</span>
+      <span class="v" style="color:${color}">${fmt(total)}</span></div>
+  </div>`;
+}
+
+function renderDerecha(){
+  const L = laminaActual(), k = L.kpis, e = esc(), cont = $("#cuerpo-der");
+  const hol = k.holguraMinima, holSem = hol ? semaforoDe(hol.horas) : null;
+  const colapsada = k.estadoOperacion === "colapso";
+
+  /* 1 · Progreso — se adapta al escenario */
+  let html = `<div class="bloque"><h3>${e.progreso === "periodo" ? "Progreso de la simulación" : "Tiempo de la corrida"}</h3>`;
+  if (e.progreso === "periodo"){
+    html += `<div class="fila"><span class="k">Día ${L.instante.dia} de ${e.duracionDias}</span>
+        <span class="v">${L.instante.progresoPct.toFixed(1).replace(".",",")} %</span></div>
+      ${barra(L.instante.progresoPct, "var(--mint)")}
+      ${L.instante.progresoPct >= 100
+        ? `<div style="font-size:12px; color:#4ade80; margin-top:5px">✓ Simulación completada</div>` : ""}`;
+  } else {
+    html += `<div class="fila"><span class="k">Tiempo transcurrido</span>
+        <span class="v" id="kpi-transcurrido">${L.instante.transcurrido}</span></div>
+      <div class="fila"><span class="k">Día de la corrida</span>
+        <span class="v">${L.instante.dia} · ${L.instante.fecha}</span></div>
+      <div class="nota-panel">${UI.escenario === "diaadia"
+        ? "Operación continua: no aplica un indicador de progreso porque no hay fecha de término."
+        : "Sin término predefinido: la corrida termina al primer incumplimiento de un plazo."}</div>`;
+  }
+  html += `</div>`;
+
+  /* 2 · Cumplimiento de plazos */
+  html += `<div class="bloque"><h3>Cumplimiento de plazos</h3>
+      <div class="kpi-grande">${fmtNum(k.entregasEnPlazo)}</div>
+      <div style="font-size:12px; color:var(--text-2); margin:1px 0 8px">entregas realizadas dentro de plazo</div>
+      ${colapsada
+        ? `<span class="pill crit">● Colapso · 1 incumplimiento</span>`
+        : `<span class="pill ok">● Sin incumplimientos</span>`}
+      <div style="font-size:11px; color:var(--text-2); margin-top:6px">
+        El primer incumplimiento produce el colapso: no existe acumulación de pedidos retrasados.
+      </div>
+      <div class="fila" style="margin-top:9px"><span class="k">Holgura mínima actual</span>
+        <span class="v ${hol ? SEM_TXT[holSem] : ""}">${hol ? fmtHoras(hol.horas) : "—"}</span></div>
+      ${hol
+        ? `<div style="font-size:11.5px; color:var(--text-2)">pedido
+             <span class="mono ${SEM_TXT[holSem]}">${hol.pedido}</span> ·
+             ${colapsada ? "plazo vencido" : "anticipa el colapso"}</div>`
+        : `<div style="font-size:11.5px; color:var(--text-2)">sin pedidos en curso</div>`}
+    </div>`;
+
+  /* 3 · Detalle del colapso, cuando corresponde */
+  if (L.detencion){
+    const esCol = L.detencion.motivo === "colapso";
+    html += `<div class="bloque" style="border-color:${esCol ? "#7a2727" : "#6b5310"}">
+      <h3 style="color:${esCol ? "var(--rojo)" : "var(--ambar)"}">${esCol ? "Colapso logístico" : "Detención por falta de datos"}</h3>
+      <p class="aclara" style="color:var(--text)">${L.detencion.texto}</p>
+      ${(L.cierre.resumen || []).map(r =>
+        `<div class="fila"><span class="k">${r.k}</span><span class="v" style="font-size:12px">${r.v}</span></div>`).join("")}
+    </div>`;
+  }
+
+  /* 4 y 5 · Distancia y costo, desglosados por tipo con su cantidad */
+  html += bloqueDesglose("Distancia recorrida", k.distanciaKm, v => fmtNum(v) + " km", "var(--azul)");
+  html += bloqueDesglose("Costo de transporte", k.costoSoles, fmtSol, "var(--mint)");
+
+  /* 6 · Utilización */
+  html += `<div class="bloque"><h3>Utilización de flota</h3>
+      ${CONFIG.flota.map(f => {
+        const p = k.utilizacionPct[f.clave];
+        return `<div class="fila"><span class="k">${f.plural} <small>(${PARAM_FLOTA[f.tipo].n})</small></span>
+                  <span class="v">${p} %</span></div>${barra(p, "var(--azul)")}`;
+      }).join("")}
+    </div>`;
+
+  /* 7 · Pedidos recientes — solo en la operación día a día */
+  if (L.pedidosRecientes && L.pedidosRecientes.length){
+    html += `<div class="bloque"><h3>Pedidos recién registrados</h3>
+      <p class="aclara">La demanda no proviene de un archivo cerrado: los pedidos ingresan
+        conforme se registran.</p>
+      ${L.pedidosRecientes.map(p => `<div class="ped-rec">
+        <span class="h">${p.hora}</span>
+        <span class="d"><span class="mono">${p.id}</span> · ${p.cliente}</span>
+        <span class="q">${p.cantidad} uds · ${p.plazoHoras} h</span></div>`).join("")}
+    </div>`;
+  }
+
+  /* 8 · Incidencias */
+  if (L.incidencias && L.incidencias.length){
+    html += `<div class="bloque"><h3>Incidencias (${L.incidencias.length})</h3>
+      <p class="aclara">Clic en una incidencia para abrir su detalle.</p>
+      ${L.incidencias.map(i => `
+        <button class="incid" data-inc="${i.id}">
+          <canvas width="44" height="44"></canvas>
+          <span><span class="tit">${i.titulo}</span><br>
+            <span class="sub">${i.id} · ${i.momento}</span></span>
+          <span class="est ${i.estado === "activo" ? "activo" : "resuelta"}">${i.estado === "activo" ? "ACTIVO" : "RESUELTA"}</span>
+        </button>`).join("")}
+    </div>`;
+  }
+
+  cont.innerHTML = html;
+  cont.querySelectorAll("[data-inc]").forEach(b => {
+    const inc = L.incidencias.find(i => i.id === b.dataset.inc);
+    const cv = b.querySelector("canvas"), c = cv.getContext("2d");
+    c.setTransform(2, 0, 0, 2, 0, 0);
+    if (inc.tipo === "bloqueo") ICONOS.bloqueo(c, 11, 11);
+    else if (inc.tipo === "colapso") ICONOS.cliente(c, 11, 15, SEM_FILL.rojo);
+    else ICONOS.averia(c, 11, 11);
+    b.addEventListener("click", () => abrirDetalle(inc.id));
+  });
+}
+
+/* ---------------- Banner de detención ---------------- */
+function renderBanner(){
+  const L = laminaActual(), b = $("#banner");
+  $("#map-wrap").classList.toggle("con-banner", !!L.detencion);
+  if (!L.detencion){ b.style.display = "none"; return; }
+  b.className = L.detencion.motivo === "colapso" ? "colapso" : "sin-datos";
+  b.style.display = "flex";
+  $("#banner-tit").textContent = L.detencion.titulo;
+  $("#banner-txt").innerHTML = L.detencion.texto;
+}
+
+/* ---------------- Panel inferior con el gráfico ---------------- */
+function renderPanelCierre(){
+  const L = laminaActual(), p = $("#panel-cierre");
+  if (!L.cierre){ p.style.display = "none"; return; }
+  p.style.display = "block";
+  $("#cierre-titulo").textContent = L.cierre.titulo;
+  const ini = new Date(UI.inicios[UI.escenario]);
+  const dias = L.cierre.series.dias;
+  $("#resumen-cierre").innerHTML =
+    `<span>Periodo simulado: <span class="mono">${fmtFechaHora(ini)} → ${L.instante.fecha} ${L.instante.hora}</span></span>
+     <span>Días 1–${dias.length}: <span class="mono">${dias.map(n =>
+       fmtFecha(addDias(ini, n - 1)).slice(0,5)).join(" · ")}</span></span>` +
+    (L.cierre.resumen || []).map(r => `<span>${r.k}: <span class="mono">${r.v}</span></span>`).join("");
+  dibujarChart();
+}
+
+/* ---------------- Detalle de incidencia ---------------- */
+function abrirDetalle(id){
+  const L = laminaActual();
+  const inc = (L.incidencias || []).find(i => i.id === id);
+  if (!inc) return;
+  UI.incidenciaAbierta = id;
+  if (UI.escenario === "sim5d") UI.laminaBoton = 4;
+  const d = inc.detalle;
+  const cv = $("#det-icono"), c = cv.getContext("2d");
+  c.setTransform(2, 0, 0, 2, 0, 0); c.clearRect(0, 0, 52, 52);
+  if (inc.tipo === "bloqueo") ICONOS.bloqueo(c, 13, 13);
+  else if (inc.tipo === "colapso") ICONOS.cliente(c, 13, 17, SEM_FILL.rojo);
+  else ICONOS.averia(c, 13, 13);
+  $("#det-titulo").textContent = inc.titulo;
+  $("#det-sub").textContent = `${inc.id} · detectada ${inc.momento} · ${inc.estado.toUpperCase()}`;
+
+  let html = "";
+  if (inc.tipo === "bloqueo"){
+    const [a, b] = d.tramo;
+    html = `
+      <h3>Tramo bloqueado</h3>
+      <div class="dato"><span class="k">Nodos extremos</span>
+        <span class="v mono">(${a[0]},${a[1]}) – (${b[0]},${b[1]})</span></div>
+      <div class="dato"><span class="k">Ventana</span><span class="v mono">${d.ventana}</span></div>
+      <div class="dato"><span class="k">Registro de origen</span>
+        <span class="v mono" style="font-size:12px">${d.origen}</span></div>
+      <div style="font-size:12px; color:var(--text-2); margin-top:5px">
+        Un nodo bloqueado no se puede atravesar ni permite girar: la unidad que llega a él debe dar media vuelta.
+      </div>
+      <h3>Rutas afectadas</h3>
+      ${d.rutasAfectadas.map(r => `<div class="dato"><span class="v mono">· ${r}</span></div>`).join("")}
+      <h3>Ruta alternativa activa</h3>
+      <div class="dato"><span class="k">Trazo (sin diagonales)</span>
+        <span class="v mono" style="font-size:12px">${d.alternativa.trazo}</span></div>
+      <div class="dato"><span class="k">Ruta original</span>
+        <span class="v mono">${d.alternativa.originalKm} km</span></div>
+      <div class="dato"><span class="k">Ruta alternativa</span>
+        <span class="v mono">${d.alternativa.alternativaKm} km</span></div>
+      <div class="dato"><span class="k">Diferencia</span>
+        <span class="v ${d.alternativa.deltaKm > 0 ? "delta-pos" : "mono sem-verde"}">${
+          d.alternativa.deltaKm > 0 ? "+" : ""}${d.alternativa.deltaKm} km · ${
+          d.alternativa.deltaCosto > 0 ? "+" : "−"}${fmtSol(Math.abs(d.alternativa.deltaCosto))}</span></div>`;
+  } else if (inc.tipo === "colapso"){
+    html = `
+      <h3>Pedido que originó el colapso</h3>
+      <div class="dato"><span class="k">Pedido</span><span class="v mono">${d.pedido}</span></div>
+      <div class="dato"><span class="k">Plazo comprometido</span><span class="v">${d.plazo}</span></div>
+      <div class="dato"><span class="k">Registro</span><span class="v mono">${d.registro}</span></div>
+      <div class="dato"><span class="k">Vencimiento</span><span class="v mono sem-rojo">${d.vencimiento}</span></div>
+      <div class="dato"><span class="k">Arribo estimado</span><span class="v mono">${d.arriboEstimado}</span></div>
+      <div class="dato"><span class="k">Retraso</span><span class="v mono sem-rojo">${d.retraso}</span></div>
+      <h3>Causa</h3>
+      <div style="font-size:13px; line-height:1.55; color:var(--text-2)">${d.causa}</div>
+      <h3>Estado al momento del colapso</h3>
+      <div class="dato"><span class="k">Flota</span><span class="v">${d.flota}</span></div>
+      <div class="dato"><span class="k">Almacenes</span><span class="v">${d.almacenes}</span></div>`;
+  } else {
+    html = `
+      <h3>Unidad afectada</h3>
+      <div class="dato"><span class="k">Unidad</span><span class="v mono">${d.unidad}</span></div>
+      <div class="dato"><span class="k">Tipo de avería</span>
+        <span class="v"><b class="sem-rojo">Tipo ${d.tipoAveria}</b></span></div>
+      <div class="dato"><span class="k">Regla aplicable</span>
+        <span class="v" style="font-size:12.5px; color:var(--text-2)">${d.regla}</span></div>
+      <div class="dato"><span class="k">Lugar de la avería</span>
+        <span class="v mono">(${d.lugar[0]},${d.lugar[1]})</span></div>
+      <div style="font-size:12px; color:var(--text-2); margin-top:5px">
+        La avería no bloquea la vía: las demás unidades circulan con normalidad por ese tramo.
+      </div>
+      <h3>Indisponibilidad</h3>
+      <div class="dato"><span class="k">Tiempo no disponible</span><span class="v">${d.indisponibilidad}</span></div>
+      <div class="dato"><span class="k">Retorno a operación</span><span class="v mono">${d.retorno}</span></div>
+      <div class="dato"><span class="k">Carga transportada</span><span class="v">${d.cargaAfectada}</span></div>
+      <h3>Reasignación de pedidos</h3>
+      ${d.reasignaciones.map(r => `
+        <div class="reasig">
+          <div class="quien">${r.pedido} → <b>${r.a}</b></div>
+          <div class="motivo">${r.motivo}</div>
+        </div>`).join("")}`;
+  }
+  $("#det-cuerpo").innerHTML = html;
+  $("#backdrop").style.display = "block";
+  $("#detalle").style.display = "flex";
+  renderBarra();
+}
+function cerrarDetalle(){
+  UI.incidenciaAbierta = null;
+  if (UI.laminaBoton === 4) UI.laminaBoton = UI.lamina;
+  $("#backdrop").style.display = "none";
+  $("#detalle").style.display = "none";
+  renderBarra();
+}
+
+/* ================================================================
+ * [JS-11] VISTAS: selector de escenario y mantenimiento
+ * ================================================================ */
+function renderSelector(){
+  const cont = $("#cards");
+  cont.innerHTML = Object.values(ESCENARIOS).map(e => {
+    const cond = CONDICIONES_TERMINO[e.id];
+    const bloqueada = UI.corridaIniciada && UI.escenario !== e.id;
+    const activa = UI.escenario === e.id;
+    return `<button class="card-esc ${bloqueada ? "bloqueada" : ""} ${activa ? "activa" : ""}"
+              data-esc="${e.id}" ${bloqueada ? "disabled" : ""}>
+      <canvas class="ic" width="88" height="88"></canvas>
+      <h3>${e.nombre}</h3>
+      <p>${e.resumen}</p>
+      <div class="meta">
+        <span>Condición de término: <b>${cond.etiqueta}</b></span>
+        <span>Láminas: <b>${e.laminas.length}</b> · Archivos exigidos al inicio:
+          <b>${cond.requiereTodoElPeriodo ? "todo el periodo" : "solo el mes inicial"}</b></span>
+      </div>
+      <span class="cta">${bloqueada ? "Bloqueado · hay una corrida en curso"
+        : activa ? (UI.corridaIniciada ? "Corrida en curso · volver" : "Continuar configuración")
+        : "Abrir escenario →"}</span>
+    </button>`;
+  }).join("");
+  cont.querySelectorAll(".card-esc").forEach((b, i) => {
+    const id = b.dataset.esc, cv = b.querySelector("canvas"), c = cv.getContext("2d");
+    c.setTransform(2.6, 0, 0, 2.6, 0, 0);
+    ICONOS[ESCENARIOS[id].icono](c, 17, 17, COLOR_UNIDAD[ESCENARIOS[id].icono]);
+    if (!b.disabled) b.addEventListener("click", () => entrarEscenario(id));
+  });
+
+  /* Aviso y salida cuando ya hay una corrida en curso */
+  const previo = document.getElementById("aviso-corrida");
+  if (previo) previo.remove();
+  if (UI.corridaIniciada){
+    const div = document.createElement("div");
+    div.id = "aviso-corrida";
+    div.className = "nota-panel warn";
+    div.style.cssText = "max-width:1180px; margin-top:14px; font-size:13px";
+    div.innerHTML = `Hay una corrida de <b>${esc().nombre}</b> en curso: el escenario no puede
+      cambiarse mientras esté activa.
+      <button id="btn-cerrar-corrida" class="btn-hdr" style="margin-left:12px">Cerrar corrida</button>`;
+    cont.after(div);
+    $("#btn-cerrar-corrida").addEventListener("click", () => {
+      UI.corridaIniciada = false; UI.escenario = null; UI.lamina = 1; UI.laminaBoton = 1;
+      detenerReloj(); renderAll();
+    });
+  }
+
+  $("#mant-lista").innerHTML = ORDEN_MANT.map(k =>
+    `<button class="card-mant" data-mantcard="${k}">
+       <b>${MANTENIMIENTO[k].titulo}</b>
+       <span>${MANTENIMIENTO[k].filas.length} registros · lista con alta y edición</span>
+     </button>`).join("");
+  $("#mant-lista").querySelectorAll("[data-mantcard]").forEach(b =>
+    b.addEventListener("click", () => {
+      UI.mantSeccion = b.dataset.mantcard; UI.mantSel = null; UI.vista = "mant"; renderAll();
+    }));
+}
+
+const CLASE_BADGE = v => {
+  const s = String(v).toLowerCase();
+  if (/entregado|disponible|activo|operativo|vigente/.test(s)) return "ok";
+  if (/parcial|programado|registrado|en ruta/.test(s))         return "neutro";
+  if (/averiada|taller|sin stock|suspendido|fuera/.test(s))    return "crit";
+  return "warn";
+};
+
+function renderMant(){
+  const sec = MANTENIMIENTO[UI.mantSeccion];
+  const sel = UI.mantSel != null ? sec.filas[UI.mantSel] : null;
+  $("#vista-mant").innerHTML = `
+    <h1>${sec.titulo}</h1>
+    <p class="sub">${sec.descripcion}</p>
+    <div class="mant-cols">
+      <div class="mant-tabla">
+        <div class="cabt"><h3>Registros</h3><span class="cnt">${sec.filas.length} filas</span></div>
+        <div class="tabla-scroll">
+          <table class="datos">
+            <thead><tr>${sec.columnas.map(c => `<th>${c.t}</th>`).join("")}<th></th></tr></thead>
+            <tbody>
+              ${sec.filas.map((f, i) => `<tr class="${i === UI.mantSel ? "sel" : ""}">
+                ${sec.columnas.map(c => `<td class="${c.mono ? "mono" : ""}">${
+                  c.badge ? `<span class="badge ${CLASE_BADGE(f[c.k])}">${f[c.k]}</span>` : (f[c.k] ?? "")
+                }</td>`).join("")}
+                <td><button class="acc" data-edit="${i}">Editar</button></td>
+              </tr>`).join("")}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="mant-form">
+        <h3>${sel ? "Editar registro" : "Alta de registro"}</h3>
+        <p class="hint">${sel
+          ? `Modificando <span class="mono">${sel[sec.campos[0].k]}</span>.`
+          : "Complete los campos y guarde para agregar un registro nuevo."}</p>
+        ${sec.campos.map(c => `
+          <label class="campo">${c.t}</label>
+          ${c.tipo === "select"
+            ? `<select data-campo="${c.k}">${c.opciones.map(o =>
+                `<option ${sel && String(sel[c.k]) === o ? "selected" : ""}>${o}</option>`).join("")}</select>`
+            : `<input type="${c.tipo === "number" ? "number" : "text"}" data-campo="${c.k}"
+                 placeholder="${c.ph || ""}" value="${sel ? (sel[c.k] ?? "") : ""}">`}`).join("")}
+        <div class="acciones">
+          <button class="primario" id="mant-guardar">${sel ? "Guardar cambios" : "Agregar"}</button>
+          <button id="mant-nuevo">Nuevo</button>
+        </div>
+      </div>
+    </div>`;
+
+  $("#vista-mant").querySelectorAll("[data-edit]").forEach(b =>
+    b.addEventListener("click", () => { UI.mantSel = Number(b.dataset.edit); renderAll(); }));
+  $("#mant-nuevo").addEventListener("click", () => { UI.mantSel = null; renderAll(); });
+  $("#mant-guardar").addEventListener("click", () => {
+    const reg = {};
+    $("#vista-mant").querySelectorAll("[data-campo]").forEach(i => {
+      const v = i.value;
+      reg[i.dataset.campo] = i.type === "number" && v !== "" ? Number(v) : v;
+    });
+    if (!reg[sec.campos[0].k]) return;                    // el identificador es obligatorio
+    if (UI.mantSel != null) sec.filas[UI.mantSel] = reg; else sec.filas.push(reg);
+    UI.mantSel = null; renderAll();
+  });
+}
+
+/* ================================================================
+ * [JS-12] NAVEGACIÓN, COLAPSOS, MODO CAPTURA Y ARRANQUE
+ * ================================================================ */
+
+/* --- Reloj en vivo: solo la operación día a día avanza en tiempo
+       real. Avanza SOLA; no hay ningún control que la gobierne. --- */
+function detenerReloj(){ if (UI.relojTimer){ clearInterval(UI.relojTimer); UI.relojTimer = null; } }
+function arrancarReloj(L){
+  detenerReloj();
+  if (!L.instante.relojEnVivo) return;
+  const [H, M, S] = L.instante.hora.split(":").map(Number);
+  UI.relojSeg = H*3600 + M*60 + S;
+  const m = /(\d+)\s*h\s*(\d+)/.exec(L.instante.transcurrido || "");
+  UI.transSeg = m ? Number(m[1])*3600 + Number(m[2])*60 : 0;
+  UI.relojTimer = setInterval(() => {
+    UI.relojSeg++; UI.transSeg++;
+    const r = $("#reloj");            if (r) r.textContent = hhmmss(UI.relojSeg);
+    const t = $("#kpi-transcurrido"); if (t) t.textContent = hhmmTranscurrido(UI.transSeg);
+  }, 1000);
+}
+
+function entrarEscenario(id){
+  UI.escenario = id; UI.vista = "escenario";
+  if (!UI.corridaIniciada){ UI.lamina = 1; UI.laminaBoton = 1; }
+  cerrarDetalle(); renderAll();
+}
+function iniciarCorrida(){
+  UI.corridaIniciada = true;
+  /* Las velocidades configuradas pasan a ser las vigentes de la
+     planificación inicial. */
+  CONFIG.flota.forEach(f => { PARAM_FLOTA[f.tipo].velocidadVigente = PARAM_FLOTA[f.tipo].velocidad; });
+  irALamina(2);
+}
+function irALamina(n){
+  $("#tooltip").style.display = "none";
+  if (n === 4 && UI.escenario === "sim5d"){
+    UI.lamina = 3; UI.laminaBoton = 4; renderAll();
+    const L = resolverLamina(3);
+    const inc = L.incidencias.find(i => i.estado === "activo" && i.tipo === "averia") || L.incidencias[0];
+    abrirDetalle(inc.id);
+    return;
+  }
+  cerrarDetalle();
+  UI.lamina = n; UI.laminaBoton = n; UI.vista = "escenario";
+  renderAll();
+}
+
+document.querySelectorAll("#logo").forEach(l => l.addEventListener("click", () => {
+  UI.vista = "selector"; cerrarDetalle(); detenerReloj(); renderAll();
+}));
+$("#btn-mant").addEventListener("click", () => {
+  UI.vista = UI.vista === "mant" ? (UI.escenario ? "escenario" : "selector") : "mant";
+  cerrarDetalle(); renderAll();
+});
+$("#det-cerrar").addEventListener("click", cerrarDetalle);
+$("#backdrop").addEventListener("click", cerrarDetalle);
+$("#btn-leyenda").addEventListener("click", () => {
+  const l = $("#leyenda"); l.classList.toggle("min");
+  $("#btn-leyenda").textContent = l.classList.contains("min") ? "mostrar" : "ocultar";
+});
+
+/* --- Columnas colapsables; el estado se recuerda durante la sesión --- */
+function aplicarColapsos(){
+  let izq = false, der = false;
+  try { izq = sessionStorage.getItem("pq_col_izq") === "1";
+        der = sessionStorage.getItem("pq_col_der") === "1"; } catch(e){}
+  $("#col-izq").classList.toggle("colapsada", izq);
+  $("#col-der").classList.toggle("colapsada", der);
+  $("#btn-col-izq").textContent = izq ? "⟩" : "⟨";
+  $("#btn-col-der").textContent = der ? "⟨" : "⟩";
+}
+$("#btn-col-izq").addEventListener("click", () => {
+  try { sessionStorage.setItem("pq_col_izq", $("#col-izq").classList.contains("colapsada") ? "0" : "1"); } catch(e){}
+  aplicarColapsos();
+});
+$("#btn-col-der").addEventListener("click", () => {
+  try { sessionStorage.setItem("pq_col_der", $("#col-der").classList.contains("colapsada") ? "0" : "1"); } catch(e){}
+  aplicarColapsos();
+});
+
+/* --- Modo captura 1920×1080, activable sin recargar --- */
+$("#btn-captura").addEventListener("click", () => {
+  document.body.classList.toggle("captura");
+  $("#btn-captura").classList.toggle("on", document.body.classList.contains("captura"));
+});
+
+/* El mapa y el gráfico se redibujan al cambiar de tamaño la ventana,
+   al colapsar una columna o al entrar en modo captura. */
+new ResizeObserver(() => { if (UI.vista === "escenario") dibujarMapa(); }).observe($("#map-wrap"));
+new ResizeObserver(() => { if (UI.vista === "escenario" && laminaActual() && laminaActual().cierre) dibujarChart(); })
+  .observe($("#chart-wrap"));
+
+/* ---------------- Render principal ---------------- */
+function renderAll(){
+  $("#vista-selector").style.display  = UI.vista === "selector"  ? "block" : "none";
+  $("#vista-escenario").style.display = UI.vista === "escenario" ? "flex"  : "none";
+  $("#vista-mant").style.display      = UI.vista === "mant"      ? "block" : "none";
+  renderHeader();
+  renderBarra();
+  if (UI.vista === "selector") renderSelector();
+  if (UI.vista === "mant")     renderMant();
+  if (UI.vista === "escenario" && UI.escenario){
+    const L = laminaActual();
+    renderIzquierda();
+    renderDerecha();
+    renderBanner();
+    renderPanelCierre();
+    dibujarMapa();
+    arrancarReloj(L);
+  } else {
+    detenerReloj();
+  }
+}
+
+pintarLeyenda();
+aplicarColapsos();
+/* Lámina inicial opcional por URL para capturar pantallas:
+   …paqrap_prototipo_v03.html#sim5d/3  ·  #colapso/2  ·  #mant/vehiculos */
+(function arranque(){
+  const h = (location.hash || "").replace("#", "");
+  const [a, b] = h.split("/");
+  if (a === "mant"){ UI.vista = "mant"; if (MANTENIMIENTO[b]) UI.mantSeccion = b; }
+  else if (ESCENARIOS[a]){
+    UI.escenario = a; UI.vista = "escenario";
+    const n = Number(b) || 1;
+    if (n > 1){ UI.corridaIniciada = true; UI.lamina = n === 4 ? 3 : n; UI.laminaBoton = n; }
+  }
+  renderAll();
+  if (ESCENARIOS[a] && Number(b) === 4 && a === "sim5d") irALamina(4);
+})();
+
+</script>
+</body>
+</html>

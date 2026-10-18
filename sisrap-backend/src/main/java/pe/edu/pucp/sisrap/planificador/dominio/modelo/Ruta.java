@@ -17,6 +17,7 @@ public class Ruta {
 
     private final Vehiculo vehiculo;
     private Almacen almacenOrigen;
+    private Almacen almacenRetorno;
     private final Nodo posicionInicio;
     private final boolean pasarPorAlmacenOrigen;
     private final LocalDateTime inicio;
@@ -31,6 +32,7 @@ public class Ruta {
     private Set<String> nodosBloqueados = Set.of();
     private List<Almacen> almacenesCandidatos = List.of();
     private boolean intransitable;
+    private boolean fueraDeTurno;
 
     /**
      * Constructor histórico: conserva exactamente el comportamiento usado por
@@ -73,6 +75,7 @@ public class Ruta {
 
         this.vehiculo = vehiculo;
         this.almacenOrigen = origen;
+        this.almacenRetorno = origen;
         this.posicionInicio = posicionInicio;
         this.pasarPorAlmacenOrigen = pasarPorAlmacenOrigen;
         this.inicio = inicio;
@@ -85,6 +88,7 @@ public class Ruta {
 
     public Set<String> getNodosBloqueados() { return nodosBloqueados; }
     public boolean isIntransitable() { return intransitable; }
+    public boolean isFueraDeTurno() { return fueraDeTurno; }
 
     public Ruta copiar() {
         Ruta copia = new Ruta(
@@ -96,6 +100,7 @@ public class Ruta {
                 reglas);
         copia.nodosBloqueados = nodosBloqueados;
         copia.almacenesCandidatos = almacenesCandidatos;
+        copia.almacenRetorno = almacenRetorno;
         copia.secuenciaPedidos.addAll(secuenciaPedidos);
         copia.recalcular();
         return copia;
@@ -109,6 +114,7 @@ public class Ruta {
 
     public void recalcular() {
         intransitable = false;
+        fueraDeTurno = false;
         double distanciaPasos = 0.0;
         Nodo posicion = posicionInicialPara(almacenOrigen);
         LocalDateTime reloj = inicio;
@@ -147,10 +153,10 @@ public class Ruta {
         }
 
         if (reglas.incluirRetorno() && !secuenciaPedidos.isEmpty()) {
-            int pasos = pasosEntre(posicion, almacenOrigen.getUbicacion());
+            int pasos = pasosEntre(posicion, almacenRetorno.getUbicacion());
             if (pasos < 0) {
                 intransitable = true;
-                pasos = posicion.distanciaManhattan(almacenOrigen.getUbicacion());
+                pasos = posicion.distanciaManhattan(almacenRetorno.getUbicacion());
             }
             distanciaPasos += pasos;
             reloj = sumarHoras(
@@ -161,6 +167,10 @@ public class Ruta {
         distanciaTotalKm = distanciaPasos * reglas.distanciaNodoKm();
         costoTotal = distanciaTotalKm * vehiculo.getCostoPorKm();
         tiempoTotalHoras = horasEntre(inicio, reloj);
+        // El conductor es relevado en el mismo punto al terminar su turno.
+        // Solo se impide iniciar una ruta durante la hora de refrigerio.
+        fueraDeTurno = pasarPorAlmacenOrigen && !secuenciaPedidos.isEmpty()
+                && JornadaOperativa.refrigerio(inicio);
     }
 
     public double horaLlegadaDe(int indice) {
@@ -210,6 +220,16 @@ public class Ruta {
             reloj = nuevoPedido.getFechaLlegada();
         }
 
+        LocalDateTime fin = sumarHoras(reloj, reglas.servicioHoras());
+        if (reglas.incluirRetorno()) {
+            int retorno = pasosEntre(nuevoPedido.getUbicacion(), origenCandidato.getUbicacion());
+            if (retorno < 0) return Double.POSITIVE_INFINITY;
+            fin = sumarHoras(fin, retorno * reglas.distanciaNodoKm() / vehiculo.getVelocidadKmh());
+        }
+        if (pasarPorAlmacenOrigen && JornadaOperativa.refrigerio(inicio)) {
+            return Double.POSITIVE_INFINITY;
+        }
+        if (reloj.isAfter(nuevoPedido.getFechaLimite())) return Double.POSITIVE_INFINITY;
         return horasEntre(inicio, reloj);
     }
 
@@ -296,9 +316,10 @@ public class Ruta {
                 reglas.altoCiudad());
     }
 
-    private static LocalDateTime sumarHoras(LocalDateTime base, double horas) {
-        long nanos = Math.round(horas * 3_600_000_000_000.0);
-        return base.plusNanos(nanos);
+    private LocalDateTime sumarHoras(LocalDateTime base, double horas) {
+        return pasarPorAlmacenOrigen
+                ? JornadaOperativa.avanzar(base, horas)
+                : base.plusNanos(Math.round(horas * 3_600_000_000_000.0));
     }
 
     private static double horasEntre(LocalDateTime desde, LocalDateTime hasta) {
@@ -308,6 +329,13 @@ public class Ruta {
 
     public Vehiculo getVehiculo() { return vehiculo; }
     public Almacen getAlmacenOrigen() { return almacenOrigen; }
+    public Almacen getAlmacenRetorno() { return almacenRetorno; }
+
+    /** El retorno puede finalizar en cualquier almacén accesible; no modifica el origen de carga. */
+    public void setAlmacenRetorno(Almacen almacenRetorno) {
+        if (almacenRetorno == null) throw new IllegalArgumentException("Almacén de retorno inválido");
+        this.almacenRetorno = almacenRetorno;
+    }
     public Nodo getPosicionInicio() { return posicionInicio; }
     public boolean isPasarPorAlmacenOrigen() { return pasarPorAlmacenOrigen; }
 
@@ -316,6 +344,7 @@ public class Ruta {
             throw new IllegalArgumentException("El almacén de origen no puede ser nulo");
         }
         this.almacenOrigen = almacenOrigen;
+        this.almacenRetorno = almacenOrigen;
     }
 
     public void setAlmacenesCandidatos(List<Almacen> almacenes) {

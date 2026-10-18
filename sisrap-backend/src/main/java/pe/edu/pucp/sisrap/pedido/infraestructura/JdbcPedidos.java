@@ -13,6 +13,7 @@ import java.util.Optional;
 import javax.sql.DataSource;
 
 import org.springframework.stereotype.Repository;
+import pe.edu.pucp.sisrap.simulacion.infraestructura.EsquemaDatosSimulacion;
 
 import pe.edu.pucp.sisrap.pedido.dominio.CargaHistoricaPedidos;
 import pe.edu.pucp.sisrap.pedido.dominio.CargaHistoricaPreparada;
@@ -69,7 +70,7 @@ public class JdbcPedidos implements RepositorioPedidos {
         );
 
         sql.append("""
-                 ORDER BY fecha_llegada, id_pedido
+                 ORDER BY fecha_llegada DESC, id_pedido DESC
                  LIMIT ? OFFSET ?
                 """);
 
@@ -313,6 +314,53 @@ public class JdbcPedidos implements RepositorioPedidos {
     }
 
     @Override
+    public void eliminarCargaHistorica(String huella) {
+        try (Connection cn = fuente.getConnection()) {
+            cn.setAutoCommit(false);
+            try {
+                int anio;
+                int mes;
+                try (PreparedStatement consulta = cn.prepareStatement(
+                        "SELECT anio, mes FROM carga_pedidos_archivo WHERE huella = ? FOR UPDATE")) {
+                    consulta.setString(1, huella);
+                    try (ResultSet rs = consulta.executeQuery()) {
+                        if (!rs.next()) {
+                            throw new java.util.NoSuchElementException("No existe la carga histórica solicitada");
+                        }
+                        anio = rs.getInt("anio");
+                        mes = rs.getInt("mes");
+                    }
+                }
+                java.time.LocalDateTime inicio = java.time.YearMonth.of(anio, mes)
+                        .atDay(1).atStartOfDay();
+                java.time.LocalDateTime siguiente = java.time.YearMonth.of(anio, mes)
+                        .plusMonths(1).atDay(1).atStartOfDay();
+                try (PreparedStatement borrarPedidos = cn.prepareStatement(
+                        "DELETE FROM pedido_historico WHERE fecha_llegada >= ? AND fecha_llegada < ?")) {
+                    borrarPedidos.setTimestamp(1, Timestamp.valueOf(inicio));
+                    borrarPedidos.setTimestamp(2, Timestamp.valueOf(siguiente));
+                    borrarPedidos.executeUpdate();
+                }
+                try (PreparedStatement borrarCarga = cn.prepareStatement(
+                        "DELETE FROM carga_pedidos_archivo WHERE huella = ?")) {
+                    borrarCarga.setString(1, huella);
+                    if (borrarCarga.executeUpdate() != 1) {
+                        throw new java.util.NoSuchElementException("No existe la carga histórica solicitada");
+                    }
+                }
+                cn.commit();
+            } catch (Exception e) {
+                cn.rollback();
+                throw e;
+            } finally {
+                cn.setAutoCommit(true);
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("No se pudo eliminar la carga histórica", e);
+        }
+    }
+
+    @Override
     public List<CargaHistoricaPedidos> guardarCargasHistoricas(
             List<CargaHistoricaPreparada> cargas
     ) {
@@ -325,6 +373,7 @@ public class JdbcPedidos implements RepositorioPedidos {
 
         try (Connection cn = fuente.getConnection()) {
 
+            EsquemaDatosSimulacion.asegurar(cn);
             cn.setAutoCommit(false);
 
             try {
@@ -378,7 +427,7 @@ public class JdbcPedidos implements RepositorioPedidos {
                         """;
 
                 String insertarPedido = """
-                        INSERT INTO pedido(
+                        INSERT INTO pedido_historico(
                             id_cliente,
                             cantidad_qq,
                             prioridad,

@@ -9,6 +9,7 @@ import java.util.Optional;
 import java.util.Set;
 
 import pe.edu.pucp.sisrap.geografia.dominio.Nodo;
+import pe.edu.pucp.sisrap.planificador.dominio.modelo.ArcoReticula;
 
 /** BFS sobre la retícula. Devuelve el camino sin incluir el nodo de origen. */
 public final class CaminoReticula {
@@ -27,6 +28,17 @@ public final class CaminoReticula {
             int ancho,
             int alto) {
 
+        return calcular(origen, destino, bloqueados, ancho, alto, null);
+    }
+
+    /**
+     * Si el vehículo ya está sobre un nodo bloqueado, debe hacer la vuelta
+     * en U por el nodo desde el que llegó. Para rutas todavía no iniciadas,
+     * el extremo bloqueado permite acceso desde una calle abierta.
+     */
+    public static Optional<List<Nodo>> calcular(
+            Nodo origen, Nodo destino, Set<String> bloqueados,
+            int ancho, int alto, Nodo nodoDeRegreso) {
         if (origen == null || destino == null) {
             throw new IllegalArgumentException("Origen/destino requeridos");
         }
@@ -36,14 +48,9 @@ public final class CaminoReticula {
         if (fuera(origen, ancho, alto) || fuera(destino, ancho, alto)) {
             return Optional.empty();
         }
+        Set<String> cerrados = bloqueados == null ? Set.of() : bloqueados;
         if (origen.getX() == destino.getX() && origen.getY() == destino.getY()) {
             return Optional.of(List.of());
-        }
-
-        Set<String> cerrados = bloqueados == null ? Set.of() : bloqueados;
-        String claveDestino = clave(destino.getX(), destino.getY());
-        if (cerrados.contains(claveDestino)) {
-            return Optional.empty();
         }
 
         int columnas = ancho + 1;
@@ -78,9 +85,15 @@ public final class CaminoReticula {
                     continue;
                 }
 
-                // El nodo actual puede haber quedado bloqueado mientras el vehículo
-                // estaba sobre él; se le permite salir, pero no entrar a otro bloqueado.
-                if (cerrados.contains(clave(nx, ny))) {
+                boolean salidaOrigen = x == origen.getX() && y == origen.getY();
+                boolean llegadaDestino = nx == destino.getX() && ny == destino.getY();
+                if (!ArcoReticula.transitableComoExtremo(x, y, nx, ny, cerrados,
+                        salidaOrigen, llegadaDestino)) {
+                    continue;
+                }
+                if (salidaOrigen && cerrados.contains(clave(x, y))
+                        && nodoDeRegreso != null
+                        && (nx != nodoDeRegreso.getX() || ny != nodoDeRegreso.getY())) {
                     continue;
                 }
 

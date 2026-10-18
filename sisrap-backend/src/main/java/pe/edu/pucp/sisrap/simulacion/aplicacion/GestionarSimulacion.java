@@ -7,6 +7,10 @@ import pe.edu.pucp.sisrap.control.aplicacion.GestionarControlSimulacion;
 import pe.edu.pucp.sisrap.control.aplicacion.GestionarControlSimulacion.AdquisicionControl;
 import pe.edu.pucp.sisrap.simulacion.dominio.ConfiguracionSimulacion;
 import pe.edu.pucp.sisrap.simulacion.dominio.SnapshotSimulacion;
+import pe.edu.pucp.sisrap.simulacion.dominio.ResultadoCorrida;
+import pe.edu.pucp.sisrap.simulacion.dominio.RecorridoVehiculo;
+import java.util.List;
+import pe.edu.pucp.sisrap.simulacion.dominio.RepositorioSimulacion;
 import pe.edu.pucp.sisrap.simulacion.infraestructura.SseSimulacion;
 
 @Service
@@ -15,15 +19,30 @@ public class GestionarSimulacion {
     private final MotorSimulacion motor;
     private final GestionarControlSimulacion control;
     private final SseSimulacion sse;
+    private final RepositorioSimulacion repositorio;
 
     public GestionarSimulacion(
             MotorSimulacion motor,
             GestionarControlSimulacion control,
-            SseSimulacion sse
+            SseSimulacion sse,
+            RepositorioSimulacion repositorio
     ) {
         this.motor = motor;
         this.control = control;
         this.sse = sse;
+        this.repositorio = repositorio;
+    }
+
+    public ResultadoCorrida resultado(long idSimulacion) {
+        return repositorio.consultarResultado(idSimulacion);
+    }
+
+    public List<RecorridoVehiculo.Resumen> recorridos(long idSimulacion) {
+        return repositorio.resumirRecorridos(idSimulacion);
+    }
+
+    public RecorridoVehiculo.Detalle recorrido(long idSimulacion, String idVehiculo) {
+        return repositorio.consultarRecorrido(idSimulacion, idVehiculo);
     }
 
     public SnapshotSimulacion estado() {

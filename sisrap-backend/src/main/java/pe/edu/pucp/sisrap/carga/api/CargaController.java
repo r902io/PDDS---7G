@@ -5,7 +5,7 @@ import pe.edu.pucp.sisrap.carga.aplicacion.ImportarPedidos;
 @RestController
 @Profile("experimentacion")
 @RequestMapping("/api/carga")
-public final class CargaController {
+public class CargaController {
     private final ImportarPedidos importar;
     public CargaController(ImportarPedidos importar){this.importar=importar;}
     @PostMapping(value="/pedidos",consumes="text/plain")

@@ -129,9 +129,7 @@ public final class DistanciaReticula {
 
         if (origen.getX() == destino.getX()
                 && origen.getY() == destino.getY()) {
-            return bloqueos.contains(origen.getX() + "," + origen.getY())
-                    ? -1
-                    : 0;
+            return 0;
         }
 
         /*
@@ -153,11 +151,6 @@ public final class DistanciaReticula {
                 topologia,
                 t -> construirMatrizBloqueos(t.bloqueados, t.ancho, t.alto));
 
-        if (matrizBloqueo[origen.getX()][origen.getY()]
-                || matrizBloqueo[destino.getX()][destino.getY()]) {
-            return -1;
-        }
-
         ClaveDistancia clave = ClaveDistancia.crear(
                 origen,
                 destino,
@@ -172,6 +165,7 @@ public final class DistanciaReticula {
                 origen,
                 destino,
                 matrizBloqueo,
+                bloqueos,
                 ancho,
                 alto);
 
@@ -191,6 +185,7 @@ public final class DistanciaReticula {
             Nodo origen,
             Nodo destino,
             boolean[][] bloqueados,
+            Set<String> arcosCerrados,
             int ancho,
             int alto) {
 
@@ -231,8 +226,16 @@ public final class DistanciaReticula {
                 int nx = actual.x() + movimiento[0];
                 int ny = actual.y() + movimiento[1];
 
-                if (!dentro(nx, ny, ancho, alto)
-                        || bloqueados[nx][ny]) {
+                if (!dentro(nx, ny, ancho, alto)) {
+                    continue;
+                }
+                boolean llegadaDestino = nx == destino.getX() && ny == destino.getY();
+                boolean salidaOrigen = actual.x() == origen.getX()
+                        && actual.y() == origen.getY();
+                if ((bloqueados[nx][ny] && !llegadaDestino)
+                        || !ArcoReticula.transitableComoExtremo(
+                                actual.x(), actual.y(), nx, ny, arcosCerrados,
+                                salidaOrigen, llegadaDestino)) {
                     continue;
                 }
 
@@ -275,6 +278,7 @@ public final class DistanciaReticula {
                 continue;
             }
 
+            if (nodo.indexOf('|') >= 0) continue;
             int x = Integer.parseInt(nodo.substring(0, coma));
             int y = Integer.parseInt(nodo.substring(coma + 1));
 
