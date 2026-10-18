@@ -1,5 +1,7 @@
 package pe.edu.pucp.sisrap.configuracionoperativa.aplicacion;
 
+import java.util.Map;
+
 import org.springframework.stereotype.Service;
 
 import pe.edu.pucp.sisrap.configuracionoperativa.dominio.ConfiguracionOperativa;
@@ -25,6 +27,20 @@ public class GestionarConfiguracionOperativa {
 
     public ConfiguracionOperativa consultar() {
         return repositorio.consultar();
+    }
+
+    public Map<String, Double> actualizarVelocidadesEnCorrida(
+            String token, Map<String, Double> velocidades) {
+        control.verificarControlador(token);
+        synchronized (motor) {
+            EstadoSimulacion estado = motor.estadoActual().estado();
+            if (estado != EstadoSimulacion.EJECUTANDO && estado != EstadoSimulacion.PAUSADA) {
+                throw new IllegalStateException("Se requiere una corrida activa para cambiar velocidades");
+            }
+            Map<String, Double> confirmadas = repositorio.actualizarVelocidadesActivas(velocidades);
+            motor.aplicarVelocidadesVehiculos(confirmadas);
+            return confirmadas;
+        }
     }
 
     public ConfiguracionOperativa actualizar(

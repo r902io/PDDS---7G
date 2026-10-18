@@ -1,5 +1,7 @@
 package pe.edu.pucp.sisrap.configuracionoperativa.api;
 
+import java.util.Map;
+
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -26,6 +28,24 @@ public class ConfiguracionOperativaController {
     @GetMapping
     public ConfiguracionOperativa consultar() {
         return servicio.consultar();
+    }
+
+    public record SolicitudVelocidades(Map<String, Double> velocidadesKmh) { }
+
+    @PutMapping("/velocidades")
+    public Map<String, Double> actualizarVelocidades(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestBody SolicitudVelocidades solicitud) {
+        try {
+            return servicio.actualizarVelocidadesEnCorrida(extraerToken(authorization),
+                    solicitud == null ? null : solicitud.velocidadesKmh());
+        } catch (ControlNoAutorizadoException e) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, e.getMessage());
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
+        } catch (IllegalStateException e) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, e.getMessage());
+        }
     }
 
     @PutMapping

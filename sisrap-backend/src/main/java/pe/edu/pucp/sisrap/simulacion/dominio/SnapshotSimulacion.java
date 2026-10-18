@@ -15,10 +15,12 @@ public record SnapshotSimulacion(
         ResumenPedidosSimulacion pedidos,
         int bloqueosActivos,
         List<VehiculoSnapshot> vehiculos,
-        String mensaje
+        String mensaje,
+        IndicadoresOperacion indicadores
 ) {
 
     public SnapshotSimulacion {
+        indicadores = indicadores == null ? IndicadoresOperacion.vacios() : indicadores;
         vehiculos =
                 vehiculos == null
                         ? List.of()
@@ -49,7 +51,8 @@ public record SnapshotSimulacion(
                 ),
                 0,
                 List.of(),
-                null
+                null,
+                IndicadoresOperacion.vacios()
         );
     }
 }

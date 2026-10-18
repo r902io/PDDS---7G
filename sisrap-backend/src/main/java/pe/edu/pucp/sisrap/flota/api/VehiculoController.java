@@ -189,6 +189,9 @@ public final class VehiculoController {
                     e.getMessage()
             );
 
+        } catch (ConflictoVehiculoException e) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, e.getMessage());
+
         } catch (IllegalArgumentException e) {
 
             throw new ResponseStatusException(

@@ -138,6 +138,41 @@ public class JdbcConfiguracionOperativa {
         }
     }
 
+    /** Cambia exclusivamente la flota operativa de la corrida, sin alterar la plantilla inicial. */
+    public Map<String, Double> actualizarVelocidadesActivas(Map<String, Double> velocidades) {
+        if (velocidades == null || velocidades.isEmpty()) {
+            throw new IllegalArgumentException("Indique al menos una velocidad por tipo");
+        }
+        for (var e : velocidades.entrySet()) {
+            if (!Set.of("AUTO", "MOTO", "BICICLETA").contains(e.getKey())
+                    || e.getValue() == null || !Double.isFinite(e.getValue())
+                    || e.getValue() <= 0 || e.getValue() > 999.99) {
+                throw new IllegalArgumentException("Tipo o velocidad inválidos: " + e.getKey());
+            }
+        }
+        try (Connection cn = fuente.getConnection()) {
+            cn.setAutoCommit(false);
+            try (PreparedStatement ps = cn.prepareStatement(
+                    "UPDATE vehiculo SET velocidad_kmh=? WHERE tipo=?")) {
+                for (var e : velocidades.entrySet()) {
+                    ps.setDouble(1, e.getValue());
+                    ps.setString(2, e.getKey());
+                    if (ps.executeUpdate() == 0) {
+                        throw new IllegalArgumentException("No hay vehículos activos del tipo " + e.getKey());
+                    }
+                }
+                cn.commit();
+                return Map.copyOf(velocidades);
+            } catch (SQLException | RuntimeException error) {
+                cn.rollback();
+                if (error instanceof RuntimeException runtime) throw runtime;
+                throw error;
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("No se pudieron actualizar las velocidades operativas", e);
+        }
+    }
+
     private static void validarEstructura(ConfiguracionOperativa c) {
         if (c == null || c.almacenes() == null || c.flota() == null
                 || c.almacenes().size() != 3 || c.flota().size() != 3) {

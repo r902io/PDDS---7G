@@ -164,9 +164,10 @@ public class Ruta {
         distanciaTotalKm = distanciaPasos * reglas.distanciaNodoKm();
         costoTotal = distanciaTotalKm * vehiculo.getCostoPorKm();
         tiempoTotalHoras = horasEntre(inicio, reloj);
+        // El conductor es relevado en el mismo punto al terminar su turno.
+        // Solo se impide iniciar una ruta durante la hora de refrigerio.
         fueraDeTurno = pasarPorAlmacenOrigen && !secuenciaPedidos.isEmpty()
-                && (JornadaOperativa.refrigerio(inicio)
-                || reloj.isAfter(JornadaOperativa.finTurno(inicio)));
+                && JornadaOperativa.refrigerio(inicio);
     }
 
     public double horaLlegadaDe(int indice) {
@@ -222,8 +223,7 @@ public class Ruta {
             if (retorno < 0) return Double.POSITIVE_INFINITY;
             fin = sumarHoras(fin, retorno * reglas.distanciaNodoKm() / vehiculo.getVelocidadKmh());
         }
-        if (pasarPorAlmacenOrigen && (JornadaOperativa.refrigerio(inicio)
-                || fin.isAfter(JornadaOperativa.finTurno(inicio)))) {
+        if (pasarPorAlmacenOrigen && JornadaOperativa.refrigerio(inicio)) {
             return Double.POSITIVE_INFINITY;
         }
         if (reloj.isAfter(nuevoPedido.getFechaLimite())) return Double.POSITIVE_INFINITY;

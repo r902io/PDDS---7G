@@ -68,8 +68,6 @@ public enum EscenarioSimulacion {
         if (inicio == null) {
             throw new IllegalArgumentException("La fecha/hora de inicio es obligatoria");
         }
-        return this == OPERACION_DIARIA
-                ? LocalDateTime.of(9999, 12, 31, 23, 59, 59)
-                : inicio.plusDays(horizonteMaximoDias);
+        return inicio.plusDays(horizonteMaximoDias);
     }
 }

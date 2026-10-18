@@ -1,7 +1,10 @@
 package pe.edu.pucp.sisrap.flota.aplicacion;
 
 import java.time.LocalDateTime;
+import java.time.LocalTime;
+
 import java.util.List;
+import pe.edu.pucp.sisrap.planificador.dominio.modelo.JornadaOperativa;
 import java.util.NoSuchElementException;
 
 import org.springframework.stereotype.Service;
@@ -85,32 +88,24 @@ public final class GestionarVehiculos {
             );
         }
 
-        // La avería ocurre AHORA en el reloj de la simulación. Si el cliente
-        // envió una duración basada en su reloj local, se conserva la duración.
-        LocalDateTime instanteSolicitado = fechaOcurrencia;
-        fechaOcurrencia = exigirSimulacionActiva();
-        if (instanteSolicitado != null && horaRetornoEstimada != null
-                && horaRetornoEstimada.isAfter(instanteSolicitado)) {
-            horaRetornoEstimada = fechaOcurrencia.plus(
-                    java.time.Duration.between(instanteSolicitado, horaRetornoEstimada));
-        }
+        exigirSimulacionActiva();
+        return motor.registrarAveriaVehiculo(idVehiculo, instante ->
+                repositorio.registrarAveria(idVehiculo, tipo, instante,
+                        calcularRetornoAveria(tipo, instante)));
+    }
 
-        if (horaRetornoEstimada != null
-                && !horaRetornoEstimada
-                .isAfter(fechaOcurrencia)) {
-
-            throw new IllegalArgumentException(
-                    "La hora de retorno debe ser posterior "
-                            + "a la avería"
-            );
-        }
-
-        return repositorio.registrarAveria(
-                idVehiculo,
-                tipo,
-                fechaOcurrencia,
-                horaRetornoEstimada
-        );
+    private static LocalDateTime calcularRetornoAveria(
+            TipoAveria tipo, LocalDateTime ocurrencia) {
+        return switch (tipo) {
+            case TIPO1_MENOR -> ocurrencia.plusHours(2);
+            case TIPO2_INTERMEDIA -> JornadaOperativa.finTurno(ocurrencia).plusHours(8);
+            case TIPO3_MAYOR -> {
+                LocalDateTime plazo = ocurrencia.plusDays(2);
+                LocalDateTime retorno = plazo.toLocalDate().atTime(LocalTime.of(15, 0));
+                if (retorno.isBefore(plazo)) retorno = retorno.plusDays(1);
+                yield retorno;
+            }
+        };
     }
 
     public AveriaVehiculo resolverAveria(
@@ -128,16 +123,18 @@ public final class GestionarVehiculos {
             );
         }
 
-        return repositorio.resolverAveria(
-                idVehiculo,
-                idIncidencia
-        );
+        AveriaVehiculo averia = repositorio.listarAverias(idVehiculo).stream()
+                .filter(a -> a.idIncidencia() == idIncidencia)
+                .findFirst()
+                .orElseThrow(() -> new NoSuchElementException("No existe la avería indicada"));
+        if (averia.activa() && (averia.horaRetornoEstimada() == null
+                || motor.estadoActual().relojSimulado().isBefore(averia.horaRetornoEstimada()))) {
+            throw new ConflictoVehiculoException(
+                    "El vehículo continúa averiado hasta " + averia.horaRetornoEstimada());
+        }
+        return repositorio.resolverAveria(idVehiculo, idIncidencia);
     }
 
-    /*
-     * Este método NO se expondrá directamente al frontend.
-     * Posteriormente lo llamará MotorSimulacion.
-     */
     public void actualizarDesdeSimulacion(
             String idVehiculo,
             int x,

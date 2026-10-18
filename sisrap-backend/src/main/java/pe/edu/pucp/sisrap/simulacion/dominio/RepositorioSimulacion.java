@@ -1,10 +1,14 @@
 package pe.edu.pucp.sisrap.simulacion.dominio;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+
+import pe.edu.pucp.sisrap.flota.dominio.AveriaVehiculo;
+import pe.edu.pucp.sisrap.pedido.dominio.Pedido;
 import pe.edu.pucp.sisrap.planificador.dominio.modelo.Ruta;
 import pe.edu.pucp.sisrap.planificador.dominio.modelo.Solucion;
 
@@ -13,6 +17,9 @@ public interface RepositorioSimulacion {
     void prepararEjecucion(ConfiguracionSimulacion configuracion);
 
     void publicarPedidosHasta(LocalDateTime reloj);
+
+    List<Pedido> cargarPrevisionDiaria(LocalDate fecha, LocalDateTime disponibleDesde);
+
 
     pe.edu.pucp.sisrap.pedido.dominio.PedidoOperativo registrarPedidoManual(
             String cliente, int cantidad, pe.edu.pucp.sisrap.pedido.dominio.TipoPrioridad prioridad,
@@ -50,11 +57,23 @@ public interface RepositorioSimulacion {
 
     Map<String, VehiculoPersistido> cargarVehiculosPersistidos();
 
+    Map<String, AveriaVehiculo> cargarAveriasActivas(LocalDateTime reloj);
+
     List<VehiculoSnapshot> cargarVehiculosSnapshot();
+
+    List<PerfilFlotaSimulacion> cargarPerfilesFlota();
+
+    boolean activarIncidenciasProgramadas(LocalDateTime reloj);
 
     void sincronizarDisponibilidad(LocalDateTime reloj);
 
     long idPedidoVisible(long idPedidoPlanificado);
+
+    /** Divide una carga ya embarcada en entregas parciales para su trasvase. */
+    List<Pedido> dividirPedidoEnRuta(Pedido pedido, int capacidadPorVehiculo);
+
+    /** Cambia la custodia de los paquetes al vehículo que los recoge. */
+    List<Pedido> registrarTrasvase(List<Pedido> pedidos, String idVehiculo);
 
     void marcarPedidosEnRuta(Collection<Long> idsPedidos);
 

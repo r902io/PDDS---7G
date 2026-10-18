@@ -15,6 +15,7 @@ import { ESCENARIOS, ORDEN_ESCENARIOS, corridaActiva } from '../utilitarios/esce
 import { diaSimulado, formatoFecha, formatoHora, hoyLocal } from '../utilitarios/formato';
 import { tipoDesdeCodigo } from '../utilitarios/vehiculos';
 import { HistorialPedidos } from '../components/HistorialPedidos';
+import { CalendariosCaso } from '../components/CalendariosCaso';
 
 const ICONO_ESCENARIO: Record<EscenarioSimulacion, ReactElement> = {
   OPERACION_DIARIA: <IconoReloj tamano={24} />,
@@ -259,7 +260,7 @@ export function SelectorEscenario() {
             </div>
           </Panel>
 
-          <Panel titulo="Datos del caso" subtitulo="Almacenes y flota para la próxima simulación.">
+          <Panel titulo="Datos del caso" subtitulo="Almacenes, flota e incidencias para la próxima simulación.">
             <div className="space-y-3 text-xs">
               <div>
                 <p className="text-texto2 mb-1">Almacenes</p>
@@ -332,6 +333,7 @@ export function SelectorEscenario() {
               {consulta.error && !configuracionBackend &&
                 <ErrorCarga titulo="No se pudo consultar la configuración" error={consulta.error} reintentar={consulta.recargar} />}
               <HistorialPedidos consulta={historicos} bloqueado={activa || guardando} />
+              <CalendariosCaso bloqueado={activa || guardando} fechaInicio={fechaInicio} escenario={escenario} />
               <p className="text-xs text-texto2 border-l-2 border-azul pl-2.5 leading-relaxed">
                 Retícula de {mapa.datos ? `${mapa.datos.anchoKm} × ${mapa.datos.altoKm} km` : 'la ciudad'} con calles de doble sentido y turnos con cambio a las 07:00, 15:00 y 23:00.
               </p>
