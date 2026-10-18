@@ -16,9 +16,9 @@ export const ESCENARIOS: Record<EscenarioSimulacion, DescripcionEscenario> = {
     titulo: 'Operación día a día',
     tituloCorto: 'Día a día',
     resumen:
-      'Operación continua: los pedidos ingresan conforme llegan y el planificador replanifica en tiempo real.',
-    condicionTermino: 'No termina por sí sola. Solo se detiene manualmente.',
-    diasTotales: null,
+      'Corrida de evaluación de 24 horas simuladas. Los pedidos se atienden según llegan y se conserva su estado al corte.',
+    condicionTermino: 'Termina automáticamente después de 24 horas simuladas.',
+    diasTotales: 1,
   },
   SIMULACION_CINCO_DIAS: {
     id: 'SIMULACION_CINCO_DIAS',
@@ -72,7 +72,7 @@ export function enColapso(s: SnapshotSimulacion | null): boolean {
   return s != null && s.pedidos != null && s.pedidos.retrasados > 0;
 }
 
-export type TipoResultado = 'COMPLETADA' | 'COLAPSO' | 'DETENIDA_MANUAL' | 'ERROR';
+export type TipoResultado = 'COMPLETADA' | 'COMPLETADA_CON_INCIDENCIAS' | 'COLAPSO' | 'DETENIDA_MANUAL' | 'ERROR';
 
 /**
  * Clasifica una corrida terminada.
@@ -83,8 +83,9 @@ export type TipoResultado = 'COMPLETADA' | 'COLAPSO' | 'DETENIDA_MANUAL' | 'ERRO
  */
 export function tipoResultado(s: SnapshotSimulacion): TipoResultado | null {
   if (corridaActiva(s) || !hayCorrida(s)) return null;
-  if (enColapso(s)) return 'COLAPSO';
   if (s.estado === 'ERROR') return 'ERROR';
-  if (s.estado === 'FINALIZADA') return 'COMPLETADA';
+  if (s.escenario === 'COLAPSO_LOGISTICO' && enColapso(s)) return 'COLAPSO';
+  if (s.estado === 'FINALIZADA')
+    return enColapso(s) ? 'COMPLETADA_CON_INCIDENCIAS' : 'COMPLETADA';
   return 'DETENIDA_MANUAL';
 }

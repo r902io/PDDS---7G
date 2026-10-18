@@ -53,6 +53,8 @@ import pe.edu.pucp.sisrap.simulacion.dominio.EscenarioSimulacion;
 import pe.edu.pucp.sisrap.simulacion.dominio.PuntoSimulacion;
 import pe.edu.pucp.sisrap.simulacion.dominio.RepositorioSimulacion;
 import pe.edu.pucp.sisrap.simulacion.dominio.ResultadoCorrida;
+import pe.edu.pucp.sisrap.simulacion.dominio.DiagnosticoPlanificacion;
+import pe.edu.pucp.sisrap.simulacion.dominio.RecorridoVehiculo;
 import pe.edu.pucp.sisrap.simulacion.dominio.ResumenPedidosSimulacion;
 import pe.edu.pucp.sisrap.simulacion.dominio.VehiculoPersistido;
 import pe.edu.pucp.sisrap.simulacion.dominio.VehiculoSnapshot;
@@ -216,25 +218,24 @@ public class JdbcSimulacion implements RepositorioSimulacion {
                         cambios = true;
                     }
                 }
-                // Los mantenimientos preventivos programados empiezan cuando la unidad
-                // está libre: nunca se hace desaparecer su carga de una ruta activa.
+                // Los mantenimientos previstos ocupan el día especificado por el profesor,
+                // independientemente de la disponibilidad del vehículo. Las rutas nuevas
+                // se validan contra el calendario antes del despacho.
                 for (var mantenimiento : mantenimientosDebidos) {
-                    if (vehiculoDisponible(cn, mantenimiento.idVehiculo(), reloj)) {
-                        LocalDateTime fin = reloj.plus(java.time.Duration.between(
-                                mantenimiento.inicio(), mantenimiento.fin()));
+                    if (mantenimiento.fin().isAfter(reloj)) {
                         try (PreparedStatement ps = cn.prepareStatement("""
                                 INSERT INTO mantenimiento_vehiculo
                                   (id_vehiculo,tipo,fecha_inicio,fecha_fin,activo)
                                 VALUES (?,'PREVENTIVO',?,?,TRUE)
                                 """)) {
                             ps.setString(1, mantenimiento.idVehiculo());
-                            ps.setTimestamp(2, Timestamp.valueOf(reloj));
-                            ps.setTimestamp(3, Timestamp.valueOf(fin));
+                            ps.setTimestamp(2, Timestamp.valueOf(mantenimiento.inicio()));
+                            ps.setTimestamp(3, Timestamp.valueOf(mantenimiento.fin()));
                             ps.executeUpdate();
                         }
-                        atendidos.add(mantenimiento);
                         cambios = true;
                     }
+                    atendidos.add(mantenimiento);
                 }
                 cn.commit();
                 bloqueosProgramados.removeAll(bloqueosDebidos);
@@ -248,6 +249,26 @@ public class JdbcSimulacion implements RepositorioSimulacion {
         } catch (SQLException ex) {
             throw new IllegalStateException("No se pudieron activar incidencias históricas", ex);
         }
+    }
+
+    @Override
+    public synchronized boolean tieneMantenimientoProgramado(String idVehiculo,
+                                                               LocalDateTime desde,
+                                                               LocalDateTime hasta) {
+        if (programadorIncidencias == null || idVehiculo == null || desde == null
+                || hasta == null || hasta.isBefore(desde)) return false;
+        for (LocalDate dia = desde.toLocalDate().minusDays(1);
+             !dia.isAfter(hasta.toLocalDate()); dia = dia.plusDays(1)) {
+            for (var mantenimiento : programadorIncidencias.generarDia(
+                    configuracionIncidencias.fechaInicio(), dia,
+                    configuracionIncidencias.semilla(), anchoIncidencias,
+                    altoIncidencias, idsIncidencias).mantenimientos()) {
+                if (mantenimiento.idVehiculo().equals(idVehiculo)
+                        && mantenimiento.inicio().isBefore(hasta)
+                        && mantenimiento.fin().isAfter(desde)) return true;
+            }
+        }
+        return false;
     }
 
     private boolean vehiculoDisponible(Connection cn, String idVehiculo, LocalDateTime reloj) throws SQLException {
@@ -650,8 +671,149 @@ public class JdbcSimulacion implements RepositorioSimulacion {
     }
 
     @Override
+    public void registrarDiagnosticos(long idSimulacion,
+                                     List<DiagnosticoPlanificacion> diagnosticos) {
+        if (diagnosticos == null || diagnosticos.isEmpty()) return;
+        try (Connection cn = fuente.getConnection();
+             PreparedStatement ps = cn.prepareStatement("""
+                     INSERT IGNORE INTO simulacion_diagnostico
+                       (id_simulacion,instante,id_pedido,motivo) VALUES (?,?,?,?)
+                     """)) {
+            for (var diagnostico : diagnosticos) {
+                ps.setLong(1, idSimulacion);
+                ps.setTimestamp(2, Timestamp.valueOf(diagnostico.instante()));
+                ps.setLong(3, diagnostico.idPedido());
+                ps.setString(4, diagnostico.motivo());
+                ps.addBatch();
+            }
+            ps.executeBatch();
+        } catch (SQLException e) {
+            throw new IllegalStateException("No se pudo archivar el diagnóstico de planificación", e);
+        }
+    }
+
+    @Override
+    public void guardarRecorridos(long idSimulacion, List<RecorridoVehiculo.Registro> registros) {
+        if (registros == null || registros.isEmpty()) return;
+        try (Connection cn = fuente.getConnection();
+             PreparedStatement ps = cn.prepareStatement("""
+                     INSERT INTO simulacion_recorrido
+                       (id_simulacion,id_vehiculo,instante,ubicacion_x,ubicacion_y,
+                        estado,fase,evento,carga_paquetes,id_pedido_objetivo,distancia_tramo_km)
+                     VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                     """)) {
+            for (RecorridoVehiculo.Registro registro : registros) {
+                RecorridoVehiculo.Punto punto = registro.punto();
+                ps.setLong(1, idSimulacion);
+                ps.setString(2, registro.idVehiculo());
+                ps.setTimestamp(3, Timestamp.valueOf(punto.instante()));
+                ps.setInt(4, punto.x());
+                ps.setInt(5, punto.y());
+                ps.setString(6, punto.estado());
+                ps.setString(7, punto.fase());
+                ps.setString(8, punto.evento());
+                ps.setInt(9, punto.cargaPaquetes());
+                if (punto.pedidoObjetivo() == null) ps.setNull(10, java.sql.Types.BIGINT);
+                else ps.setLong(10, punto.pedidoObjetivo());
+                ps.setDouble(11, punto.distanciaTramoKm());
+                ps.addBatch();
+            }
+            ps.executeBatch();
+        } catch (SQLException e) {
+            throw new IllegalStateException("No se pudo archivar el recorrido de los vehículos", e);
+        }
+    }
+
+    @Override
+    public List<RecorridoVehiculo.Resumen> resumirRecorridos(long idSimulacion) {
+        try (Connection cn = fuente.getConnection()) {
+            EsquemaDatosSimulacion.asegurar(cn);
+            try (PreparedStatement comprobar = cn.prepareStatement(
+                    "SELECT 1 FROM simulacion WHERE id_simulacion=?")) {
+                comprobar.setLong(1, idSimulacion);
+                try (ResultSet rs = comprobar.executeQuery()) {
+                    if (!rs.next()) throw new java.util.NoSuchElementException("Simulación no encontrada: " + idSimulacion);
+                }
+            }
+            List<RecorridoVehiculo.Resumen> resumen = new ArrayList<>();
+            try (PreparedStatement ps = cn.prepareStatement("""
+                    SELECT v.id_vehiculo, v.tipo, COUNT(r.secuencia),
+                           COALESCE(SUM(r.distancia_tramo_km),0),
+                           MIN(r.instante), MAX(r.instante)
+                    FROM simulacion_vehiculo v
+                    LEFT JOIN simulacion_recorrido r
+                      ON r.id_simulacion=v.id_simulacion AND r.id_vehiculo=v.id_vehiculo
+                    WHERE v.id_simulacion=?
+                    GROUP BY v.id_vehiculo,v.tipo ORDER BY v.id_vehiculo
+                    """)) {
+                ps.setLong(1, idSimulacion);
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        Timestamp inicio = rs.getTimestamp(5), fin = rs.getTimestamp(6);
+                        resumen.add(new RecorridoVehiculo.Resumen(rs.getString(1), rs.getString(2),
+                                rs.getInt(3), rs.getDouble(4),
+                                inicio == null ? null : inicio.toLocalDateTime(),
+                                fin == null ? null : fin.toLocalDateTime()));
+                    }
+                }
+            }
+            return resumen;
+        } catch (SQLException e) {
+            throw new IllegalStateException("No se pudo consultar el resumen de recorridos", e);
+        }
+    }
+
+    @Override
+    public RecorridoVehiculo.Detalle consultarRecorrido(long idSimulacion, String idVehiculo) {
+        if (idVehiculo == null || !idVehiculo.matches("[A-Za-z0-9_-]{1,20}")) {
+            throw new IllegalArgumentException("Código de vehículo inválido");
+        }
+        try (Connection cn = fuente.getConnection()) {
+            EsquemaDatosSimulacion.asegurar(cn);
+            String tipo;
+            try (PreparedStatement ps = cn.prepareStatement("""
+                    SELECT tipo FROM simulacion_vehiculo WHERE id_simulacion=? AND id_vehiculo=?
+                    """)) {
+                ps.setLong(1, idSimulacion);
+                ps.setString(2, idVehiculo);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (!rs.next()) throw new java.util.NoSuchElementException(
+                            "Vehículo no encontrado en la corrida: " + idVehiculo);
+                    tipo = rs.getString(1);
+                }
+            }
+            List<RecorridoVehiculo.Punto> puntos = new ArrayList<>();
+            double distancia = 0;
+            try (PreparedStatement ps = cn.prepareStatement("""
+                    SELECT instante,ubicacion_x,ubicacion_y,estado,fase,evento,
+                           carga_paquetes,id_pedido_objetivo,distancia_tramo_km
+                    FROM simulacion_recorrido
+                    WHERE id_simulacion=? AND id_vehiculo=? ORDER BY secuencia
+                    """)) {
+                ps.setLong(1, idSimulacion);
+                ps.setString(2, idVehiculo);
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        long objetivo = rs.getLong(8);
+                        Long pedido = rs.wasNull() ? null : objetivo;
+                        double tramo = rs.getDouble(9);
+                        distancia += tramo;
+                        puntos.add(new RecorridoVehiculo.Punto(rs.getTimestamp(1).toLocalDateTime(),
+                                rs.getInt(2), rs.getInt(3), rs.getString(4), rs.getString(5),
+                                rs.getString(6), rs.getInt(7), pedido, tramo));
+                    }
+                }
+            }
+            return new RecorridoVehiculo.Detalle(idSimulacion, idVehiculo, tipo, distancia, puntos);
+        } catch (SQLException e) {
+            throw new IllegalStateException("No se pudo consultar el trayecto del vehículo", e);
+        }
+    }
+
+    @Override
     public ResultadoCorrida consultarResultado(long idSimulacion) {
         try (Connection cn=fuente.getConnection()) {
+            EsquemaDatosSimulacion.asegurar(cn);
             String escenario, estado;
             LocalDateTime inicio, fin;
             long tiempo;
@@ -812,11 +974,25 @@ public class JdbcSimulacion implements RepositorioSimulacion {
                     }
                 }
             }
+            List<DiagnosticoPlanificacion> diagnosticos = new ArrayList<>();
+            try (PreparedStatement ps = cn.prepareStatement("""
+                    SELECT instante,id_pedido,motivo FROM simulacion_diagnostico
+                    WHERE id_simulacion=? ORDER BY instante,id_pedido LIMIT 10000
+                    """)) {
+                ps.setLong(1, idSimulacion);
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        diagnosticos.add(new DiagnosticoPlanificacion(
+                                rs.getTimestamp(1).toLocalDateTime(), rs.getLong(2), rs.getString(3)));
+                    }
+                }
+            }
             return new ResultadoCorrida(idSimulacion,escenario,estado,inicio,fin,tiempo,
                     pedidos.size(),entregados,retrasados,costo,distancia,
                     List.copyOf(pedidos),List.copyOf(incidencias),List.copyOf(mantenimientos),
                     List.copyOf(flotaInicial),List.copyOf(almacenesIniciales),
-                    List.copyOf(fraccionesHistoricas), pedidoColapso, instanteColapso);
+                    List.copyOf(fraccionesHistoricas), pedidoColapso, instanteColapso,
+                    List.copyOf(diagnosticos));
         } catch(SQLException e) {
             throw new IllegalStateException("No se pudo consultar el resultado",e);
         }
@@ -845,8 +1021,10 @@ public class JdbcSimulacion implements RepositorioSimulacion {
                 List<Vehiculo> vehiculos = leerVehiculos(cn, ancho, alto);
                 int capacidadMaxima = vehiculos.stream().mapToInt(Vehiculo::getCapacidadPaquetes)
                         .max().orElseThrow(() -> new IllegalArgumentException("No hay flota configurada"));
+                int capacidadDisponible = vehiculos.stream().filter(Vehiculo::isDisponible)
+                        .mapToInt(Vehiculo::getCapacidadPaquetes).max().orElse(0);
                 List<Pedido> pedidos = leerPedidosSimuladosPlanificables(
-                        reloj, finVentana, ancho, alto, capacidadMaxima);
+                        reloj, finVentana, ancho, alto, capacidadMaxima, capacidadDisponible);
                 Set<String> bloqueados = leerNodosBloqueados(cn, reloj);
 
                 ReglasPlanificacion reglas = ReglasPlanificacion.desde(
@@ -913,7 +1091,7 @@ public class JdbcSimulacion implements RepositorioSimulacion {
         Map<String, VehiculoPersistido> salida = new HashMap<>();
         try (Connection cn = fuente.getConnection();
              PreparedStatement ps = cn.prepareStatement("""
-                     SELECT id_vehiculo, estado, posicion_x, posicion_y
+                     SELECT id_vehiculo, estado, posicion_x, posicion_y, capacidad_paquetes
                      FROM vehiculo
                      ORDER BY id_vehiculo
                      """);
@@ -994,7 +1172,7 @@ public class JdbcSimulacion implements RepositorioSimulacion {
         List<VehiculoSnapshot> salida = new ArrayList<>();
         try (Connection cn = fuente.getConnection();
              PreparedStatement ps = cn.prepareStatement("""
-                     SELECT id_vehiculo, estado, posicion_x, posicion_y
+                     SELECT id_vehiculo, estado, posicion_x, posicion_y, capacidad_paquetes
                      FROM vehiculo
                      ORDER BY id_vehiculo
                      """);
@@ -1007,7 +1185,9 @@ public class JdbcSimulacion implements RepositorioSimulacion {
                         rs.getInt("posicion_x"),
                         rs.getInt("posicion_y"),
                         null,
-                        List.of()));
+                        List.of(),
+                        rs.getInt("capacidad_paquetes"),
+                        0, 0, 0));
             }
             return List.copyOf(salida);
         } catch (SQLException e) {
@@ -1674,7 +1854,8 @@ public class JdbcSimulacion implements RepositorioSimulacion {
             LocalDateTime finVentana,
             int ancho,
             int alto,
-            int capacidadMaxima) {
+            int capacidadMaxima,
+            int capacidadDisponible) {
 
         List<Pedido> salida = new ArrayList<>();
         for (PedidoSimulado pedido : pedidosSimulados.values()) {
@@ -1682,10 +1863,21 @@ public class JdbcSimulacion implements RepositorioSimulacion {
                     || !pedido.fechaLlegada.isBefore(finVentana)) {
                 continue;
             }
-            if (pedido.cantidad > capacidadMaxima && pedido.fracciones.isEmpty()) {
+            // En pedidos prioritarios próximos al vencimiento se permiten fracciones
+            // para vehículos menores, si no existe una unidad grande disponible.
+            int capacidadParte = capacidadMaxima;
+            boolean pedidoUrgente = pedido.prioridad == TipoPrioridad.PRIORIZADO_4H
+                    && pedido.fechaLlegada.plusHours(pedido.horasLimite).isAfter(reloj)
+                    && !pedido.fechaLlegada.plusHours(pedido.horasLimite)
+                            .isAfter(reloj.plusHours(3));
+            if (pedidoUrgente && capacidadDisponible > 0
+                    && pedido.cantidad > capacidadDisponible) {
+                capacidadParte = capacidadDisponible;
+            }
+            if (pedido.cantidad > capacidadParte && pedido.fracciones.isEmpty()) {
                 int restante = pedido.cantidad;
                 while (restante > 0) {
-                    int cantidad = Math.min(restante, capacidadMaxima);
+                    int cantidad = Math.min(restante, capacidadParte);
                     FraccionPedido fraccion = new FraccionPedido(siguienteFraccion--, pedido.id, cantidad);
                     pedido.fracciones.add(fraccion);
                     fracciones.put(fraccion.id, fraccion);

@@ -165,7 +165,12 @@ function DetalleVehiculo({
         <Dato k="Coordenadas" v={formatoCoordenada(v.x, v.y)} mono />
         <Dato k="Camino pendiente" v={formatoKm(km)} mono />
         <Dato k="Tramo ya recorrido" v={NO_DISPONIBLE} />
-        <Dato k="Carga actual" v={NO_DISPONIBLE} />
+        <Dato k="Carga actual" v={`${formatoEntero(v.cargaActualPaquetes ?? 0)} / ${formatoEntero(v.capacidadPaquetes || catalogo?.capacidadPaquetes || 0)} paquetes`} mono />
+        <div className="mt-1 mb-2 h-2 bg-bg border border-borde rounded-full overflow-hidden" aria-label="Porcentaje de ocupación del vehículo">
+          <div className="h-full bg-mint rounded-full" style={{ width: `${Math.min(100, 100 * (v.cargaActualPaquetes ?? 0) / Math.max(1, v.capacidadPaquetes || catalogo?.capacidadPaquetes || 1))}%` }} />
+        </div>
+        <Dato k="Pedidos a bordo" v={formatoEntero(v.cargaActualPaquetes > 0 ? v.entregasPendientes : 0)} mono />
+        {v.cargaPorRecogerPaquetes > 0 && <Dato k="Pendiente de recoger" v={`${formatoEntero(v.cargaPorRecogerPaquetes)} paquetes`} mono />}
 
         <h3 className="text-[11px] uppercase tracking-wider text-texto2 font-semibold mt-4 mb-1">Ficha de la unidad</h3>
         {!catalogoCargado && <p className="text-xs text-texto2">Cargando datos del vehículo…</p>}

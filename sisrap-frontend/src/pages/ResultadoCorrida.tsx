@@ -25,6 +25,12 @@ const PRESENTACION: Record<
     icono: <IconoCorrecto tamano={34} />,
     descripcion: 'El escenario alcanzó su condición de término sin ningún pedido fuera de plazo.',
   },
+  COMPLETADA_CON_INCIDENCIAS: {
+    titulo: 'Período completado con incumplimientos',
+    clase: 'border-rojo bg-rojo/10 text-rojo',
+    icono: <IconoColapso tamano={34} />,
+    descripcion: 'La corrida terminó por alcanzar su período programado. Se registró al menos un incumplimiento durante la operación.',
+  },
   COLAPSO: {
     titulo: 'Colapso logístico',
     clase: 'border-rojo bg-rojo/10 text-rojo',
@@ -116,7 +122,7 @@ export function ResultadoCorrida() {
             <Dato k="Condición de término" v={esc?.condicionTermino ?? NO_DISPONIBLE} />
             <Dato k="Inicio" v={formatoFechaHora(snapshot.fechaHoraInicio)} mono />
             <Dato
-              k={tipo === 'COLAPSO' ? 'Instante de detección' : 'Reloj al detenerse'}
+              k="Fin de la ejecución"
               v={formatoFechaHora(snapshot.relojSimulado)}
               mono
             />

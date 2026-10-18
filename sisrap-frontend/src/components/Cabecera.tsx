@@ -100,7 +100,7 @@ export function Cabecera({ vista }: { vista: Vista }) {
           {sesion.fase === 'LISTA' ? rolInfo.texto : sesion.fase === 'CARGANDO' ? 'Creando sesión…' : 'Sin sesión'}
         </Pastilla>
         <Pastilla etiqueta="Corrida" clase={claseEstado}>
-          {estado ? (colapso ? 'Colapso logístico' : ETIQUETA_ESTADO_SIMULACION[estado]) : 'Sin datos'}
+          {estado ? (colapso ? (snapshot?.escenario === 'COLAPSO_LOGISTICO' ? 'Colapso logístico' : 'Con incumplimientos') : ETIQUETA_ESTADO_SIMULACION[estado]) : 'Sin datos'}
         </Pastilla>
       </div>
 

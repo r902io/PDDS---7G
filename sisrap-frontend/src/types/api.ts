@@ -43,6 +43,10 @@ export interface VehiculoSnapshot {
   y: number;
   pedidoObjetivo: number | null;
   caminoActual: PuntoSimulacion[];
+  capacidadPaquetes: number;
+  cargaActualPaquetes: number;
+  cargaPorRecogerPaquetes: number;
+  entregasPendientes: number;
 }
 
 /** ResumenPedidosSimulacion */
@@ -74,6 +78,27 @@ export interface SnapshotSimulacion {
   bloqueosActivos: number;
   vehiculos: VehiculoSnapshot[];
   mensaje: string | null;
+  indicadores?: IndicadoresOperacion | null;
+}
+
+export interface IndicadoresOperacion {
+  distanciaRecorridaKm: number;
+  costoTransporteAcumuladoSoles: number;
+  utilizacionPorTipo: Array<{
+    tipo: string;
+    cantidadTotal: number;
+    activos: number;
+    porcentajeOcupacionActual: number;
+    porcentajeUtilizacionAcumulada: number;
+  }>;
+  evolucion: Array<{
+    instante: FechaHoraLocal;
+    distanciaRecorridaKm: number;
+    costoTransporteAcumuladoSoles: number;
+    entregados: number;
+    retrasados: number;
+    porcentajeLlegadasEnPlazo: number;
+  }>;
 }
 
 /** SimulacionController.IniciarSimulacionRequest */
@@ -308,6 +333,9 @@ export interface ResultadoPersistido {
   retrasados: number;
   costoPlanificado: number;
   distanciaPlanificadaKm: number;
+  idPedidoColapso?: number | null;
+  instanteColapso?: FechaHoraLocal | null;
+  diagnosticos?: Array<{ instante: FechaHoraLocal; idPedido: number; motivo: string }>;
   pedidos: Array<{
     idPedido: number; cliente: string; cantidad: number; prioridad: string;
     fechaRegistro: FechaHoraLocal; fechaArribo: FechaHoraLocal | null;
@@ -341,4 +369,34 @@ export interface CargaHistorica {
   mes: number;
   filas: number;
   fechaCarga: string;
+}
+
+/** Posiciones realmente ejecutadas por vehículo y persistidas por corrida. */
+export interface ResumenRecorridoVehiculo {
+  idVehiculo: string;
+  tipo: string;
+  puntos: number;
+  distanciaRecorridaKm: number;
+  primerRegistro: FechaHoraLocal | null;
+  ultimoRegistro: FechaHoraLocal | null;
+}
+
+export interface PuntoRecorridoVehiculo {
+  instante: FechaHoraLocal;
+  x: number;
+  y: number;
+  estado: string;
+  fase: string;
+  evento: string;
+  cargaPaquetes: number;
+  pedidoObjetivo: number | null;
+  distanciaTramoKm: number;
+}
+
+export interface DetalleRecorridoVehiculo {
+  idSimulacion: number;
+  idVehiculo: string;
+  tipo: string;
+  distanciaRecorridaKm: number;
+  puntos: PuntoRecorridoVehiculo[];
 }

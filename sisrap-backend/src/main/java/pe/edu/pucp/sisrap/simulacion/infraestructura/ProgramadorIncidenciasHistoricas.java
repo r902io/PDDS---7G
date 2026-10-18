@@ -84,17 +84,17 @@ public final class ProgramadorIncidenciasHistoricas {
                     LocalDate fecha = LocalDate.of(Integer.parseInt(m.group(1)),
                             Integer.parseInt(m.group(2)), Integer.parseInt(m.group(3)));
                     String id = m.group(4).toUpperCase(java.util.Locale.ROOT);
-                    int horas = id.startsWith("TA") ? 48 : id.startsWith("TB") ? 8 :
-                            id.startsWith("TM") ? 24 : 0;
-                    if (horas == 0) throw new IllegalArgumentException("Vehículo inválido en " + nombre + ":" + numero);
-                    // El archivo identifica la fecha, pero no la hora: se usa el inicio
-                    // operativo de las 07:00 y la duración definida para cada tipo.
+                    if (!id.startsWith("TA") && !id.startsWith("TB") && !id.startsWith("TM")) {
+                        throw new IllegalArgumentException("Vehículo inválido en " + nombre + ":" + numero);
+                    }
+                    // El calendario indica indisponibilidad en el día indicado,
+                    // desde las 00:00 hasta el comienzo del siguiente día.
                     if (!mantenimientosUnicos.add(fecha + ":" + id)) {
                         throw new IllegalArgumentException("Mantenimiento duplicado de " + id + " para " + fecha);
                     }
-                    LocalDateTime inicio = fecha.atTime(7, 0);
+                    LocalDateTime inicio = fecha.atStartOfDay();
                     mantenimientos.computeIfAbsent(fecha, d -> new ArrayList<>())
-                            .add(new MantenimientoProgramado(id, inicio, inicio.plusHours(horas)));
+                            .add(new MantenimientoProgramado(id, inicio, fecha.plusDays(1).atStartOfDay()));
                 }
             }
         }

@@ -31,6 +31,7 @@ import {
 import {
   diaSimulado,
   formatoCoordenada,
+  formatoDecimal,
   formatoEntero,
   formatoFechaHora,
   formatoHora,
@@ -139,6 +140,7 @@ export function EscenarioDashboard() {
           errorAlmacenes={almacenes.error}
           recargarAlmacenes={almacenes.recargar}
           pedirDetener={() => setConfirmarDetener(true)}
+          seleccionarVehiculo={(id) => setSeleccion({ tipo: 'vehiculo', id })}
         />
       </PanelLateral>
 
@@ -374,6 +376,12 @@ function BannerResultado({ tipo, snapshot }: { tipo: NonNullable<ReturnType<type
       titulo: 'COLAPSO LOGÍSTICO',
       texto: 'Un pedido no se entregó dentro de su plazo.',
     },
+    COMPLETADA_CON_INCIDENCIAS: {
+      clase: 'bg-rojo/15 border-rojo text-rojo',
+      icono: <IconoColapso tamano={18} />,
+      titulo: 'JORNADA COMPLETADA CON INCUMPLIMIENTOS',
+      texto: 'El período terminó; durante la jornada se detectó al menos un vencimiento.',
+    },
     COMPLETADA: {
       clase: 'bg-mint/10 border-mint text-mint',
       icono: <IconoCorrecto tamano={18} />,
@@ -420,6 +428,7 @@ function PanelParametros({
   errorAlmacenes,
   recargarAlmacenes,
   pedirDetener,
+  seleccionarVehiculo,
 }: {
   snapshot: SnapshotSimulacion;
   flota: VehiculoOperativo[] | null;
@@ -429,6 +438,7 @@ function PanelParametros({
   errorAlmacenes: string | null;
   recargarAlmacenes: () => void;
   pedirDetener: () => void;
+  seleccionarVehiculo: (id: string) => void;
 }) {
   const { rol, accionEnCurso } = useSimulacion();
   const activa = corridaActiva(snapshot);
@@ -479,13 +489,11 @@ function PanelParametros({
         <Fila
           k="Fin"
           v={
-            snapshot.escenario === 'SIMULACION_CINCO_DIAS'
+            snapshot.escenario
               ? formatoFechaHora(snapshot.fechaHoraFin)
-              : snapshot.escenario
-                ? 'Sin fecha de fin conocida'
-                : NO_DISPONIBLE
+              : NO_DISPONIBLE
           }
-          mono={snapshot.escenario === 'SIMULACION_CINCO_DIAS'}
+          mono={!!snapshot.escenario}
         />
         {snapshot.mensaje && (
           <p className="mt-2 pt-2 border-t border-borde text-[11px] text-texto2 leading-snug">
@@ -534,6 +542,27 @@ function PanelParametros({
               })}
             </tbody>
           </table>
+        )}
+        {snapshot.vehiculos.length > 0 && (
+          <details className="mt-3 border-t border-borde pt-2">
+            <summary className="cursor-pointer text-xs font-semibold text-azul">
+              Ver carga actual por vehículo ({snapshot.vehiculos.length})
+            </summary>
+            <div className="max-h-64 overflow-y-auto mt-2 space-y-1">
+              {snapshot.vehiculos.map((v) => (
+                <button
+                  key={v.idVehiculo}
+                  type="button"
+                  onClick={() => seleccionarVehiculo(v.idVehiculo)}
+                  className="w-full flex items-center justify-between gap-2 rounded border border-borde px-2 py-1.5 hover:border-mint text-xs text-left"
+                  title="Ver unidad en el mapa y detalle de carga"
+                >
+                  <span className="font-mono text-texto">{v.idVehiculo}</span>
+                  <span className="text-texto2 font-mono">{formatoEntero(v.cargaActualPaquetes ?? 0)} / {formatoEntero(v.capacidadPaquetes ?? 0)} paq.</span>
+                </button>
+              ))}
+            </div>
+          </details>
         )}
       </Bloque>
 
@@ -606,10 +635,10 @@ function PanelIndicadores({ snapshot, bloqueosCargados, pedidos, pedidosCompleto
           <div className="flex items-start gap-2 text-rojo">
             <IconoColapso tamano={22} />
             <div>
-              <p className="font-bold text-sm">Colapso logístico</p>
+              <p className="font-bold text-sm">{snapshot.escenario === 'COLAPSO_LOGISTICO' ? 'Colapso logístico' : 'Incumplimiento de plazo registrado'}</p>
               <p className="text-texto text-xs">
-                <span className="font-mono">{p.retrasados}</span> pedido(s) fuera de plazo. El primer incumplimiento
-                produce el colapso.
+                <span className="font-mono">{p.retrasados}</span> pedido(s) fuera de plazo.
+                {snapshot.escenario !== 'COLAPSO_LOGISTICO' ? ' La corrida continúa hasta el final del período.' : ' Este escenario termina al primer incumplimiento.'}
               </p>
             </div>
           </div>
@@ -679,8 +708,8 @@ function PanelIndicadores({ snapshot, bloqueosCargados, pedidos, pedidosCompleto
           </tbody>
         </table>
         <div className="border-t border-borde mt-2 pt-1.5">
-          <Fila k="Distancia recorrida" v={NO_DISPONIBLE} />
-          <Fila k="Costo acumulado" v={NO_DISPONIBLE} />
+          <Fila k="Distancia recorrida" v={snapshot.indicadores ? `${formatoDecimal(snapshot.indicadores.distanciaRecorridaKm)} km` : NO_DISPONIBLE} />
+          <Fila k="Costo acumulado" v={snapshot.indicadores ? `S/ ${formatoDecimal(snapshot.indicadores.costoTransporteAcumuladoSoles)}` : NO_DISPONIBLE} />
         </div>
       </Bloque>
 
@@ -688,7 +717,7 @@ function PanelIndicadores({ snapshot, bloqueosCargados, pedidos, pedidosCompleto
         <Fila k="Bloqueos activos" v={formatoEntero(snapshot.bloqueosActivos)} />
         {!bloqueosCargados && corrida && <p className="text-[11px] text-texto2">Cargando el trazado de los bloqueos…</p>}
         <Nota className="mt-1.5">
-          Los bloqueos, mantenimientos y averías se registran manualmente durante la operación. Puedes gestionarlos desde las secciones correspondientes.
+          Los bloqueos y mantenimientos del calendario se activan en sus fechas programadas. También puedes registrar incidencias manualmente desde las secciones correspondientes.
         </Nota>
         <div className="flex flex-wrap gap-2 mt-2">
           <button className="text-azul underline text-xs" onClick={() => navegar({ nombre: 'mantenimiento', pestana: 'bloqueos' })}>Gestionar bloqueos</button>

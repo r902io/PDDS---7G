@@ -111,6 +111,33 @@ public final class EsquemaDatosSimulacion {
                     )
                     """);
             st.executeUpdate("""
+                    CREATE TABLE IF NOT EXISTS simulacion_diagnostico (
+                        id_simulacion BIGINT NOT NULL,
+                        instante DATETIME(6) NOT NULL,
+                        id_pedido BIGINT NOT NULL,
+                        motivo VARCHAR(64) NOT NULL,
+                        PRIMARY KEY (id_simulacion, instante, id_pedido),
+                        INDEX idx_diagnostico_pedido (id_simulacion, id_pedido)
+                    )
+                    """);
+            st.executeUpdate("""
+                    CREATE TABLE IF NOT EXISTS simulacion_recorrido (
+                        secuencia BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                        id_simulacion BIGINT NOT NULL,
+                        id_vehiculo VARCHAR(20) NOT NULL,
+                        instante DATETIME(6) NOT NULL,
+                        ubicacion_x INT NOT NULL,
+                        ubicacion_y INT NOT NULL,
+                        estado VARCHAR(24) NOT NULL,
+                        fase VARCHAR(32) NOT NULL,
+                        evento VARCHAR(24) NOT NULL,
+                        carga_paquetes INT NOT NULL,
+                        id_pedido_objetivo BIGINT NULL,
+                        distancia_tramo_km DOUBLE NOT NULL DEFAULT 0,
+                        INDEX idx_recorrido_vehiculo (id_simulacion, id_vehiculo, secuencia)
+                    )
+                    """);
+            st.executeUpdate("""
                     CREATE TABLE IF NOT EXISTS simulacion_vehiculo (
                         id_simulacion BIGINT NOT NULL,
                         id_vehiculo VARCHAR(20) NOT NULL,

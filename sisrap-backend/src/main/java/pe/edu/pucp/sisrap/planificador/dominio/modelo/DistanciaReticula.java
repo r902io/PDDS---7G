@@ -129,9 +129,7 @@ public final class DistanciaReticula {
 
         if (origen.getX() == destino.getX()
                 && origen.getY() == destino.getY()) {
-            return bloqueos.contains(origen.getX() + "," + origen.getY())
-                    ? -1
-                    : 0;
+            return 0;
         }
 
         /*
@@ -152,11 +150,6 @@ public final class DistanciaReticula {
         boolean[][] matrizBloqueo = cache.matricesBloqueo.computeIfAbsent(
                 topologia,
                 t -> construirMatrizBloqueos(t.bloqueados, t.ancho, t.alto));
-
-        if (matrizBloqueo[origen.getX()][origen.getY()]
-                || matrizBloqueo[destino.getX()][destino.getY()]) {
-            return -1;
-        }
 
         ClaveDistancia clave = ClaveDistancia.crear(
                 origen,
@@ -233,9 +226,16 @@ public final class DistanciaReticula {
                 int nx = actual.x() + movimiento[0];
                 int ny = actual.y() + movimiento[1];
 
-                if (!dentro(nx, ny, ancho, alto)
-                        || bloqueados[nx][ny]
-                        || ArcoReticula.bloqueado(actual.x(), actual.y(), nx, ny, arcosCerrados)) {
+                if (!dentro(nx, ny, ancho, alto)) {
+                    continue;
+                }
+                boolean llegadaDestino = nx == destino.getX() && ny == destino.getY();
+                boolean salidaOrigen = actual.x() == origen.getX()
+                        && actual.y() == origen.getY();
+                if ((bloqueados[nx][ny] && !llegadaDestino)
+                        || !ArcoReticula.transitableComoExtremo(
+                                actual.x(), actual.y(), nx, ny, arcosCerrados,
+                                salidaOrigen, llegadaDestino)) {
                     continue;
                 }
 

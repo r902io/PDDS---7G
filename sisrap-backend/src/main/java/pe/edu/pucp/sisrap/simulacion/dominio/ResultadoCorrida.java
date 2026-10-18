@@ -15,7 +15,13 @@ public record ResultadoCorrida(
         List<AlmacenInicial> almacenesIniciales,
         List<FraccionRegistrada> fracciones,
         Long idPedidoColapso,
-        LocalDateTime instanteColapso) {
+        LocalDateTime instanteColapso,
+        List<DiagnosticoPlanificacion> diagnosticos) {
+
+    public ResultadoCorrida {
+        diagnosticos = diagnosticos == null ? List.of() : List.copyOf(diagnosticos);
+    }
+
 
     /** Parámetros efectivamente usados al iniciar ESTA ejecución. */
     public record VehiculoInicial(String idVehiculo, String tipo, int capacidadPaquetes,

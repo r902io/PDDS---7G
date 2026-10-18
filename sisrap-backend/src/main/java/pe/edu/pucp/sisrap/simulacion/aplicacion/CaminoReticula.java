@@ -28,6 +28,17 @@ public final class CaminoReticula {
             int ancho,
             int alto) {
 
+        return calcular(origen, destino, bloqueados, ancho, alto, null);
+    }
+
+    /**
+     * Si el vehículo ya está sobre un nodo bloqueado, debe hacer la vuelta
+     * en U por el nodo desde el que llegó. Para rutas todavía no iniciadas,
+     * el extremo bloqueado permite acceso desde una calle abierta.
+     */
+    public static Optional<List<Nodo>> calcular(
+            Nodo origen, Nodo destino, Set<String> bloqueados,
+            int ancho, int alto, Nodo nodoDeRegreso) {
         if (origen == null || destino == null) {
             throw new IllegalArgumentException("Origen/destino requeridos");
         }
@@ -38,10 +49,6 @@ public final class CaminoReticula {
             return Optional.empty();
         }
         Set<String> cerrados = bloqueados == null ? Set.of() : bloqueados;
-        if (cerrados.contains(clave(origen.getX(), origen.getY()))
-                || cerrados.contains(clave(destino.getX(), destino.getY()))) {
-            return Optional.empty();
-        }
         if (origen.getX() == destino.getX() && origen.getY() == destino.getY()) {
             return Optional.of(List.of());
         }
@@ -78,7 +85,15 @@ public final class CaminoReticula {
                     continue;
                 }
 
-                if (ArcoReticula.bloqueado(x, y, nx, ny, cerrados)) {
+                boolean salidaOrigen = x == origen.getX() && y == origen.getY();
+                boolean llegadaDestino = nx == destino.getX() && ny == destino.getY();
+                if (!ArcoReticula.transitableComoExtremo(x, y, nx, ny, cerrados,
+                        salidaOrigen, llegadaDestino)) {
+                    continue;
+                }
+                if (salidaOrigen && cerrados.contains(clave(x, y))
+                        && nodoDeRegreso != null
+                        && (nx != nodoDeRegreso.getX() || ny != nodoDeRegreso.getY())) {
                     continue;
                 }
 

@@ -163,7 +163,7 @@ export function CalendariosCaso({ bloqueado, fechaInicio, escenario }: {
         </>}
       </div>}
       {error && !abierto && <ErrorCarga titulo="No se pudo modificar el calendario" error={error} />}
-      <p className="text-xs text-texto2">Cada mantenimiento indica fecha y vehículo. Como el archivo no contiene hora, se inicia a las 07:00; puede esperar si el vehículo aún está ocupado. Los bloqueos conservan sus horarios exactos.</p>
+      <p className="text-xs text-texto2">Cada mantenimiento indica el vehículo y la fecha del día completo de indisponibilidad (00:00–23:59). Los bloqueos conservan sus horarios exactos.</p>
       <Modal isOpen={abierto !== null} onClose={() => { if (!procesando) { setAbierto(null); setError(null); } }}
         titulo={abierto === 'BLOQUEO' ? 'Cargar bloqueos programados' : 'Cargar mantenimientos preventivos'}
         subtitulo="Los registros se aplicarán únicamente cuando coincidan sus fechas con la simulación.">

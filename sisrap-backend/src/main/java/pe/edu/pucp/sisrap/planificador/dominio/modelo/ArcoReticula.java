@@ -18,6 +18,21 @@ public final class ArcoReticula {
                 || bloqueos.contains(x1 + "," + y1));
     }
 
+    /**
+     * Un vértice de una poligonal de bloqueo puede ser el punto final de
+     * una entrega o el punto desde el que se realiza el regreso, pero no un
+     * nodo de tránsito. Ningún arco explícitamente cerrado se cruza.
+     */
+    public static boolean transitableComoExtremo(
+            int x1, int y1, int x2, int y2, Set<String> bloqueos,
+            boolean origenDelTramo, boolean destinoDelTramo) {
+        if (bloqueos == null || bloqueos.isEmpty()) return true;
+        if (bloqueos.contains(clave(x1, y1, x2, y2))) return false;
+        if (bloqueos.contains(x1 + "," + y1) && !origenDelTramo) return false;
+        if (bloqueos.contains(x2 + "," + y2) && !destinoDelTramo) return false;
+        return true;
+    }
+
     public static boolean caminoInterrumpido(Nodo origen, Iterable<Nodo> camino, Set<String> bloqueos) {
         Nodo previo = origen;
         for (Nodo siguiente : camino) {

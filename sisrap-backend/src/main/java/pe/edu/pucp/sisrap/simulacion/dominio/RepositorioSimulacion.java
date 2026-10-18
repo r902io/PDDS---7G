@@ -25,10 +25,19 @@ public interface RepositorioSimulacion {
             String cliente, int cantidad, pe.edu.pucp.sisrap.pedido.dominio.TipoPrioridad prioridad,
             int x, int y, LocalDateTime fecha);
 
+    void registrarDiagnosticos(long idSimulacion, List<DiagnosticoPlanificacion> diagnosticos);
+
     void guardarPlan(long idSimulacion, LocalDateTime reloj, Solucion solucion,
                     List<Ruta> rutasAceptadas, double beta1, double beta2, double beta3);
 
     ResultadoCorrida consultarResultado(long idSimulacion);
+
+    /** Guarda en lotes nodos recorridos y cambios de fase sin mezclarlos entre corridas. */
+    void guardarRecorridos(long idSimulacion, List<RecorridoVehiculo.Registro> registros);
+
+    List<RecorridoVehiculo.Resumen> resumirRecorridos(long idSimulacion);
+
+    RecorridoVehiculo.Detalle consultarRecorrido(long idSimulacion, String idVehiculo);
 
     long crearEjecucion(
             ConfiguracionSimulacion configuracion,
@@ -64,6 +73,10 @@ public interface RepositorioSimulacion {
     List<PerfilFlotaSimulacion> cargarPerfilesFlota();
 
     boolean activarIncidenciasProgramadas(LocalDateTime reloj);
+
+    /** True when the vehicle's scheduled maintenance conflicts with this complete trip. */
+    boolean tieneMantenimientoProgramado(String idVehiculo, LocalDateTime desde,
+                                        LocalDateTime hasta);
 
     void sincronizarDisponibilidad(LocalDateTime reloj);
 

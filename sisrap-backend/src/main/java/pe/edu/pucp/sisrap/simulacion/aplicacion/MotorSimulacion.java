@@ -49,6 +49,8 @@ import pe.edu.pucp.sisrap.simulacion.dominio.EstadoSimulacion;
 import pe.edu.pucp.sisrap.simulacion.dominio.EscenarioSimulacion;
 import pe.edu.pucp.sisrap.simulacion.dominio.PuntoSimulacion;
 import pe.edu.pucp.sisrap.simulacion.dominio.RepositorioSimulacion;
+import pe.edu.pucp.sisrap.simulacion.dominio.RecorridoVehiculo;
+import pe.edu.pucp.sisrap.simulacion.dominio.DiagnosticoPlanificacion;
 import pe.edu.pucp.sisrap.simulacion.dominio.SnapshotSimulacion;
 import pe.edu.pucp.sisrap.simulacion.dominio.VehiculoPersistido;
 import pe.edu.pucp.sisrap.simulacion.dominio.VehiculoSnapshot;
@@ -80,6 +82,11 @@ public class MotorSimulacion {
     private final Map<String, CargaAveriada> cargasAveriadas = new LinkedHashMap<>();
     private final List<EntregaEnCliente> entregasEnCliente = new ArrayList<>();
     private final AcumuladorIndicadores indicadores = new AcumuladorIndicadores();
+    private static final int MAX_LOTE_RECORRIDO = 500;
+    private static final long INTERVALO_PUNTO_ESTACIONARIO_MIN = 10;
+    private final List<RecorridoVehiculo.Registro> registrosRecorrido = new ArrayList<>();
+    private final Map<String, RecorridoVehiculo.Punto> ultimosPuntos = new HashMap<>();
+    private long nanoUltimoArchivoRecorrido;
 
     private volatile SnapshotSimulacion snapshotActual;
     private EstadoSimulacion estado = EstadoSimulacion.DETENIDA;
@@ -159,6 +166,8 @@ public class MotorSimulacion {
         planes.clear();
         cargasAveriadas.clear();
         entregasEnCliente.clear();
+        registrosRecorrido.clear();
+        ultimosPuntos.clear();
         configuracion = nuevaConfiguracion;
         idSimulacion = id;
         reloj = nuevaConfiguracion.fechaHoraInicio();
@@ -193,6 +202,9 @@ public class MotorSimulacion {
         vehiculoAnticipado = Map.of();
         firmaUltimaPlanificacion = null;
         prepararAnticipoSiCorresponde();
+        nanoUltimoArchivoRecorrido = System.nanoTime();
+        registrarEstadoRecorrido("INICIO");
+        vaciarRecorridos();
 
         publicarSnapshot(true);
         return snapshotActual;
@@ -248,6 +260,7 @@ public class MotorSimulacion {
         }
         AveriaVehiculo averia = guardarAveria.apply(reloj);
         if (plan != null) {
+            registrarEventoRecorrido(plan, "AVERIA");
             interrumpirPorAveria(plan, averia);
         }
         programarPlanificacionInmediata();
@@ -264,7 +277,10 @@ public class MotorSimulacion {
         }
         for (PlanUnidad plan : planes.values()) {
             Double nueva = velocidades.get(indicadores.tipoVehiculo(plan.idVehiculo));
-            if (nueva != null) plan.velocidadKmh = nueva;
+            if (nueva != null && Double.compare(plan.velocidadKmh, nueva) != 0) {
+                plan.velocidadKmh = nueva;
+                registrarEventoRecorrido(plan, "VELOCIDAD");
+            }
         }
         programarPlanificacionInmediata();
         mensajeEstado = "Velocidades actualizadas para la flota en esta corrida";
@@ -423,6 +439,13 @@ public class MotorSimulacion {
             intentarPlanificar();
             nanoUltimaPlanificacion = ahoraNano;
             proximaPlanificacionVirtual = reloj.plusMinutes(INTERVALO_PLANIFICACION_MIN);
+        }
+
+        registrarEstadoRecorrido("ESTADO");
+        if (registrosRecorrido.size() >= MAX_LOTE_RECORRIDO
+                || ahoraNano - nanoUltimoArchivoRecorrido >= NANO_SEGUNDO) {
+            vaciarRecorridos();
+            nanoUltimoArchivoRecorrido = ahoraNano;
         }
 
         if (ahoraNano - nanoUltimaPersistencia >= NANO_SEGUNDO) {
@@ -631,7 +654,8 @@ public class MotorSimulacion {
             plan.destinoActual = plan.pedidoObjetivo.getUbicacion();
             plan.camino.clear();
             CaminoReticula.calcular(plan.posicion, plan.destinoActual,
-                    bloqueados, plan.ancho, plan.alto).ifPresent(plan.camino::addAll);
+                    bloqueados, plan.ancho, plan.alto, plan.posicionAnterior).ifPresent(plan.camino::addAll);
+            registrarEventoRecorrido(plan, "REPLANIFICACION");
             modificadas++;
         }
         return modificadas;
@@ -671,6 +695,7 @@ public class MotorSimulacion {
         List<GrupoEntrega> restantes = new ArrayList<>(paradas);
         List<GrupoEntrega> orden = new ArrayList<>();
         Nodo actual = plan.posicion;
+        Nodo anterior = plan.posicionAnterior;
         LocalDateTime tiempo = reloj;
         while (!restantes.isEmpty()) {
             GrupoEntrega mejor = null;
@@ -678,7 +703,7 @@ public class MotorSimulacion {
             double mejorDistancia = 0.0;
             for (GrupoEntrega parada : restantes) {
                 var camino = CaminoReticula.calcular(actual, parada.destino(), bloqueados,
-                        plan.ancho, plan.alto);
+                        plan.ancho, plan.alto, anterior);
                 if (camino.isEmpty()) continue;
                 double distancia = camino.get().size() * plan.distanciaNodoKm;
                 LocalDateTime llegada = JornadaOperativa.avanzar(tiempo,
@@ -696,6 +721,12 @@ public class MotorSimulacion {
             if (mejor == null) return List.of();
             tiempo = JornadaOperativa.avanzar(tiempo,
                     mejorDistancia / plan.velocidadKmh + plan.servicioHoras);
+            var paso = CaminoReticula.calcular(actual, mejor.destino(), bloqueados,
+                    plan.ancho, plan.alto, anterior);
+            if (paso.isEmpty()) return List.of();
+            List<Nodo> nodos = paso.get();
+            if (!nodos.isEmpty()) anterior = nodos.size() == 1
+                    ? actual : nodos.get(nodos.size() - 2);
             actual = mejor.destino();
             orden.add(mejor);
             restantes.remove(mejor);
@@ -707,11 +738,12 @@ public class MotorSimulacion {
                                             List<GrupoEntrega> grupos) {
         LocalDateTime tiempo = reloj;
         Nodo desde = plan.posicion;
+        Nodo anterior = plan.posicionAnterior;
         long retraso = 0;
         double distancia = 0;
         for (GrupoEntrega parada : grupos) {
             var camino = CaminoReticula.calcular(desde, parada.destino(), bloqueados,
-                    plan.ancho, plan.alto);
+                    plan.ancho, plan.alto, anterior);
             if (camino.isEmpty()) return null;
             double tramo = camino.get().size() * plan.distanciaNodoKm;
             distancia += tramo;
@@ -724,11 +756,14 @@ public class MotorSimulacion {
                 }
             }
             tiempo = JornadaOperativa.avanzar(llegada, plan.servicioHoras);
+            List<Nodo> nodos = camino.get();
+            if (!nodos.isEmpty()) anterior = nodos.size() == 1
+                    ? desde : nodos.get(nodos.size() - 2);
             desde = parada.destino();
         }
         if (plan.incluirRetorno) {
-            var retorno = CaminoReticula.calcular(desde, plan.almacenOrigen.getUbicacion(),
-                    bloqueados, plan.ancho, plan.alto);
+            var retorno = CaminoReticula.calcular(desde, plan.almacenRetorno.getUbicacion(),
+                    bloqueados, plan.ancho, plan.alto, anterior);
             if (retorno.isPresent()) distancia += retorno.get().size() * plan.distanciaNodoKm;
         }
         return new EvaluacionRuta(retraso, distancia);
@@ -754,9 +789,15 @@ public class MotorSimulacion {
             firmaUltimaPlanificacion = null;
             return;
         }
+        if (ConsolidadorDespachos.convieneEsperar(contexto.getPedidos(), contexto,
+                configuracion.fechaHoraFin())) {
+            mensajeEstado = "Consolidando pedidos confirmados sin comprometer sus plazos";
+            return;
+        }
         boolean hayDisponibles = contexto.getVehiculos().stream()
                 .anyMatch(v -> v.isDisponible() && !planes.containsKey(v.getIdVehiculo()));
         if (!hayDisponibles) {
+            registrarDiagnosticosSinRuta(contexto.getPedidos(), "SIN_VEHICULOS_DISPONIBLES");
             return;
         }
 
@@ -778,6 +819,15 @@ public class MotorSimulacion {
         Solucion solucion = ordenAnticipado.isEmpty()
                 ? planificador.planificar(contexto)
                 : planificador.replanificar(semillaDesdePrevision(contexto), contexto);
+        objetivo.calcular(solucion);
+        Map<String, Integer> cargasReservadas = new HashMap<>();
+        for (PlanUnidad enCurso : planes.values()) {
+            if (!enCurso.stockTomado) {
+                cargasReservadas.merge(enCurso.almacenOrigen.getIdAlmacen(),
+                        enCurso.cargaInicial, Integer::sum);
+            }
+        }
+        ConsolidadorDespachos.consolidar(solucion, contexto, cargasReservadas);
         objetivo.calcular(solucion);
 
         List<PlanUnidad> nuevos = new ArrayList<>();
@@ -803,6 +853,11 @@ public class MotorSimulacion {
             }
             if (ruta.isIntransitable() || ruta.isFueraDeTurno()
                     || ruta.cargaTotal() > ruta.getVehiculo().getCapacidadPaquetes()) {
+                continue;
+            }
+            long nanosRuta = Math.max(0L, Math.round(ruta.getTiempoTotalHoras() * NANOS_POR_HORA));
+            if (repositorio.tieneMantenimientoProgramado(idVehiculo, reloj,
+                    reloj.plusNanos(nanosRuta))) {
                 continue;
             }
             boolean valida = true;
@@ -837,6 +892,7 @@ public class MotorSimulacion {
         }
 
         if (nuevos.isEmpty()) {
+            registrarDiagnosticosSinRuta(contexto.getPedidos(), "SIN_RUTA_ACEPTADA");
             mensajeEstado = solucion.getPedidosNoAsignados().isEmpty()
                     ? "No hubo rutas nuevas"
                     : "Hay pedidos pendientes sin vehículo/ruta factible";
@@ -847,9 +903,13 @@ public class MotorSimulacion {
         ejecutable.setRutas(rutasAceptadas);
         objetivo.calcular(ejecutable);
         if (!ejecutable.isEsFactible() || ejecutable.getValorR() > 1e-9) {
+            registrarDiagnosticosSinRuta(contexto.getPedidos(), "PLAN_RECHAZADO_POR_RESTRICCIONES");
             mensajeEstado = "La planificación incumple restricciones operativas";
             return;
         }
+        registrarDiagnosticosSinRuta(contexto.getPedidos().stream()
+                .filter(p -> !pedidosAsignados.contains(p.getIdPedido())).toList(),
+                "SIN_ASIGNACION_EN_CICLO");
         repositorio.guardarPlan(idSimulacion, reloj, ejecutable, rutasAceptadas,
                 operativo.configuracion().numero("objetivo.beta1"),
                 operativo.configuracion().numero("objetivo.beta2"),
@@ -863,6 +923,20 @@ public class MotorSimulacion {
         mensajeEstado = "Planificación generada: " + nuevos.size() + " rutas nuevas";
     }
 
+    private void registrarDiagnosticosSinRuta(List<Pedido> pedidos, String motivo) {
+        if (idSimulacion == null || reloj == null || pedidos == null) return;
+        Map<Long, DiagnosticoPlanificacion> registros = new LinkedHashMap<>();
+        for (Pedido pedido : pedidos) {
+            long restante = java.time.Duration.between(reloj, pedido.getFechaLimite()).toMinutes();
+            if (restante > 240 || restante < -1) continue;
+            long idVisible = repositorio.idPedidoVisible(pedido.getIdPedido());
+            registros.putIfAbsent(idVisible,
+                    new DiagnosticoPlanificacion(reloj, idVisible, motivo));
+        }
+        if (!registros.isEmpty()) repositorio.registrarDiagnosticos(idSimulacion,
+                new ArrayList<>(registros.values()));
+    }
+
     /**
      * El siguiente conductor releva al anterior en la posición actual del
      * vehículo y sin consumir tiempo de simulación. El cambio de turno no
@@ -873,6 +947,7 @@ public class MotorSimulacion {
         nanoUltimaPlanificacion = 0L;
         firmaUltimaPlanificacion = null;
         if (!planes.isEmpty()) {
+            for (PlanUnidad plan : planes.values()) registrarEventoRecorrido(plan, "CAMBIO_TURNO");
             mensajeEstado = "Cambio de turno: los vehículos en ruta continúan "
                     + "desde su posición actual con los pedidos a bordo";
         }
@@ -1151,8 +1226,9 @@ public class MotorSimulacion {
             }
             plan.camino.clear();
             CaminoReticula.calcular(plan.posicion, plan.destinoActual,
-                    bloqueados, plan.ancho, plan.alto)
+                    bloqueados, plan.ancho, plan.alto, plan.posicionAnterior)
                     .ifPresent(plan.camino::addAll);
+            registrarEventoRecorrido(plan, "DESVIO_BLOQUEO");
         }
     }
 
@@ -1212,9 +1288,9 @@ public class MotorSimulacion {
                             plan.destinoActual,
                             bloqueados,
                             plan.ancho,
-                            plan.alto);
+                            plan.alto, plan.posicionAnterior);
                     if (camino.isEmpty()) {
-                        // El vehículo queda esperando hasta que cambie la red vial.
+                        // Sin acceso seguro, espera un cambio en la red vial sin atravesar bloqueos.
                         plan.creditoHoras = 0;
                         break;
                     }
@@ -1227,9 +1303,14 @@ public class MotorSimulacion {
                 }
 
                 Nodo siguiente = plan.camino.peekFirst();
-                if (siguiente == null || ArcoReticula.bloqueado(
+                if (siguiente == null || !ArcoReticula.transitableComoExtremo(
                         plan.posicion.getX(), plan.posicion.getY(),
-                        siguiente.getX(), siguiente.getY(), bloqueados)) {
+                        siguiente.getX(), siguiente.getY(), bloqueados,
+                        true, mismaPosicion(siguiente, plan.destinoActual))
+                        || (bloqueados.contains(CaminoReticula.clave(
+                                plan.posicion.getX(), plan.posicion.getY()))
+                        && plan.posicionAnterior != null
+                        && !mismaPosicion(siguiente, plan.posicionAnterior))) {
                     plan.camino.clear();
                     plan.creditoHoras = 0;
                     break;
@@ -1237,8 +1318,10 @@ public class MotorSimulacion {
 
                 plan.creditoHoras -= horasPorNodo;
                 plan.camino.removeFirst();
+                plan.posicionAnterior = plan.posicion;
                 plan.posicion = siguiente;
                 indicadores.registrarTramo(plan.idVehiculo, plan.distanciaNodoKm);
+                registrarMovimientoRecorrido(plan);
 
                 if (plan.camino.isEmpty() && mismaPosicion(plan.posicion, plan.destinoActual)) {
                     procesarLlegada(plan, finalizados);
@@ -1279,7 +1362,7 @@ public class MotorSimulacion {
                 yield true;
             }
             case RETORNANDO -> {
-                plan.destinoActual = plan.almacenOrigen.getUbicacion();
+                plan.destinoActual = plan.almacenRetorno.getUbicacion();
                 yield true;
             }
             case ATENDIENDO -> false;
@@ -1377,7 +1460,7 @@ public class MotorSimulacion {
             PlanUnidad plan,
             List<String> finalizados) {
         if (plan.incluirRetorno
-                && !mismaPosicion(plan.posicion, plan.almacenOrigen.getUbicacion())) {
+                && !mismaPosicion(plan.posicion, plan.almacenRetorno.getUbicacion())) {
             plan.fase = FaseUnidad.RETORNANDO;
             plan.destinoActual = null;
             return;
@@ -1416,27 +1499,14 @@ public class MotorSimulacion {
     }
 
     private void finalizar(boolean natural, String mensaje) {
-        Map<String, VehiculoPersistido> estadosPersistidos =
-                repositorio.cargarVehiculosPersistidos();
-
-        for (PlanUnidad plan : new ArrayList<>(planes.values())) {
-            repositorio.reencolarPedidos(plan.idsNoEntregados(), reloj);
-            liberarReservaDeRescate(plan);
-            if (plan.stockTomado && plan.origenRescate == null) {
-                repositorio.devolverStock(
-                        plan.almacenOrigen.getIdAlmacen(),
-                        plan.cantidadNoEntregada());
-            }
-            VehiculoPersistido actual = estadosPersistidos.get(plan.idVehiculo);
-            if (actual != null && "EN_RUTA".equals(actual.estado())) {
-                repositorio.actualizarEstadoVehiculo(plan.idVehiculo, "DISPONIBLE");
-            }
-        }
+        registrarEstadoRecorrido("FIN");
+        vaciarRecorridos();
+        // Cierre de observación: los pedidos, las cargas y los vehículos conservan
+        // exactamente el estado físico del instante de corte. Una reasignación
+        // solamente ocurre si hubo una operación logística real de reasignación.
+        // La siguiente corrida regenerará su flota y limpiará datos operativos
+        // después de archivar la ejecución actual.
         planes.clear();
-        for (CargaAveriada carga : cargasAveriadas.values()) {
-            repositorio.reencolarPedidos(carga.pendientes.stream()
-                    .map(Pedido::getIdPedido).toList(), reloj);
-        }
         cargasAveriadas.clear();
         entregasEnCliente.clear();
 
@@ -1468,29 +1538,19 @@ public class MotorSimulacion {
             return;
         }
 
+        try {
+            registrarEstadoRecorrido("ERROR");
+            vaciarRecorridos();
+        } catch (Exception ignored) {
+            // El registro de error no debe ocultar el error original.
+        }
         estado = EstadoSimulacion.ERROR;
         mensajeEstado = "Error de simulación: " + mensaje(error);
 
         try {
-            Map<String, VehiculoPersistido> estados = repositorio.cargarVehiculosPersistidos();
-            for (PlanUnidad plan : new ArrayList<>(planes.values())) {
-                repositorio.reencolarPedidos(plan.idsNoEntregados(), reloj);
-                liberarReservaDeRescate(plan);
-                if (plan.stockTomado && plan.origenRescate == null) {
-                    repositorio.devolverStock(
-                            plan.almacenOrigen.getIdAlmacen(),
-                            plan.cantidadNoEntregada());
-                }
-                VehiculoPersistido actual = estados.get(plan.idVehiculo);
-                if (actual != null && "EN_RUTA".equals(actual.estado())) {
-                    repositorio.actualizarEstadoVehiculo(plan.idVehiculo, "DISPONIBLE");
-                }
-            }
+            // Ante un error se archiva el último estado consistente conocido;
+            // los pedidos no se marcan artificialmente como reasignados.
             planes.clear();
-            for (CargaAveriada carga : cargasAveriadas.values()) {
-                repositorio.reencolarPedidos(carga.pendientes.stream()
-                        .map(Pedido::getIdPedido).toList(), reloj);
-            }
             cargasAveriadas.clear();
             entregasEnCliente.clear();
 
@@ -1517,6 +1577,73 @@ public class MotorSimulacion {
         publicarSnapshot(true);
     }
 
+    /** Registra cada nodo alcanzado, no solamente el último plan generado. */
+    private void registrarEventoRecorrido(PlanUnidad plan, String evento) {
+        registrarPuntoRecorrido(plan.idVehiculo, reloj, plan.posicion.getX(),
+                plan.posicion.getY(), "EN_RUTA", plan.fase.name(), evento,
+                plan.stockTomado ? plan.cantidadNoEntregada() : 0,
+                plan.pedidoObjetivo == null ? null : plan.pedidoObjetivo.getIdPedido(), 0, false);
+    }
+
+    private void registrarMovimientoRecorrido(PlanUnidad plan) {
+        registrarPuntoRecorrido(plan.idVehiculo, instanteEvento(plan), plan.posicion.getX(),
+                plan.posicion.getY(), "EN_RUTA", plan.fase.name(), "MOVIMIENTO",
+                plan.stockTomado ? plan.cantidadNoEntregada() : 0,
+                plan.pedidoObjetivo == null ? null : plan.pedidoObjetivo.getIdPedido(),
+                plan.distanciaNodoKm, true);
+    }
+
+    /** Conserva estados en reposo, tiempos de servicio, mantenimiento y cambios de plan. */
+    private void registrarEstadoRecorrido(String evento) {
+        if (idSimulacion == null || reloj == null) return;
+        Map<String, VehiculoPersistido> vehiculos = repositorio.cargarVehiculosPersistidos();
+        for (VehiculoPersistido vehiculo : vehiculos.values()) {
+            PlanUnidad plan = planes.get(vehiculo.idVehiculo());
+            CargaAveriada averiada = cargasAveriadas.get(vehiculo.idVehiculo());
+            int x = plan == null ? vehiculo.x() : plan.posicion.getX();
+            int y = plan == null ? vehiculo.y() : plan.posicion.getY();
+            String fase = plan != null ? plan.fase.name()
+                    : averiada != null ? "AVERIADO" : vehiculo.estado();
+            int carga = plan != null ? (plan.stockTomado ? plan.cantidadNoEntregada() : 0)
+                    : averiada != null && !averiada.trasladadaAlCentral
+                        ? averiada.pendientes.stream().mapToInt(Pedido::getCantidadQq).sum() : 0;
+            Long objetivo = plan == null || plan.pedidoObjetivo == null
+                    ? null : plan.pedidoObjetivo.getIdPedido();
+            registrarPuntoRecorrido(vehiculo.idVehiculo(), reloj, x, y,
+                    vehiculo.estado(), fase, evento, carga, objetivo, 0, false);
+        }
+    }
+
+    private void registrarPuntoRecorrido(String vehiculo, LocalDateTime instante, int x, int y,
+                                        String estado, String fase, String evento,
+                                        int carga, Long objetivo, double distancia, boolean movimiento) {
+        RecorridoVehiculo.Punto anterior = ultimosPuntos.get(vehiculo);
+        if (anterior != null) {
+            if (instante.isBefore(anterior.instante())) instante = anterior.instante();
+            boolean igual = anterior.x() == x && anterior.y() == y
+                    && anterior.estado().equals(estado) && anterior.fase().equals(fase)
+                    && anterior.cargaPaquetes() == carga
+                    && java.util.Objects.equals(anterior.pedidoObjetivo(), objetivo);
+            long intervaloReposoMin = configuracion != null
+                    && configuracion.escenario() == EscenarioSimulacion.COLAPSO_LOGISTICO
+                    ? 60 : INTERVALO_PUNTO_ESTACIONARIO_MIN;
+            boolean reciente = java.time.Duration.between(anterior.instante(), instante)
+                    .toMinutes() < intervaloReposoMin;
+            if (!movimiento && "ESTADO".equals(evento) && igual && reciente) return;
+        }
+        RecorridoVehiculo.Punto punto = new RecorridoVehiculo.Punto(instante, x, y,
+                estado, fase, evento, Math.max(0, carga), objetivo, distancia);
+        ultimosPuntos.put(vehiculo, punto);
+        registrosRecorrido.add(new RecorridoVehiculo.Registro(vehiculo, punto));
+        if (registrosRecorrido.size() >= MAX_LOTE_RECORRIDO) vaciarRecorridos();
+    }
+
+    private void vaciarRecorridos() {
+        if (registrosRecorrido.isEmpty() || idSimulacion == null) return;
+        repositorio.guardarRecorridos(idSimulacion, registrosRecorrido);
+        registrosRecorrido.clear();
+    }
+
     private void publicarSnapshot(boolean forzar) {
         if (configuracion == null || reloj == null) {
             snapshotActual = SnapshotSimulacion.detenida(ALGORITMO_OPERATIVO, perfil);
@@ -1539,6 +1666,10 @@ public class MotorSimulacion {
         for (PlanUnidad plan : planes.values()) {
             VehiculoSnapshot persistido = porId.get(plan.idVehiculo);
             String estadoVehiculo = persistido == null ? "EN_RUTA" : persistido.estado();
+            int paquetesPendientes = plan.cantidadNoEntregada();
+            int cargaActual = plan.stockTomado ? paquetesPendientes : 0;
+            int porRecoger = plan.stockTomado ? 0 : paquetesPendientes;
+            int capacidad = persistido == null ? 0 : persistido.capacidadPaquetes();
             porId.put(
                     plan.idVehiculo,
                     new VehiculoSnapshot(
@@ -1550,7 +1681,22 @@ public class MotorSimulacion {
                                     : repositorio.idPedidoVisible(plan.pedidoObjetivo.getIdPedido()),
                             plan.camino.stream()
                                     .map(n -> new PuntoSimulacion(n.getX(), n.getY()))
-                                    .toList()));
+                                    .toList(),
+                            capacidad,
+                            cargaActual,
+                            porRecoger,
+                            plan.idsNoEntregados().size()));
+        }
+
+        for (CargaAveriada carga : cargasAveriadas.values()) {
+            VehiculoSnapshot averiado = porId.get(carga.averia.idVehiculo());
+            if (averiado == null) continue;
+            int paquetes = carga.pendientes.stream().mapToInt(Pedido::getCantidadQq).sum();
+            int aBordo = carga.trasladadaAlCentral ? 0 : paquetes;
+            porId.put(averiado.idVehiculo(), new VehiculoSnapshot(
+                    averiado.idVehiculo(), averiado.estado(), averiado.x(), averiado.y(),
+                    null, List.of(), averiado.capacidadPaquetes(), aBordo, 0,
+                    carga.trasladadaAlCentral ? 0 : carga.pendientes.size()));
         }
 
         var indicadoresActuales = indicadores.obtener(reloj,
@@ -1632,6 +1778,7 @@ public class MotorSimulacion {
     private static final class PlanUnidad {
         private final String idVehiculo;
         private final Almacen almacenOrigen;
+        private final Almacen almacenRetorno;
         private final Deque<Pedido> pedidosPendientes;
         private double velocidadKmh;
         private final double distanciaNodoKm;
@@ -1643,6 +1790,8 @@ public class MotorSimulacion {
         private CargaAveriada origenRescate;
 
         private Nodo posicion;
+        // Nodo usado para entrar al último punto de la red; permite vuelta en U.
+        private Nodo posicionAnterior;
         private FaseUnidad fase = FaseUnidad.IR_ALMACEN;
         private Nodo destinoActual;
         private Pedido pedidoObjetivo;
@@ -1655,6 +1804,7 @@ public class MotorSimulacion {
         private PlanUnidad(
                 String idVehiculo,
                 Almacen almacenOrigen,
+                Almacen almacenRetorno,
                 Deque<Pedido> pedidosPendientes,
                 double velocidadKmh,
                 double distanciaNodoKm,
@@ -1666,6 +1816,7 @@ public class MotorSimulacion {
                 Nodo posicion) {
             this.idVehiculo = idVehiculo;
             this.almacenOrigen = almacenOrigen;
+            this.almacenRetorno = almacenRetorno;
             this.pedidosPendientes = pedidosPendientes;
             this.velocidadKmh = velocidadKmh;
             this.distanciaNodoKm = distanciaNodoKm;
@@ -1689,6 +1840,7 @@ public class MotorSimulacion {
             return new PlanUnidad(
                     ruta.getVehiculo().getIdVehiculo(),
                     ruta.getAlmacenOrigen(),
+                    ruta.getAlmacenRetorno(),
                     pedidos,
                     ruta.getVehiculo().getVelocidadKmh(),
                     contexto.reglas().distanciaNodoKm(),
@@ -1704,7 +1856,8 @@ public class MotorSimulacion {
                 List<Pedido> pedidos, ContextoPlanificacion contexto) {
             int cantidad = pedidos.stream().mapToInt(Pedido::getCantidadQq).sum();
             PlanUnidad plan = new PlanUnidad(vehiculo.getIdVehiculo(),
-                    carga.planSuspendido.almacenOrigen, new ArrayDeque<>(pedidos),
+                    carga.planSuspendido.almacenOrigen,
+                    carga.planSuspendido.almacenRetorno, new ArrayDeque<>(pedidos),
                     vehiculo.getVelocidadKmh(), contexto.reglas().distanciaNodoKm(),
                     contexto.reglas().servicioHoras(), contexto.reglas().incluirRetorno(),
                     contexto.reglas().anchoCiudad(), contexto.reglas().altoCiudad(),

@@ -1,16 +1,23 @@
-import type { IniciarSimulacionRequest, ResultadoPersistido, SnapshotSimulacion } from '../types/api';
+import type { IniciarSimulacionRequest, ResultadoPersistido, SnapshotSimulacion, ResumenRecorridoVehiculo, DetalleRecorridoVehiculo } from '../types/api';
 import { apiFetch } from './apiClient';
 
 /**
  * Operaciones de simulación que la interfaz puede usar.
- *
- * El backend también expone /api/simulacion/pausar y /reanudar, pero el
- * curso prohíbe cualquier control de reproducción: aquí deliberadamente
- * NO existen funciones para llamarlos.
  */
 export const simulacionService = {
   resultado(idSimulacion: number, senal?: AbortSignal): Promise<ResultadoPersistido> {
     return apiFetch<ResultadoPersistido>(`/api/simulacion/${idSimulacion}/resultado`, { autenticar: false, senal });
+  },
+
+  recorridos(idSimulacion: number, senal?: AbortSignal): Promise<ResumenRecorridoVehiculo[]> {
+    return apiFetch<ResumenRecorridoVehiculo[]>(`/api/simulacion/${idSimulacion}/recorridos`, { autenticar: false, senal });
+  },
+
+  recorridoVehiculo(idSimulacion: number, idVehiculo: string, senal?: AbortSignal): Promise<DetalleRecorridoVehiculo> {
+    return apiFetch<DetalleRecorridoVehiculo>(
+      `/api/simulacion/${idSimulacion}/recorridos/${encodeURIComponent(idVehiculo)}`,
+      { autenticar: false, senal }
+    );
   },
 
   estado(): Promise<SnapshotSimulacion> {

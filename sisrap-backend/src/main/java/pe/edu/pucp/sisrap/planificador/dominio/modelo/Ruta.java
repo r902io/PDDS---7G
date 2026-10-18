@@ -17,6 +17,7 @@ public class Ruta {
 
     private final Vehiculo vehiculo;
     private Almacen almacenOrigen;
+    private Almacen almacenRetorno;
     private final Nodo posicionInicio;
     private final boolean pasarPorAlmacenOrigen;
     private final LocalDateTime inicio;
@@ -74,6 +75,7 @@ public class Ruta {
 
         this.vehiculo = vehiculo;
         this.almacenOrigen = origen;
+        this.almacenRetorno = origen;
         this.posicionInicio = posicionInicio;
         this.pasarPorAlmacenOrigen = pasarPorAlmacenOrigen;
         this.inicio = inicio;
@@ -98,6 +100,7 @@ public class Ruta {
                 reglas);
         copia.nodosBloqueados = nodosBloqueados;
         copia.almacenesCandidatos = almacenesCandidatos;
+        copia.almacenRetorno = almacenRetorno;
         copia.secuenciaPedidos.addAll(secuenciaPedidos);
         copia.recalcular();
         return copia;
@@ -150,10 +153,10 @@ public class Ruta {
         }
 
         if (reglas.incluirRetorno() && !secuenciaPedidos.isEmpty()) {
-            int pasos = pasosEntre(posicion, almacenOrigen.getUbicacion());
+            int pasos = pasosEntre(posicion, almacenRetorno.getUbicacion());
             if (pasos < 0) {
                 intransitable = true;
-                pasos = posicion.distanciaManhattan(almacenOrigen.getUbicacion());
+                pasos = posicion.distanciaManhattan(almacenRetorno.getUbicacion());
             }
             distanciaPasos += pasos;
             reloj = sumarHoras(
@@ -326,6 +329,13 @@ public class Ruta {
 
     public Vehiculo getVehiculo() { return vehiculo; }
     public Almacen getAlmacenOrigen() { return almacenOrigen; }
+    public Almacen getAlmacenRetorno() { return almacenRetorno; }
+
+    /** El retorno puede finalizar en cualquier almacén accesible; no modifica el origen de carga. */
+    public void setAlmacenRetorno(Almacen almacenRetorno) {
+        if (almacenRetorno == null) throw new IllegalArgumentException("Almacén de retorno inválido");
+        this.almacenRetorno = almacenRetorno;
+    }
     public Nodo getPosicionInicio() { return posicionInicio; }
     public boolean isPasarPorAlmacenOrigen() { return pasarPorAlmacenOrigen; }
 
@@ -334,6 +344,7 @@ public class Ruta {
             throw new IllegalArgumentException("El almacén de origen no puede ser nulo");
         }
         this.almacenOrigen = almacenOrigen;
+        this.almacenRetorno = almacenOrigen;
     }
 
     public void setAlmacenesCandidatos(List<Almacen> almacenes) {

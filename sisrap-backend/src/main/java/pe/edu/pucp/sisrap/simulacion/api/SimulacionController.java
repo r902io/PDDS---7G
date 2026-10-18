@@ -22,6 +22,8 @@ import pe.edu.pucp.sisrap.simulacion.dominio.ConfiguracionSimulacion;
 import pe.edu.pucp.sisrap.simulacion.dominio.EscenarioSimulacion;
 import pe.edu.pucp.sisrap.simulacion.dominio.SnapshotSimulacion;
 import pe.edu.pucp.sisrap.simulacion.dominio.ResultadoCorrida;
+import pe.edu.pucp.sisrap.simulacion.dominio.RecorridoVehiculo;
+import java.util.List;
 
 @RestController
 @RequestMapping("/api/simulacion")
@@ -45,6 +47,27 @@ public class SimulacionController {
             return servicio.resultado(idSimulacion);
         } catch (java.util.NoSuchElementException e) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, e.getMessage());
+        }
+    }
+
+    @GetMapping("/{idSimulacion}/recorridos")
+    public List<RecorridoVehiculo.Resumen> recorridos(@PathVariable long idSimulacion) {
+        try {
+            return servicio.recorridos(idSimulacion);
+        } catch (java.util.NoSuchElementException e) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, e.getMessage());
+        }
+    }
+
+    @GetMapping("/{idSimulacion}/recorridos/{idVehiculo}")
+    public RecorridoVehiculo.Detalle recorrido(@PathVariable long idSimulacion,
+                                               @PathVariable String idVehiculo) {
+        try {
+            return servicio.recorrido(idSimulacion, idVehiculo);
+        } catch (java.util.NoSuchElementException e) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, e.getMessage());
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
         }
     }
 

@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { RecorridosCorrida } from '../components/RecorridosCorrida';
 import { useConsulta } from '../hooks/useConsulta';
 import { simulacionService } from '../services/simulacionService';
 import { Boton } from '../components/ui/Boton';
@@ -68,9 +69,15 @@ export function DetalleResultado({ idSimulacion }: { idSimulacion: number }) {
         <Cuadro titulo="Fuera de plazo" valor={formatoEntero(r.retrasados)} />
         <Cuadro titulo="Costo planificado" valor={formatoSoles(r.costoPlanificado)} />
         <Cuadro titulo="Distancia planificada" valor={`${formatoDecimal(r.distanciaPlanificadaKm)} km`} />
-        <Cuadro titulo="Llegadas dentro de plazo" valor={cumplimiento !== null ? `${formatoDecimal(cumplimiento)} %` : '—'} />
+        <Cuadro titulo="Llegadas dentro de plazo / total generado" valor={cumplimiento !== null ? `${formatoDecimal(cumplimiento)} %` : '—'} />
       </dl>
-      <Nota>Los valores de costo y distancia corresponden a las rutas planificadas registradas por el backend. No deben interpretarse como recorrido real sin telemetría adicional. Se considera cumplido el plazo cuando el vehículo llega al cliente antes de su límite; la descarga posterior no se incluye.</Nota>
+      <Nota>El costo y la distancia anteriores corresponden a rutas planificadas, no a los desplazamientos efectivamente simulados. La tasa de llegadas tiene como denominador todos los pedidos generados; un pedido que todavía no vence no se considera incumplido. El SLA mide la llegada y excluye el tiempo posterior de atención.</Nota>
+      {r.instanteColapso && <div className="text-sm text-rojo border border-rojo/50 rounded-lg px-3 py-2">Primer incumplimiento: pedido <b>#{r.idPedidoColapso ?? '—'}</b> a las <b>{formatoFechaHora(r.instanteColapso)}</b>. Fin de la observación: {formatoFechaHora(r.fechaFin)}.</div>}
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+        <Cuadro titulo="Arribados antes del cierre" valor={formatoEntero(r.pedidos.filter(p => p.fechaArribo != null).length)} />
+        <Cuadro titulo="Sin arribo, plazo vigente al corte" valor={formatoEntero(r.pedidos.filter(p => !p.fechaArribo && Date.parse(p.fechaRegistro) + Number(p.prioridad.match(/(36|18|12|8|4)H$/)?.[1] ?? 0) * 3600000 > Date.parse(r.fechaFin ?? r.fechaInicio ?? p.fechaRegistro)).length)} />
+        <Cuadro titulo="Llegados, atención sin terminar" valor={formatoEntero(r.pedidos.filter(p => p.fechaArribo && !p.fechaEntrega).length)} />
+      </div>
       {r.retrasados > 0 && <div className="rounded-lg border border-rojo/50 bg-rojo/10 px-3 py-2 text-sm text-texto">
         Primer pedido registrado fuera de plazo: <strong className="font-mono">
           {r.pedidos.find(p => p.estado === 'RETRASADO')?.idPedido ?? 'No identificado en el detalle'}
@@ -89,6 +96,13 @@ export function DetalleResultado({ idSimulacion }: { idSimulacion: number }) {
         <span>Incidencias: <b className="text-texto">{r.incidencias.length}</b></span>
         <span>Mantenimientos: <b className="text-texto">{r.mantenimientos.length}</b></span>
       </div>
+      <RecorridosCorrida idSimulacion={idSimulacion} almacenes={r.almacenesIniciales} />
+      {!!r.diagnosticos?.length && <details className="border-t border-borde pt-2">
+        <summary className="cursor-pointer text-sm text-mint">Diagnósticos de asignación ({r.diagnosticos.length})</summary>
+        <p className="text-xs text-texto2 mt-2">Cada registro indica que una iteración no confirmó una ruta para ese pedido; no demuestra por sí solo que no existiera ninguna solución factible.</p>
+        <div className="flex py-2"><Boton variant="secundario" onClick={() => exportarCsv(`diagnosticos_${idSimulacion}.csv`, r.diagnosticos!)}>Exportar diagnósticos CSV</Boton></div>
+        <div className="max-h-64 overflow-auto"><table className="w-full text-xs text-texto"><thead><tr><th className="text-left p-2">Hora</th><th className="text-left p-2">Pedido</th><th className="text-left p-2">Resultado del ciclo</th></tr></thead><tbody>{r.diagnosticos.map((d, i) => <tr key={i} className="border-t border-borde/60"><td className="p-2">{formatoFechaHora(d.instante)}</td><td className="p-2">#{d.idPedido}</td><td className="p-2">{d.motivo}</td></tr>)}</tbody></table></div>
+      </details>}
       <details className="border-t border-borde pt-2">
         <summary className="cursor-pointer text-sm text-mint">Pedidos generados ({r.pedidos.length})</summary>
         <div className="overflow-auto max-h-96 mt-2"><table className="w-full text-xs text-texto">

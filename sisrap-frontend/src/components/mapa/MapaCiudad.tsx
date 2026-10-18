@@ -167,11 +167,12 @@ function Tooltip({
           filas={[
             ['Tipo', tipo ? ETIQUETA_TIPO[tipo] : NO_DISPONIBLE],
             ['Estado', etiquetaEstadoVehiculo(v.estado)],
+            ['Carga a bordo', `${formatoEntero(v.cargaActualPaquetes ?? 0)} / ${formatoEntero(v.capacidadPaquetes ?? 0)} paquetes`],
             ['Pedido objetivo', v.pedidoObjetivo != null ? String(v.pedidoObjetivo) : 'Sin pedido asignado'],
             ['Coordenadas', formatoCoordenada(v.x, v.y)],
             ['Camino pendiente', formatoKm(longitudCaminoKm(v, v.caminoActual))],
           ]}
-          mono={[false, false, v.pedidoObjetivo != null, true, true]}
+          mono={[false, false, true, v.pedidoObjetivo != null, true, true]}
         />
       </div>
     );
