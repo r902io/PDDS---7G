@@ -103,8 +103,11 @@ public final class AcumuladorIndicadores {
     private void agregarMuestra(LocalDateTime instante, ResumenPedidosSimulacion pedidos) {
         int entregados = pedidos.entregados();
         int retrasados = pedidos.retrasados();
-        int evaluados = entregados + retrasados;
-        double porcentaje = evaluados > 0 ? 100.0 * entregados / evaluados : 100.0;
+        // Las entregas fuera de plazo ya están incluidas en «entregados».
+        // Evitar contarlas dos veces al calcular el SLA evaluable al corte.
+        int entregadosPuntuales = Math.max(0, entregados - pedidos.retrasadosEntregados());
+        int evaluados = entregadosPuntuales + retrasados;
+        double porcentaje = evaluados > 0 ? 100.0 * entregadosPuntuales / evaluados : 100.0;
         IndicadoresOperacion.MuestraTemporal nueva = new IndicadoresOperacion.MuestraTemporal(
                 instante, distanciaKm, costoSoles, entregados, retrasados, porcentaje);
         if (!muestras.isEmpty()) {

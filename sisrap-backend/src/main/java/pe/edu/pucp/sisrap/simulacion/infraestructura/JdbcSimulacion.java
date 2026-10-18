@@ -695,32 +695,51 @@ public class JdbcSimulacion implements RepositorioSimulacion {
     @Override
     public void guardarRecorridos(long idSimulacion, List<RecorridoVehiculo.Registro> registros) {
         if (registros == null || registros.isEmpty()) return;
-        try (Connection cn = fuente.getConnection();
-             PreparedStatement ps = cn.prepareStatement("""
-                     INSERT INTO simulacion_recorrido
-                       (id_simulacion,id_vehiculo,instante,ubicacion_x,ubicacion_y,
-                        estado,fase,evento,carga_paquetes,id_pedido_objetivo,distancia_tramo_km)
-                     VALUES (?,?,?,?,?,?,?,?,?,?,?)
-                     """)) {
-            for (RecorridoVehiculo.Registro registro : registros) {
-                RecorridoVehiculo.Punto punto = registro.punto();
-                ps.setLong(1, idSimulacion);
-                ps.setString(2, registro.idVehiculo());
-                ps.setTimestamp(3, Timestamp.valueOf(punto.instante()));
-                ps.setInt(4, punto.x());
-                ps.setInt(5, punto.y());
-                ps.setString(6, punto.estado());
-                ps.setString(7, punto.fase());
-                ps.setString(8, punto.evento());
-                ps.setInt(9, punto.cargaPaquetes());
-                if (punto.pedidoObjetivo() == null) ps.setNull(10, java.sql.Types.BIGINT);
-                else ps.setLong(10, punto.pedidoObjetivo());
-                ps.setDouble(11, punto.distanciaTramoKm());
-                ps.addBatch();
+        try (Connection cn = fuente.getConnection()) {
+            cn.setAutoCommit(false);
+            try (PreparedStatement ps = cn.prepareStatement("""
+                    INSERT INTO simulacion_recorrido
+                      (id_simulacion,id_vehiculo,instante,ubicacion_x,ubicacion_y,
+                       estado,fase,evento,carga_paquetes,id_pedido_objetivo,distancia_tramo_km)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                    """)) {
+                int enLote = 0;
+                for (RecorridoVehiculo.Registro registro : registros) {
+                    RecorridoVehiculo.Punto punto = registro.punto();
+                    ps.setLong(1, idSimulacion);
+                    ps.setString(2, registro.idVehiculo());
+                    ps.setTimestamp(3, Timestamp.valueOf(punto.instante()));
+                    ps.setInt(4, punto.x());
+                    ps.setInt(5, punto.y());
+                    ps.setString(6, punto.estado());
+                    ps.setString(7, punto.fase());
+                    ps.setString(8, punto.evento());
+                    ps.setInt(9, punto.cargaPaquetes());
+                    if (punto.pedidoObjetivo() == null) ps.setNull(10, java.sql.Types.BIGINT);
+                    else ps.setLong(10, punto.pedidoObjetivo());
+                    ps.setDouble(11, punto.distanciaTramoKm());
+                    ps.addBatch();
+                    if (++enLote == 200) {
+                        ps.executeBatch();
+                        enLote = 0;
+                    }
+                }
+                if (enLote != 0) ps.executeBatch();
+                cn.commit();
+            } catch (SQLException | RuntimeException e) {
+                try {
+                    cn.rollback();
+                } catch (SQLException rollback) {
+                    e.addSuppressed(rollback);
+                }
+                throw e;
             }
-            ps.executeBatch();
         } catch (SQLException e) {
-            throw new IllegalStateException("No se pudo archivar el recorrido de los vehículos", e);
+            // Conservar el SQLState y el código permite localizar la causa en los logs.
+            throw new IllegalStateException(
+                    "No se pudo archivar el recorrido de los vehículos"
+                    + " (SQLState=" + e.getSQLState() + ", código=" + e.getErrorCode()
+                    + "): " + e.getMessage(), e);
         }
     }
 
@@ -849,8 +868,13 @@ public class JdbcSimulacion implements RepositorioSimulacion {
                         Timestamp arriboSql=rs.getTimestamp(11);
                         LocalDateTime arribo=arriboSql==null?null:arriboSql.toLocalDateTime();
                         if("ENTREGADO".equals(e)) entregados++;
-                        if("RETRASADO".equals(e) ||
-                                (arribo!=null && arribo.isAfter(llegada.plusHours(rs.getInt(10))))) retrasados++;
+                        LocalDateTime limite = llegada.plusHours(rs.getInt(10));
+                        boolean arriboFueraDePlazo = arribo != null && arribo.isAfter(limite);
+                        boolean vencidoSinArribo = (arribo == null || arriboFueraDePlazo)
+                                && fin != null && limite.isBefore(fin);
+                        if (arriboFueraDePlazo || vencidoSinArribo || "RETRASADO".equals(e)) {
+                            retrasados++;
+                        }
                         pedidos.add(new ResultadoCorrida.PedidoRegistrado(
                                 rs.getLong(1),rs.getString(2),rs.getInt(3),rs.getString(4),
                                 llegada,arribo,entrega,e,rs.getInt(8),rs.getInt(9)));
@@ -1477,12 +1501,18 @@ public class JdbcSimulacion implements RepositorioSimulacion {
             }
             if (!pedido.fracciones.isEmpty()) {
                 for (FraccionPedido fraccion : pedido.fracciones) {
-                    if (fraccion.fechaArribo == null && fraccion.estado != EstadoPedido.ENTREGADO) {
+                    // Conservar EN_RUTA: el vencimiento contractual no descarga ni
+                    // retira físicamente la mercancía del vehículo.
+                    if (fraccion.fechaArribo == null
+                            && fraccion.estado != EstadoPedido.ENTREGADO
+                            && fraccion.estado != EstadoPedido.EN_RUTA) {
                         fraccion.estado = EstadoPedido.RETRASADO;
                     }
                 }
                 sincronizarPedidoAgrupado(pedido);
-            } else if (pedido.estado != EstadoPedido.ENTREGADO && pedido.estado != EstadoPedido.RETRASADO) {
+            } else if (pedido.estado != EstadoPedido.ENTREGADO
+                    && pedido.estado != EstadoPedido.EN_RUTA
+                    && pedido.estado != EstadoPedido.RETRASADO) {
                 cambiarEstadoPedido(pedido.id, "RETRASADO", null);
                 pedido.estado = EstadoPedido.RETRASADO;
             }
@@ -1749,50 +1779,59 @@ public class JdbcSimulacion implements RepositorioSimulacion {
         int reasignados = 0;
         int retrasados = 0;
         int entregados = 0;
+        int retrasadosSinEntregar = 0;
+        int retrasadosEntregados = 0;
+        int retrasadosEnRuta = 0;
 
         for (PedidoSimulado pedido : pedidosSimulados.values()) {
             if (pedido.id < 0 || pedido.fechaLlegada.isBefore(inicio)
                     || !pedido.fechaLlegada.isBefore(fin)) {
                 continue;
             }
-
             total++;
-
             if (pedido.fechaLlegada.isAfter(reloj)) {
                 futuros++;
                 continue;
             }
 
-            if (pedido.estado != EstadoPedido.ENTREGADO
-                    && pedido.fechaLimite().isBefore(reloj)
-                    && (pedido.fechaArribo == null || pedido.fechaArribo.isAfter(pedido.fechaLimite()))) {
-                retrasados++;
-                continue;
-            }
-            if (pedido.estado == EstadoPedido.ENTREGADO
-                    && pedido.fechaArribo != null
-                    && pedido.fechaArribo.isAfter(pedido.fechaLimite())) {
-                retrasados++;
-                continue;
-            }
-            switch (pedido.estado) {
-                case PENDIENTE -> pendientes++;
+            // El estado físico y el SLA son dos indicadores distintos.
+            // Un pedido entregado tarde suma tanto en ENTREGADOS como en
+            // FUERA DE PLAZO: no vuelve a figurar como pendiente de reparto.
+            boolean fueraDePlazo = (pedido.fechaArribo != null
+                    && pedido.fechaArribo.isAfter(pedido.fechaLimite()))
+                    || (pedido.fechaLimite().isBefore(reloj)
+                    && (pedido.fechaArribo == null
+                    || pedido.fechaArribo.isAfter(pedido.fechaLimite())));
+            boolean entregado = pedido.estado == EstadoPedido.ENTREGADO;
+            boolean enTraslado = pedido.estado == EstadoPedido.EN_RUTA
+                    || pedido.fracciones.stream()
+                            .anyMatch(f -> f.estado == EstadoPedido.EN_RUTA);
+
+            if (entregado) entregados++;
+            else switch (pedido.estado) {
+                case PENDIENTE, RETRASADO -> {
+                    if (enTraslado) enRuta++;
+                    else pendientes++;
+                }
                 case EN_RUTA -> enRuta++;
                 case REASIGNADO -> reasignados++;
-                case RETRASADO -> retrasados++;
-                case ENTREGADO -> entregados++;
+                case ENTREGADO -> { /* ya contabilizado */ }
+            }
+
+            if (fueraDePlazo) {
+                retrasados++;
+                if (entregado) retrasadosEntregados++;
+                else {
+                    retrasadosSinEntregar++;
+                    if (enTraslado) retrasadosEnRuta++;
+                }
             }
         }
 
         return new ResumenPedidosSimulacion(
-                total,
-                futuros,
-                pendientes,
-                enRuta,
-                reasignados,
-                retrasados,
-                entregados
-        );
+                total, futuros, pendientes, enRuta, reasignados,
+                retrasados, entregados, retrasadosSinEntregar,
+                retrasadosEntregados, retrasadosEnRuta);
     }
 
     private List<Almacen> leerAlmacenes(Connection cn, int ancho, int alto) throws SQLException {
@@ -1870,7 +1909,8 @@ public class JdbcSimulacion implements RepositorioSimulacion {
                     && pedido.fechaLlegada.plusHours(pedido.horasLimite).isAfter(reloj)
                     && !pedido.fechaLlegada.plusHours(pedido.horasLimite)
                             .isAfter(reloj.plusHours(3));
-            if (pedidoUrgente && capacidadDisponible > 0
+            boolean pedidoVencido = pedido.fechaLimite().isBefore(reloj);
+            if ((pedidoUrgente || pedidoVencido) && capacidadDisponible > 0
                     && pedido.cantidad > capacidadDisponible) {
                 capacidadParte = capacidadDisponible;
             }

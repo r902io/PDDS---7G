@@ -25,6 +25,8 @@ import jakarta.annotation.PreDestroy;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import pe.edu.pucp.sisrap.almacen.dominio.Almacen;
 import pe.edu.pucp.sisrap.control.aplicacion.GestionarControlSimulacion;
@@ -59,6 +61,8 @@ import pe.edu.pucp.sisrap.simulacion.infraestructura.SseSimulacion;
 @Service
 public class MotorSimulacion {
 
+    private static final Logger LOG = LoggerFactory.getLogger(MotorSimulacion.class);
+
     private static final long NANO_SEGUNDO = 1_000_000_000L;
     private static final double NANOS_POR_HORA = 3_600_000_000_000.0;
     private static final String ALGORITMO_OPERATIVO = "GENETICO";
@@ -83,10 +87,17 @@ public class MotorSimulacion {
     private final List<EntregaEnCliente> entregasEnCliente = new ArrayList<>();
     private final AcumuladorIndicadores indicadores = new AcumuladorIndicadores();
     private static final int MAX_LOTE_RECORRIDO = 500;
+    private static final int MAX_RECORRIDOS_PENDIENTES = 30_000;
+    private static final long REINTENTO_RECORRIDO_NS = TimeUnit.SECONDS.toNanos(5);
+    private static final long LOG_RECORRIDO_NS = TimeUnit.MINUTES.toNanos(1);
     private static final long INTERVALO_PUNTO_ESTACIONARIO_MIN = 10;
     private final List<RecorridoVehiculo.Registro> registrosRecorrido = new ArrayList<>();
     private final Map<String, RecorridoVehiculo.Punto> ultimosPuntos = new HashMap<>();
     private long nanoUltimoArchivoRecorrido;
+    private long nanoProximoReintentoRecorrido;
+    private long nanoUltimoLogErrorRecorrido;
+    private long puntosPerdidosRecorrido;
+    private String advertenciaRecorrido;
 
     private volatile SnapshotSimulacion snapshotActual;
     private EstadoSimulacion estado = EstadoSimulacion.DETENIDA;
@@ -203,6 +214,12 @@ public class MotorSimulacion {
         firmaUltimaPlanificacion = null;
         prepararAnticipoSiCorresponde();
         nanoUltimoArchivoRecorrido = System.nanoTime();
+        nanoProximoReintentoRecorrido = 0L;
+        nanoUltimoLogErrorRecorrido = 0L;
+        puntosPerdidosRecorrido = 0L;
+        advertenciaRecorrido = null;
+        registrosRecorrido.clear();
+        ultimosPuntos.clear();
         registrarEstadoRecorrido("INICIO");
         vaciarRecorridos();
 
@@ -596,7 +613,10 @@ public class MotorSimulacion {
                     .append(almacen.getStockActual()).append(';');
         }
         firma.append('|').append(contexto.nodosBloqueados().hashCode());
-        firma.append('|').append(reloj.getHour());
+        // No congelar un rechazo durante toda una hora: la criticidad cambia
+        // aunque no lleguen pedidos, los vehículos no se muevan y no cambie el stock.
+        firma.append('|').append(reloj.getHour()).append(':')
+                .append(reloj.getMinute() / INTERVALO_PLANIFICACION_MIN);
         return firma.toString();
     }
 
@@ -780,16 +800,38 @@ public class MotorSimulacion {
                 reloj,
                 configuracion.fechaHoraFin());
 
-        ContextoPlanificacion contexto = operativo.contexto();
-        int rescates = planificarRescates(contexto);
-        if (rescates > 0) {
-            firmaUltimaPlanificacion = null;
+        ContextoPlanificacion base = operativo.contexto();
+        int rescates = planificarRescates(base);
+        if (rescates > 0) firmaUltimaPlanificacion = null;
+
+        // Un pedido vencido pero físicamente a bordo no se puede despachar de nuevo.
+        ContextoPlanificacion disponibles = excluirPedidosYaComprometidos(base);
+        List<Pedido> vencidos = disponibles.getPedidos().stream()
+                .filter(p -> p.getFechaLimite().isBefore(reloj)).toList();
+        List<Pedido> conPlazo = disponibles.getPedidos().stream()
+                .filter(p -> !p.getFechaLimite().isBefore(reloj)).toList();
+
+        // Reducir NUEVOS incumplimientos tiene precedencia sobre recuperar
+        // incumplimientos ya irreversibles. El bloque finally garantiza que
+        // tampoco se abandone a ningún pedido vencido si GA no encuentra ruta.
+        try {
+            planificarPedidosConPlazo(disponibles, conPlazo, operativo);
+        } finally {
+            ContextoPlanificacion despuesDeGa = contextoConPedidos(disponibles, vencidos);
+            planificarRecuperacionVencidos(despuesDeGa, vencidos, operativo);
         }
-        if (contexto.getPedidos().isEmpty()) {
+    }
+
+    private void planificarPedidosConPlazo(
+            ContextoPlanificacion disponibles,
+            List<Pedido> conPlazo,
+            ContextoOperativo operativo) {
+        if (conPlazo.isEmpty()) {
             firmaUltimaPlanificacion = null;
             return;
         }
-        if (ConsolidadorDespachos.convieneEsperar(contexto.getPedidos(), contexto,
+        ContextoPlanificacion contexto = contextoConPedidos(disponibles, conPlazo);
+        if (ConsolidadorDespachos.convieneEsperar(conPlazo, contexto,
                 configuracion.fechaHoraFin())) {
             mensajeEstado = "Consolidando pedidos confirmados sin comprometer sus plazos";
             return;
@@ -820,6 +862,10 @@ public class MotorSimulacion {
                 ? planificador.planificar(contexto)
                 : planificador.replanificar(semillaDesdePrevision(contexto), contexto);
         objetivo.calcular(solucion);
+        // Contrastar el resultado de GA con un despacho determinista EDF.
+        // No se modifica la funcion objetivo ni se aceptan rutas tardias:
+        // si ambos son factibles, proteger primero los plazos mas cercanos.
+        solucion = ProtectorPlazos.proteger(contexto, solucion, objetivo, semilla);
         Map<String, Integer> cargasReservadas = new HashMap<>();
         for (PlanUnidad enCurso : planes.values()) {
             if (!enCurso.stockTomado) {
@@ -923,12 +969,118 @@ public class MotorSimulacion {
         mensajeEstado = "Planificación generada: " + nuevos.size() + " rutas nuevas";
     }
 
+
+    private ContextoPlanificacion contextoConPedidos(
+            ContextoPlanificacion base, List<Pedido> pedidos) {
+        List<Vehiculo> vehiculos = base.getVehiculos().stream().map(v -> {
+            if (!planes.containsKey(v.getIdVehiculo())) return v;
+            Vehiculo ocupado = new Vehiculo(v.getIdVehiculo(),
+                    v.getCapacidadPaquetes(), v.getVelocidadKmh(),
+                    v.getCostoPorKm(), v.getPosicionActual());
+            ocupado.setDisponible(false);
+            return ocupado;
+        }).toList();
+        return new ContextoPlanificacion(pedidos, vehiculos,
+                base.getAlmacenes(), base.instante(), base.reglas(),
+                base.nodosBloqueados(), base.respetarPosicionVehiculo());
+    }
+
+    /** Excluye los paquetes que siguen sobre una unidad, en rescate o en descarga. */
+    private ContextoPlanificacion excluirPedidosYaComprometidos(ContextoPlanificacion base) {
+        Set<Long> comprometidos = new LinkedHashSet<>();
+        for (PlanUnidad plan : planes.values()) comprometidos.addAll(plan.idsNoEntregados());
+        for (CargaAveriada carga : cargasAveriadas.values()) {
+            for (Pedido pedido : carga.pendientes) comprometidos.add(pedido.getIdPedido());
+            comprometidos.addAll(carga.reservados.keySet());
+        }
+        for (EntregaEnCliente entrega : entregasEnCliente) comprometidos.add(entrega.idPedido);
+        return contextoConPedidos(base, base.getPedidos().stream()
+                .filter(p -> !comprometidos.contains(p.getIdPedido())).toList());
+    }
+
+    /**
+     * La recuperación es exclusivamente operativa: no declara factible un SLA
+     * ya incumplido ni modifica GA. Siempre preserva capacidades, vías, stock
+     * y disponibilidad. Los vencidos se priorizan por su plazo original;
+     * después GA atiende los pedidos que todavía pueden cumplir su SLA.
+     */
+    private void planificarRecuperacionVencidos(
+            ContextoPlanificacion base, List<Pedido> vencidos, ContextoOperativo operativo) {
+        if (vencidos.isEmpty()
+                || configuracion.escenario() == EscenarioSimulacion.COLAPSO_LOGISTICO) return;
+
+        ContextoPlanificacion actuales = contextoConPedidos(base, vencidos.stream()
+                .filter(p -> planes.values().stream()
+                        .noneMatch(plan -> plan.idsNoEntregados().contains(p.getIdPedido())))
+                .toList());
+        if (actuales.getPedidos().isEmpty()) return;
+
+        Map<String, Integer> reservado = new HashMap<>();
+        for (PlanUnidad plan : planes.values()) {
+            if (!plan.stockTomado && plan.origenRescate == null) {
+                reservado.merge(plan.almacenOrigen.getIdAlmacen(), plan.cargaInicial, Integer::sum);
+            }
+        }
+
+        List<Ruta> rutas = RecuperacionPedidosVencidos.construir(
+                actuales, planes.keySet(), reservado,
+                ruta -> !repositorio.tieneMantenimientoProgramado(
+                        ruta.getVehiculo().getIdVehiculo(), reloj,
+                        reloj.plusNanos(Math.max(0L, Math.round(
+                                ruta.getTiempoTotalHoras() * NANOS_POR_HORA)))));
+        if (rutas.isEmpty()) {
+            registrarDiagnosticosRecuperacion(actuales.getPedidos(), "RECUPERACION_SIN_RUTA_FISICA");
+            return;
+        }
+
+        Set<Long> idsRecuperados = new LinkedHashSet<>();
+        for (Ruta ruta : rutas) {
+            for (Pedido pedido : ruta.getSecuenciaPedidos()) idsRecuperados.add(pedido.getIdPedido());
+        }
+        Solucion solucion = new Solucion();
+        solucion.setRutas(rutas);
+        ContextoPlanificacion contextoRecuperacion = contextoConPedidos(actuales,
+                actuales.getPedidos().stream()
+                        .filter(p -> idsRecuperados.contains(p.getIdPedido())).toList());
+        new FuncionObjetivo(operativo.configuracion(), contextoRecuperacion).calcular(solucion);
+        // Una ruta que rescata un pedido vencido no recupera su cumplimiento SLA.
+        solucion.setEsFactible(false);
+
+        repositorio.guardarPlan(idSimulacion, reloj, solucion, rutas,
+                operativo.configuracion().numero("objetivo.beta1"),
+                operativo.configuracion().numero("objetivo.beta2"),
+                operativo.configuracion().numero("objetivo.beta3"));
+        repositorio.marcarPedidosEnRuta(idsRecuperados);
+        for (Ruta ruta : rutas) {
+            PlanUnidad plan = PlanUnidad.desde(ruta, contextoRecuperacion);
+            repositorio.actualizarEstadoVehiculo(plan.idVehiculo, "EN_RUTA");
+            planes.put(plan.idVehiculo, plan);
+            registrarEventoRecorrido(plan, "RECUPERACION_PEDIDO_VENCIDO");
+        }
+        registrarDiagnosticosRecuperacion(actuales.getPedidos().stream()
+                .filter(p -> !idsRecuperados.contains(p.getIdPedido())).toList(),
+                "RECUPERACION_SIN_ASIGNACION");
+        firmaUltimaPlanificacion = null;
+        mensajeEstado = "Recuperación: " + idsRecuperados.size()
+                + " pedidos vencidos asignados sin ocultar el incumplimiento del plazo";
+    }
+
+    private void registrarDiagnosticosRecuperacion(List<Pedido> pedidos, String motivo) {
+        if (idSimulacion == null || reloj == null || pedidos == null || pedidos.isEmpty()) return;
+        Map<Long, DiagnosticoPlanificacion> registros = new LinkedHashMap<>();
+        for (Pedido pedido : pedidos) {
+            long visible = repositorio.idPedidoVisible(pedido.getIdPedido());
+            registros.putIfAbsent(visible, new DiagnosticoPlanificacion(reloj, visible, motivo));
+        }
+        repositorio.registrarDiagnosticos(idSimulacion, new ArrayList<>(registros.values()));
+    }
+
     private void registrarDiagnosticosSinRuta(List<Pedido> pedidos, String motivo) {
         if (idSimulacion == null || reloj == null || pedidos == null) return;
         Map<Long, DiagnosticoPlanificacion> registros = new LinkedHashMap<>();
         for (Pedido pedido : pedidos) {
             long restante = java.time.Duration.between(reloj, pedido.getFechaLimite()).toMinutes();
-            if (restante > 240 || restante < -1) continue;
+            if (restante > 240) continue;
             long idVisible = repositorio.idPedidoVisible(pedido.getIdPedido());
             registros.putIfAbsent(idVisible,
                     new DiagnosticoPlanificacion(reloj, idVisible, motivo));
@@ -1638,10 +1790,42 @@ public class MotorSimulacion {
         if (registrosRecorrido.size() >= MAX_LOTE_RECORRIDO) vaciarRecorridos();
     }
 
+    /** El historial es auxiliar: un fallo de archivo no debe detener el reparto. */
     private void vaciarRecorridos() {
         if (registrosRecorrido.isEmpty() || idSimulacion == null) return;
-        repositorio.guardarRecorridos(idSimulacion, registrosRecorrido);
-        registrosRecorrido.clear();
+        long ahora = System.nanoTime();
+        if (ahora < nanoProximoReintentoRecorrido) return;
+        try {
+            // Se quita el lote de memoria solamente después del COMMIT en MySQL.
+            repositorio.guardarRecorridos(idSimulacion, registrosRecorrido);
+            registrosRecorrido.clear();
+            nanoProximoReintentoRecorrido = 0L;
+            advertenciaRecorrido = puntosPerdidosRecorrido == 0 ? null
+                    : "Historial de vehículos incompleto: " + puntosPerdidosRecorrido
+                    + " puntos no pudieron archivarse";
+        } catch (RuntimeException e) {
+            // Los puntos se conservan para volver a intentarlo sin generar duplicados.
+            nanoProximoReintentoRecorrido = ahora + REINTENTO_RECORRIDO_NS;
+            if (nanoUltimoLogErrorRecorrido == 0L
+                    || ahora - nanoUltimoLogErrorRecorrido >= LOG_RECORRIDO_NS) {
+                LOG.error("Corrida {}: fallo al guardar {} puntos del recorrido; "
+                        + "se reintentará sin detener la simulación",
+                        idSimulacion, registrosRecorrido.size(), e);
+                nanoUltimoLogErrorRecorrido = ahora;
+            }
+            if (registrosRecorrido.size() > MAX_RECORRIDOS_PENDIENTES) {
+                int exceso = registrosRecorrido.size() - MAX_RECORRIDOS_PENDIENTES;
+                registrosRecorrido.subList(0, exceso).clear();
+                puntosPerdidosRecorrido += exceso;
+                LOG.error("Corrida {}: se perdieron {} puntos de recorrido por falta prolongada "
+                        + "de persistencia. Total no archivado: {}",
+                        idSimulacion, exceso, puntosPerdidosRecorrido);
+            }
+            advertenciaRecorrido = "Aviso: historial de vehículos pendiente de guardar ("
+                    + registrosRecorrido.size() + " puntos en espera; reintentando)"
+                    + (puntosPerdidosRecorrido == 0 ? ""
+                        : "; " + puntosPerdidosRecorrido + " puntos no archivados");
+        }
     }
 
     private void publicarSnapshot(boolean forzar) {
@@ -1714,7 +1898,10 @@ public class MotorSimulacion {
                 resumen,
                 cantidadBloqueos,
                 new ArrayList<>(porId.values()),
-                mensajeEstado,
+                advertenciaRecorrido == null ? mensajeEstado
+                        : (mensajeEstado == null || mensajeEstado.isBlank()
+                                ? advertenciaRecorrido
+                                : mensajeEstado + " | " + advertenciaRecorrido),
                 indicadoresActuales);
 
         sse.publicar(snapshotActual);
