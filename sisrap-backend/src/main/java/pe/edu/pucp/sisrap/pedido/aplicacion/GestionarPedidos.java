@@ -18,8 +18,8 @@ import java.util.regex.Pattern;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
-import pe.edu.pucp.sisrap.mapa.dominio.MapaCiudad;
-import pe.edu.pucp.sisrap.mapa.dominio.RepositorioMapa;
+import pe.edu.pucp.sisrap.configuracionoperativa.infraestructura.JdbcConfiguracionEscenario;
+import pe.edu.pucp.sisrap.simulacion.dominio.EscenarioSimulacion;
 import pe.edu.pucp.sisrap.pedido.dominio.CargaHistoricaPedidos;
 import pe.edu.pucp.sisrap.pedido.dominio.CargaHistoricaPreparada;
 import pe.edu.pucp.sisrap.pedido.dominio.EstadoPedido;
@@ -56,20 +56,20 @@ public class GestionarPedidos {
             );
 
     private final RepositorioPedidos repositorio;
-    private final RepositorioMapa mapa;
+    private final JdbcConfiguracionEscenario escenarios;
     private final LectorPedidosHistoricos lector;
     private final GestionarSesiones sesiones;
     private final MotorSimulacion motorSimulacion;
 
     public GestionarPedidos(
             RepositorioPedidos repositorio,
-            RepositorioMapa mapa,
+            JdbcConfiguracionEscenario escenarios,
             LectorPedidosHistoricos lector,
             GestionarSesiones sesiones,
             MotorSimulacion motorSimulacion
     ) {
         this.repositorio = repositorio;
-        this.mapa = mapa;
+        this.escenarios = escenarios;
         this.lector = lector;
         this.sesiones = sesiones;
         this.motorSimulacion = motorSimulacion;
@@ -188,152 +188,157 @@ public class GestionarPedidos {
     }
 
     public List<CargaHistoricaPedidos>
-    listarCargasHistoricas() {
+    listarCargasHistoricas(EscenarioSimulacion escenario) {
 
-        return repositorio.listarCargasHistoricas();
+        return repositorio.listarCargasHistoricas(escenario);
     }
 
-    public void eliminarCargaHistorica(String token, String huella) {
+    public void eliminarCargaHistorica(String token, EscenarioSimulacion escenario, String huella) {
         validarSesion(token);
         if (huella == null || !huella.matches("[0-9a-fA-F]{64}")) {
             throw new IllegalArgumentException("La identificación de la carga es inválida");
         }
         synchronized (motorSimulacion) {
             verificarSimulacionNoActiva();
-            repositorio.eliminarCargaHistorica(huella);
+            repositorio.eliminarCargaHistorica(escenario, huella);
         }
     }
 
-    public synchronized ResultadoCargaHistorica importarHistoricos(
+    public ResultadoCargaHistorica importarHistoricos(
             String token,
+            EscenarioSimulacion escenario,
             List<MultipartFile> archivos
     ) {
 
         validarSesion(token);
-        verificarSimulacionNoActiva();
-        validarListaArchivos(archivos);
+        synchronized (motorSimulacion) {
+            verificarSimulacionNoActiva();
+            validarListaArchivos(archivos);
 
-        MapaCiudad ciudad = mapa.obtener();
+            var ciudad = escenarios.consultar(escenario);
 
-        List<CargaHistoricaPreparada> preparadas =
-                new ArrayList<>();
+            List<CargaHistoricaPreparada> preparadas =
+                    new ArrayList<>();
 
-        Set<YearMonth> periodosSolicitud =
-                new HashSet<>();
+            Set<YearMonth> periodosSolicitud =
+                    new HashSet<>();
 
-        Set<String> huellasSolicitud =
-                new HashSet<>();
+            Set<String> huellasSolicitud =
+                    new HashSet<>();
 
-        long totalBytes = 0L;
+            long totalBytes = 0L;
 
-        for (MultipartFile archivo : archivos) {
+            for (MultipartFile archivo : archivos) {
 
-            validarArchivoBasico(archivo);
+                validarArchivoBasico(archivo);
 
-            totalBytes = Math.addExact(
-                    totalBytes,
-                    archivo.getSize()
-            );
-
-            if (totalBytes > MAX_TOTAL_BYTES) {
-                throw new IllegalArgumentException(
-                        "La carga completa supera el límite de 50 MB"
+                totalBytes = Math.addExact(
+                        totalBytes,
+                        archivo.getSize()
                 );
-            }
 
-            String nombreArchivo =
-                    archivo.getOriginalFilename();
-
-            YearMonth periodo =
-                    obtenerPeriodoDesdeNombre(nombreArchivo);
-
-            if (!periodosSolicitud.add(periodo)) {
-                throw new PeriodoYaCargadoException(
-                        "Se adjuntaron dos archivos para el mismo periodo: "
-                                + periodo
-                );
-            }
-
-            if (repositorio.existeCargaPeriodo(
-                    periodo.getYear(),
-                    periodo.getMonthValue()
-            )) {
-                throw new PeriodoYaCargadoException(
-                        "Ya se cargaron pedidos para "
-                                + periodo
-                );
-            }
-
-            try {
-
-                byte[] bytes = archivo.getBytes();
-
-                String contenido =
-                        new String(
-                                bytes,
-                                StandardCharsets.UTF_8
-                        );
-
-                List<PedidoHistoricoImportado> pedidos =
-                        lector.leer(
-                                nombreArchivo,
-                                contenido,
-                                periodo,
-                                ciudad.anchoKm(),
-                                ciudad.altoKm()
-                        );
-
-                String huella =
-                        calcularHuella(
-                                periodo,
-                                contenido
-                        );
-
-                if (!huellasSolicitud.add(huella)) {
+                if (totalBytes > MAX_TOTAL_BYTES) {
                     throw new IllegalArgumentException(
-                            "Se adjuntó el mismo archivo más de una vez"
+                            "La carga completa supera el límite de 50 MB"
                     );
                 }
 
-                preparadas.add(
-                        new CargaHistoricaPreparada(
-                                nombreArchivo,
-                                huella,
-                                periodo.getYear(),
-                                periodo.getMonthValue(),
-                                pedidos
-                        )
-                );
+                String nombreArchivo =
+                        archivo.getOriginalFilename();
 
-            } catch (IllegalArgumentException e) {
-                throw e;
+                YearMonth periodo =
+                        obtenerPeriodoDesdeNombre(nombreArchivo);
 
-            } catch (Exception e) {
-                throw new IllegalStateException(
-                        "No se pudo leer el archivo "
-                                + nombreArchivo,
-                        e
-                );
+                if (!periodosSolicitud.add(periodo)) {
+                    throw new PeriodoYaCargadoException(
+                            "Se adjuntaron dos archivos para el mismo periodo: "
+                                    + periodo
+                    );
+                }
+
+                if (repositorio.existeCargaPeriodo(
+                        escenario,
+                        periodo.getYear(),
+                        periodo.getMonthValue()
+                )) {
+                    throw new PeriodoYaCargadoException(
+                            "Ya se cargaron pedidos para "
+                                    + periodo
+                    );
+                }
+
+                try {
+
+                    byte[] bytes = archivo.getBytes();
+
+                    String contenido =
+                            new String(
+                                    bytes,
+                                    StandardCharsets.UTF_8
+                            );
+
+                    List<PedidoHistoricoImportado> pedidos =
+                            lector.leer(
+                                    nombreArchivo,
+                                    contenido,
+                                    periodo,
+                                    ciudad.anchoKm(),
+                                    ciudad.altoKm()
+                            );
+
+                    String huella =
+                            calcularHuella(
+                                    periodo,
+                                    contenido
+                            );
+
+                    if (!huellasSolicitud.add(huella)) {
+                        throw new IllegalArgumentException(
+                                "Se adjuntó el mismo archivo más de una vez"
+                        );
+                    }
+
+                    preparadas.add(
+                            new CargaHistoricaPreparada(
+                                    nombreArchivo,
+                                    huella,
+                                    periodo.getYear(),
+                                    periodo.getMonthValue(),
+                                    pedidos
+                            )
+                    );
+
+                } catch (IllegalArgumentException e) {
+                    throw e;
+
+                } catch (Exception e) {
+                    throw new IllegalStateException(
+                            "No se pudo leer el archivo "
+                                    + nombreArchivo,
+                            e
+                    );
+                }
             }
+
+            List<CargaHistoricaPedidos> cargas =
+                    repositorio.guardarCargasHistoricas(
+                            escenario,
+                            preparadas
+                    );
+
+            int pedidosInsertados =
+                    preparadas.stream()
+                            .mapToInt(carga ->
+                                    carga.pedidos().size()
+                            )
+                            .sum();
+
+            return new ResultadoCargaHistorica(
+                    preparadas.size(),
+                    pedidosInsertados,
+                    cargas
+            );
         }
-
-        List<CargaHistoricaPedidos> cargas =
-                repositorio.guardarCargasHistoricas(
-                        preparadas
-                );
-
-        int pedidosInsertados =
-                preparadas.stream()
-                        .mapToInt(carga ->
-                                carga.pedidos().size()
-                        )
-                        .sum();
-
-        return new ResultadoCargaHistorica(
-                preparadas.size(),
-                pedidosInsertados,
-                cargas
-        );
     }
 
     private void validarSesion(

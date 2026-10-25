@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { useConsulta } from '../hooks/useConsulta';
 import { apiFetch, sesionGuardada, textoError } from '../services/apiClient';
 import type { EscenarioSimulacion } from '../types/api';
@@ -37,8 +37,9 @@ function fechaHora(iso: string): string {
   return `${fechaCorta(iso)} ${iso.slice(11, 16)}`;
 }
 
-export function CalendariosCaso({ bloqueado, fechaInicio, horaInicio = '00:00', escenario }: {
+export function CalendariosCaso({ bloqueado, fechaInicio, horaInicio = '00:00', escenario, alOcupado }: {
   bloqueado: boolean;
+  alOcupado?: (ocupado: boolean) => void;
   fechaInicio: string;
   horaInicio?: string;
   escenario: EscenarioSimulacion;
@@ -50,10 +51,14 @@ export function CalendariosCaso({ bloqueado, fechaInicio, horaInicio = '00:00', 
   const [error, setError] = useState<string | null>(null);
   const fin = finalPeriodo(fechaInicio, escenario, horaInicio);
   const periodoValido = /^\d{4}-\d{2}-\d{2}$/.test(fechaInicio) && /^\d{4}-\d{2}-\d{2}$/.test(fin);
-  const consulta = useConsulta(s => apiFetch<ArchivoCalendario[]>('/api/datos-caso/calendarios', { autenticar: false, senal: s }), 'calendarios-archivos');
+  const consulta = useConsulta(s => apiFetch<ArchivoCalendario[]>(`/api/datos-caso/calendarios?escenario=${escenario}`, { autenticar: false, senal: s }), `calendarios-${escenario}`);
   const prevista = useConsulta(s => periodoValido ? apiFetch<Prevision>(
-    `/api/datos-caso/calendarios/programados?desde=${fechaInicio}&hasta=${fin}`, { autenticar: false, senal: s })
-    : Promise.resolve({ bloqueos: [], mantenimientos: [] }), `prevision-${fechaInicio}-${fin}`);
+    `/api/datos-caso/calendarios/programados?desde=${fechaInicio}&hasta=${fin}&escenario=${escenario}`, { autenticar: false, senal: s })
+    : Promise.resolve({ bloqueos: [], mantenimientos: [] }), `prevision-${escenario}-${fechaInicio}-${fin}`);
+  useEffect(() => {
+    alOcupado?.(procesando || eliminando !== null);
+    return () => alOcupado?.(false);
+  }, [alOcupado, procesando, eliminando]);
   const deshabilitado = bloqueado || procesando || eliminando !== null;
   const grupos = [
     { tipo: 'BLOQUEO' as const, titulo: 'Bloqueos programados', boton: 'Cargar bloqueos', ejemplo: 'bloqueo.2610.txt' },
@@ -83,7 +88,7 @@ export function CalendariosCaso({ bloqueado, fechaInicio, horaInicio = '00:00', 
     try {
       const cuerpo = new FormData();
       archivos.forEach(f => cuerpo.append('archivos', f));
-      const respuesta = await fetch('/api/datos-caso/calendarios', {
+      const respuesta = await fetch(`/api/datos-caso/calendarios?escenario=${escenario}`, {
         method: 'POST',
         headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
         body: cuerpo,
@@ -103,7 +108,7 @@ export function CalendariosCaso({ bloqueado, fechaInicio, horaInicio = '00:00', 
     if (deshabilitado || !window.confirm(`¿Eliminar ${nombre} del calendario de futuras corridas?`)) return;
     setEliminando(nombre); setError(null);
     try {
-      await apiFetch<void>(`/api/datos-caso/calendarios/${encodeURIComponent(nombre)}`, { metodo: 'DELETE' });
+      await apiFetch<void>(`/api/datos-caso/calendarios/${encodeURIComponent(nombre)}?escenario=${escenario}`, { metodo: 'DELETE' });
       volverACargar();
     } catch (e) { setError(textoError(e)); }
     finally { setEliminando(null); }
@@ -122,7 +127,7 @@ export function CalendariosCaso({ bloqueado, fechaInicio, horaInicio = '00:00', 
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h5 className="text-xs font-semibold text-texto">{grupo.titulo}</h5>
             <Boton type="button" variant="secundario" className="px-2 py-1 text-xs"
-              disabled={deshabilitado} disabledReason="Solo puede modificarse antes de iniciar una corrida."
+              disabled={deshabilitado} disabledReason="Guarda primero la configuración. Los calendarios se modifican antes de iniciar la corrida."
               onClick={() => { setAbierto(grupo.tipo); setArchivos([]); setError(null); }}>
               {grupo.boton}
             </Boton>

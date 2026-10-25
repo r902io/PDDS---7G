@@ -16,6 +16,7 @@ import {
   formatoHora,
   horaNavegador,
   horasEntre,
+  partesFechaHora,
   turnoDe,
 } from '../utilitarios/formato';
 import { IconoConexion, IconoSinConexion } from './iconos';
@@ -165,7 +166,40 @@ export function Cabecera({ vista }: { vista: Vista }) {
 
         <IndicadorConexion vigentes={datosVigentes} conexion={conexion} recibidoEn={recibidoEn} />
       </div>
+      {activa && <HorarioAlimentacion reloj={reloj} datosVigentes={datosVigentes} />}
     </header>
+  );
+}
+
+function HorarioAlimentacion({ reloj, datosVigentes }: { reloj: string | null; datosVigentes: boolean }) {
+  const hora = partesFechaHora(reloj);
+  if (!hora || hora.hora > 23 || hora.minuto > 59) return null;
+  const minutos = hora.hora * 60 + hora.minuto;
+  const horarios = [3, 11, 19];
+  const actual = horarios.find(inicio => minutos >= inicio * 60 && minutos < (inicio + 1) * 60);
+  const formato = (h: number) => `${String(h).padStart(2, '0')}:00`;
+
+  return (
+    <div className={`w-full flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t pt-2 text-xs ${
+      actual != null ? 'border-ambar/40 text-ambar' : 'border-borde text-texto2'
+    }`}>
+      <span className="font-medium">Alimentación · hora simulada</span>
+      <div className="flex flex-wrap gap-1.5" aria-label="Horarios de alimentación">
+        {horarios.map(inicio => (
+          <span key={inicio} className={`rounded-md border px-2 py-0.5 font-mono ${
+            actual === inicio ? 'border-ambar/60 bg-ambar/10 text-ambar' : 'border-borde bg-panel2 text-texto2'
+          }`}>
+            {formato(inicio)}–{formato(inicio + 1)}
+          </span>
+        ))}
+      </div>
+      <span role="status" aria-live="polite">
+        {actual != null
+          ? `Horario de refrigerio: los vehículos descansan hasta las ${formato(actual + 1)}.`
+          : 'Una hora de descanso por turno.'}
+        {!datosVigentes && ' Según el último dato recibido.'}
+      </span>
+    </div>
   );
 }
 

@@ -4,6 +4,8 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import pe.edu.pucp.sisrap.simulacion.dominio.EscenarioSimulacion;
+import pe.edu.pucp.sisrap.configuracionoperativa.infraestructura.JdbcConfiguracionEscenario.Plantilla;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.util.ArrayList;
@@ -32,6 +34,90 @@ public class CalendariosCasoService {
                                  String directorio) {
         this.directorio = Path.of(directorio == null || directorio.isBlank() ? "datos-caso" : directorio.trim())
                 .toAbsolutePath().normalize();
+    }
+
+    public static synchronized Path directorioEscenario(String base, EscenarioSimulacion escenario) {
+        Path raiz = Path.of(base == null || base.isBlank() ? "datos-caso" : base.trim()).toAbsolutePath().normalize();
+        Path contenedor = raiz.resolve("escenarios");
+        Path destino = contenedor.resolve(escenario.name());
+        if (Files.isDirectory(destino)) return destino;
+        Path temporal = null;
+        try {
+            Files.createDirectories(contenedor);
+            temporal = Files.createTempDirectory(contenedor, ".inicial-");
+            List<Path> anteriores;
+            try (Stream<Path> arbol = Files.walk(raiz)) {
+                anteriores = arbol.filter(Files::isRegularFile)
+                        .filter(a -> !a.startsWith(contenedor))
+                        .filter(a -> tipo(a.getFileName().toString()) != null).toList();
+            }
+            for (Path archivo : anteriores) {
+                Path copia = temporal.resolve(raiz.relativize(archivo));
+                Files.createDirectories(copia.getParent());
+                Files.copy(archivo, copia);
+            }
+            Files.move(temporal, destino, StandardCopyOption.ATOMIC_MOVE);
+            return destino;
+        } catch (IOException e) {
+            throw new IllegalStateException("No se pudo preparar el calendario del escenario " + escenario, e);
+        } finally {
+            if (temporal != null && Files.exists(temporal)) {
+                try (Stream<Path> arbol = Files.walk(temporal)) {
+                    for (Path archivo : arbol.sorted(java.util.Comparator.reverseOrder()).toList()) Files.deleteIfExists(archivo);
+                } catch (IOException ignored) { }
+            }
+        }
+    }
+
+    private CalendariosCasoService para(EscenarioSimulacion escenario) {
+        return new CalendariosCasoService(directorioEscenario(directorio.toString(), escenario).toString());
+    }
+
+    public synchronized List<ArchivoCalendario> listar(EscenarioSimulacion escenario) { return para(escenario).listar(); }
+    public synchronized Prevision prevision(EscenarioSimulacion escenario, LocalDate desde, LocalDate hasta) {
+        return para(escenario).prevision(desde, hasta);
+    }
+    public synchronized void eliminar(EscenarioSimulacion escenario, String nombre) { para(escenario).eliminar(nombre); }
+
+    public synchronized void validarCompatibilidad(Plantilla p) {
+        validarCompatibilidad(para(p.escenario()).directorio, p);
+    }
+
+    private static void validarCompatibilidad(Path ruta, Plantilla p) {
+        var calendario = ProgramadorIncidenciasHistoricas.cargar(ruta);
+        calendario.validarMapa(p.anchoKm(), p.altoKm(), LocalDate.MIN, LocalDate.MAX);
+        Set<String> vehiculos = new HashSet<>();
+        for (var f : p.flota()) {
+            String prefijo = switch (f.tipo()) { case "AUTO" -> "TA"; case "MOTO" -> "TM"; case "BICICLETA" -> "TB";
+                default -> throw new IllegalArgumentException("Tipo de vehículo inválido"); };
+            for (int n = 1; n <= f.cantidad(); n++) vehiculos.add(prefijo + String.format(java.util.Locale.ROOT, "%02d", n));
+        }
+        calendario.validarVehiculos(vehiculos, LocalDate.MIN, LocalDate.MAX);
+    }
+
+    public synchronized List<ArchivoCalendario> subir(EscenarioSimulacion escenario,
+            List<MultipartFile> entradas, Plantilla plantilla) {
+        CalendariosCasoService destino = para(escenario);
+        Path temporal = null;
+        try {
+            temporal = Files.createTempDirectory("sisrap-calendario-");
+            for (Path anterior : destino.archivos()) {
+                Path copia = temporal.resolve(destino.directorio.relativize(anterior));
+                Files.createDirectories(copia.getParent());
+                Files.copy(anterior, copia);
+            }
+            new CalendariosCasoService(temporal.toString()).subir(entradas);
+            validarCompatibilidad(temporal, plantilla);
+            return destino.subir(entradas);
+        } catch (IOException e) {
+            throw new IllegalStateException("No se pudo validar el calendario", e);
+        } finally {
+            if (temporal != null) {
+                try (Stream<Path> arbol = Files.walk(temporal)) {
+                    for (Path archivo : arbol.sorted(java.util.Comparator.reverseOrder()).toList()) Files.deleteIfExists(archivo);
+                } catch (IOException ignored) { }
+            }
+        }
     }
 
     public synchronized List<ArchivoCalendario> listar() {

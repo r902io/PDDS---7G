@@ -1,6 +1,8 @@
 package pe.edu.pucp.sisrap.configuracionoperativa.api;
 
 import java.util.List;
+import pe.edu.pucp.sisrap.simulacion.dominio.EscenarioSimulacion;
+import pe.edu.pucp.sisrap.configuracionoperativa.infraestructura.JdbcConfiguracionEscenario;
 import java.util.NoSuchElementException;
 
 import org.springframework.http.HttpStatus;
@@ -33,23 +35,29 @@ public class CalendariosCasoController {
     private final CalendariosCasoService archivos;
     private final GestionarControlSimulacion control;
     private final MotorSimulacion motor;
+    private final JdbcConfiguracionEscenario escenarios;
 
     public CalendariosCasoController(CalendariosCasoService archivos,
-                                    GestionarControlSimulacion control, MotorSimulacion motor) {
+                                    GestionarControlSimulacion control, MotorSimulacion motor, JdbcConfiguracionEscenario escenarios) {
         this.archivos = archivos;
         this.control = control;
         this.motor = motor;
+        this.escenarios = escenarios;
     }
 
     @GetMapping
-    public List<ArchivoCalendario> listar() { return archivos.listar(); }
+    public List<ArchivoCalendario> listar(
+            @RequestParam(defaultValue = "OPERACION_DIARIA") EscenarioSimulacion escenario) {
+        return archivos.listar(escenario);
+    }
 
     @GetMapping("/programados")
     public CalendariosCasoService.Prevision programados(
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate desde,
-            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate hasta) {
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate hasta,
+            @RequestParam(defaultValue = "OPERACION_DIARIA") EscenarioSimulacion escenario) {
         try {
-            return archivos.prevision(desde, hasta);
+            return archivos.prevision(escenario, desde, hasta);
         } catch (IllegalArgumentException e) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
         }
@@ -58,12 +66,13 @@ public class CalendariosCasoController {
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<List<ArchivoCalendario>> subir(
             @RequestHeader(value = "Authorization", required = false) String autorizacion,
-            @RequestPart("archivos") List<MultipartFile> entradas) {
+            @RequestPart("archivos") List<MultipartFile> entradas,
+            @RequestParam(defaultValue = "OPERACION_DIARIA") EscenarioSimulacion escenario) {
         try {
             control.verificarControlador(token(autorizacion));
             synchronized (motor) {
                 comprobarSinCorrida();
-                return ResponseEntity.status(HttpStatus.CREATED).body(archivos.subir(entradas));
+                return ResponseEntity.status(HttpStatus.CREATED).body(archivos.subir(escenario, entradas, escenarios.consultar(escenario)));
             }
         } catch (ControlNoAutorizadoException e) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, e.getMessage());
@@ -79,12 +88,13 @@ public class CalendariosCasoController {
     @DeleteMapping("/{nombre}")
     public ResponseEntity<Void> eliminar(
             @RequestHeader(value = "Authorization", required = false) String autorizacion,
-            @PathVariable String nombre) {
+            @PathVariable String nombre,
+            @RequestParam(defaultValue = "OPERACION_DIARIA") EscenarioSimulacion escenario) {
         try {
             control.verificarControlador(token(autorizacion));
             synchronized (motor) {
                 comprobarSinCorrida();
-                archivos.eliminar(nombre);
+                archivos.eliminar(escenario, nombre);
             }
             return ResponseEntity.noContent().build();
         } catch (ControlNoAutorizadoException e) {

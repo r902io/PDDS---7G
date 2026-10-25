@@ -149,6 +149,22 @@ export class AnimadorVehiculos {
     return recorrer(unidad.transiciones[0], ahora).punto;
   }
 
+  /** Une lo que falta reproducir con la ruta confirmada de la última muestra. */
+  camino(id: string, ahora: number): Punto[] {
+    const unidad = this.unidades.get(id);
+    if (!unidad) return [];
+    this.podar(unidad, ahora);
+    const puntos: Punto[] = [];
+    const agregar = (p: Punto) => {
+      if (!puntos.length || !igual(puntos[puntos.length - 1], p)) puntos.push({ x: p.x, y: p.y });
+    };
+    unidad.transiciones.forEach((tr, i) => {
+      for (const p of i === 0 ? recorrer(tr, ahora).restantes : tr.puntos) agregar(p);
+    });
+    for (const p of unidad.muestra.caminoActual) agregar(p);
+    return puntos;
+  }
+
   reloj(ahora: number): string | null {
     if (!this.relojes.length) return null;
     const t = ahora - (this.animando ? this.retraso : 0);
