@@ -1,7 +1,8 @@
-import { useState, type FormEvent } from 'react';
-import type { CargaHistorica } from '../types/api';
+import { useEffect, useState, type FormEvent } from 'react';
+import type { CargaHistorica, EscenarioSimulacion } from '../types/api';
 import type { Consulta } from '../hooks/useConsulta';
 import { apiFetch, sesionGuardada, textoError } from '../services/apiClient';
+import { ESCENARIOS } from '../utilitarios/escenarios';
 import { Boton } from './ui/Boton';
 import { Modal } from './ui/Modal';
 import { ErrorCarga } from './ui/Avisos';
@@ -14,9 +15,13 @@ type ResultadoImportacion = {
 export function HistorialPedidos({
   consulta,
   bloqueado,
+  escenario,
+  alOcupado,
 }: {
   consulta: Consulta<CargaHistorica[]>;
   bloqueado: boolean;
+  escenario: EscenarioSimulacion;
+  alOcupado?: (ocupado: boolean) => void;
 }) {
   const [modalAbierto, setModalAbierto] = useState(false);
   const [archivos, setArchivos] = useState<File[]>([]);
@@ -25,7 +30,11 @@ export function HistorialPedidos({
   const [error, setError] = useState<string | null>(null);
   const [resultado, setResultado] = useState<ResultadoImportacion | null>(null);
   const cargas = (consulta.datos ?? []).slice().sort((a, b) => b.anio - a.anio || b.mes - a.mes);
-  const deshabilitado = bloqueado || procesando || eliminando !== null;
+  const deshabilitado = bloqueado || consulta.cargando || !!consulta.error || procesando || eliminando !== null;
+  useEffect(() => {
+    alOcupado?.(procesando || eliminando !== null);
+    return () => alOcupado?.(false);
+  }, [procesando, eliminando, alOcupado]);
 
   function validarSeleccion(): string | null {
     if (archivos.length === 0) return 'Selecciona al menos un archivo.';
@@ -63,7 +72,7 @@ export function HistorialPedidos({
     try {
       const cuerpo = new FormData();
       archivos.forEach(a => cuerpo.append('archivos', a));
-      const respuesta = await fetch('/api/pedidos/cargas-historicas', {
+      const respuesta = await fetch(`/api/pedidos/cargas-historicas?escenario=${escenario}`, {
         method: 'POST',
         headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
         body: cuerpo,
@@ -88,12 +97,12 @@ export function HistorialPedidos({
   async function eliminar(carga: CargaHistorica) {
     if (deshabilitado) return;
     const periodo = `${String(carga.mes).padStart(2, '0')}/${carga.anio}`;
-    if (!window.confirm(`¿Eliminar los ${carga.filas.toLocaleString('es-PE')} pedidos históricos de ${periodo}?`)) return;
+    if (!window.confirm(`¿Eliminar los ${carga.filas.toLocaleString('es-PE')} pedidos históricos de ${periodo} de ${ESCENARIOS[escenario].tituloCorto}?`)) return;
     setEliminando(carga.huella);
     setError(null);
     setResultado(null);
     try {
-      await apiFetch<void>(`/api/pedidos/cargas-historicas/${encodeURIComponent(carga.huella)}`, { metodo: 'DELETE' });
+      await apiFetch<void>(`/api/pedidos/cargas-historicas/${encodeURIComponent(carga.huella)}?escenario=${escenario}`, { metodo: 'DELETE' });
       consulta.recargar();
     } catch (e) {
       setError(textoError(e));
@@ -111,7 +120,7 @@ export function HistorialPedidos({
           variant="secundario"
           className="px-3 py-1 text-xs"
           disabled={deshabilitado}
-          disabledReason="Los históricos solo se pueden modificar fuera de una simulación."
+          disabledReason={consulta.cargando ? "Consultando los históricos del escenario." : consulta.error ? "Reintenta la consulta de históricos." : "Guarda la configuración y espera a que terminen la corrida y las operaciones en curso."}
           onClick={() => { setError(null); setModalAbierto(true); }}
         >
           Cargar históricos
@@ -119,7 +128,7 @@ export function HistorialPedidos({
       </div>
       {consulta.error && <ErrorCarga titulo="No se pudieron consultar los históricos" error={consulta.error} reintentar={consulta.recargar} />}
       {consulta.cargando && !consulta.datos && <p className="text-xs text-texto2">Consultando archivos cargados…</p>}
-      {consulta.datos && cargas.length === 0 && <p className="text-xs text-texto2">No hay pedidos históricos cargados.</p>}
+      {consulta.datos && cargas.length === 0 && <p className="text-xs text-texto2">No hay pedidos históricos cargados para este escenario.</p>}
       {cargas.length > 0 && (
         <ul className="space-y-1 max-h-36 overflow-y-auto">
           {cargas.map(carga => (
@@ -147,7 +156,7 @@ export function HistorialPedidos({
         isOpen={modalAbierto}
         onClose={() => { if (!procesando) { setModalAbierto(false); setError(null); } }}
         titulo="Cargar pedidos históricos"
-        subtitulo="Los archivos permiten estimar la demanda de las próximas simulaciones."
+        subtitulo={`Los archivos estimarán la demanda de ${ESCENARIOS[escenario].tituloCorto}.`}
       >
         <form onSubmit={importar} className="space-y-4">
           <label className="block text-sm text-texto">

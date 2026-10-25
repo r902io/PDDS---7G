@@ -17,7 +17,7 @@ public enum EscenarioSimulacion {
             "SIMULACION_5D",
             5,
             5,
-            Duration.ofMinutes(30)
+            Duration.ofMinutes(20)
     ),
 
     COLAPSO_LOGISTICO(

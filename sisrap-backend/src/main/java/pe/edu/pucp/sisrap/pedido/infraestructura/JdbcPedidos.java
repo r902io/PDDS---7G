@@ -13,7 +13,7 @@ import java.util.Optional;
 import javax.sql.DataSource;
 
 import org.springframework.stereotype.Repository;
-import pe.edu.pucp.sisrap.simulacion.infraestructura.EsquemaDatosSimulacion;
+import pe.edu.pucp.sisrap.simulacion.dominio.EscenarioSimulacion;
 
 import pe.edu.pucp.sisrap.pedido.dominio.CargaHistoricaPedidos;
 import pe.edu.pucp.sisrap.pedido.dominio.CargaHistoricaPreparada;
@@ -221,346 +221,124 @@ public class JdbcPedidos implements RepositorioPedidos {
     }
 
     @Override
-    public List<CargaHistoricaPedidos>
-    listarCargasHistoricas() {
-
-        String sql = """
-                SELECT
-                    huella,
-                    anio,
-                    mes,
-                    filas,
-                    fecha
-                FROM carga_pedidos_archivo
-                ORDER BY anio DESC,
-                         mes DESC,
-                         fecha DESC
-                """;
-
-        List<CargaHistoricaPedidos> salida =
-                new ArrayList<>();
-
-        try (
-                Connection cn =
-                        fuente.getConnection();
-                PreparedStatement ps =
-                        cn.prepareStatement(sql);
-                ResultSet rs =
-                        ps.executeQuery()
-        ) {
-
-            while (rs.next()) {
-
-                salida.add(
-                        new CargaHistoricaPedidos(
-                                rs.getString("huella"),
-                                rs.getInt("anio"),
-                                rs.getInt("mes"),
-                                rs.getInt("filas"),
-                                rs.getTimestamp("fecha")
-                                        .toLocalDateTime()
-                        )
-                );
-            }
-
-            return List.copyOf(salida);
-
-        } catch (SQLException e) {
-
-            throw new IllegalStateException(
-                    "No se pudieron consultar "
-                            + "las cargas históricas",
-                    e
-            );
-        }
-    }
-
-    @Override
-    public boolean existeCargaPeriodo(
-            int anio,
-            int mes
-    ) {
-
-        String sql = """
-                SELECT 1
-                FROM carga_pedidos_archivo
-                WHERE anio = ?
-                  AND mes = ?
-                LIMIT 1
-                """;
-
-        try (
-                Connection cn =
-                        fuente.getConnection();
-                PreparedStatement ps =
-                        cn.prepareStatement(sql)
-        ) {
-
-            ps.setInt(1, anio);
-            ps.setInt(2, mes);
-
-            try (ResultSet rs = ps.executeQuery()) {
-                return rs.next();
-            }
-
-        } catch (SQLException e) {
-
-            throw new IllegalStateException(
-                    "No se pudo verificar "
-                            + "la carga histórica",
-                    e
-            );
-        }
-    }
-
-    @Override
-    public void eliminarCargaHistorica(String huella) {
+    public List<CargaHistoricaPedidos> listarCargasHistoricas(EscenarioSimulacion escenario) {
         try (Connection cn = fuente.getConnection()) {
+            EsquemaHistoricosEscenario.asegurar(cn);
+            try (var ps = cn.prepareStatement("""
+                    SELECT huella,anio,mes,filas,fecha FROM carga_pedidos_escenario
+                    WHERE escenario=? ORDER BY anio DESC,mes DESC,fecha DESC
+                    """)) {
+                ps.setString(1, escenario.name());
+                List<CargaHistoricaPedidos> salida = new ArrayList<>();
+                try (var rs = ps.executeQuery()) {
+                    while (rs.next()) salida.add(new CargaHistoricaPedidos(rs.getString("huella"),
+                            rs.getInt("anio"),rs.getInt("mes"),rs.getInt("filas"),
+                            rs.getTimestamp("fecha").toLocalDateTime()));
+                }
+                return List.copyOf(salida);
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("No se pudieron consultar los históricos del escenario", e);
+        }
+    }
+
+    @Override
+    public boolean existeCargaPeriodo(EscenarioSimulacion escenario, int anio, int mes) {
+        try (Connection cn = fuente.getConnection()) {
+            EsquemaHistoricosEscenario.asegurar(cn);
+            return existePeriodo(cn, escenario, anio, mes);
+        } catch (SQLException e) {
+            throw new IllegalStateException("No se pudo verificar la carga histórica del escenario", e);
+        }
+    }
+
+    private boolean existePeriodo(Connection cn, EscenarioSimulacion escenario, int anio, int mes)
+            throws SQLException {
+        try (var ps = cn.prepareStatement("""
+                SELECT 1 FROM carga_pedidos_escenario WHERE escenario=? AND anio=? AND mes=?
+                """)) {
+            ps.setString(1, escenario.name()); ps.setInt(2, anio); ps.setInt(3, mes);
+            try (var rs = ps.executeQuery()) { return rs.next(); }
+        }
+    }
+
+    @Override
+    public void eliminarCargaHistorica(EscenarioSimulacion escenario, String huella) {
+        try (Connection cn = fuente.getConnection()) {
+            EsquemaHistoricosEscenario.asegurar(cn);
             cn.setAutoCommit(false);
             try {
-                int anio;
-                int mes;
-                try (PreparedStatement consulta = cn.prepareStatement(
-                        "SELECT anio, mes FROM carga_pedidos_archivo WHERE huella = ? FOR UPDATE")) {
-                    consulta.setString(1, huella);
-                    try (ResultSet rs = consulta.executeQuery()) {
-                        if (!rs.next()) {
-                            throw new java.util.NoSuchElementException("No existe la carga histórica solicitada");
-                        }
-                        anio = rs.getInt("anio");
-                        mes = rs.getInt("mes");
-                    }
-                }
-                java.time.LocalDateTime inicio = java.time.YearMonth.of(anio, mes)
-                        .atDay(1).atStartOfDay();
-                java.time.LocalDateTime siguiente = java.time.YearMonth.of(anio, mes)
-                        .plusMonths(1).atDay(1).atStartOfDay();
-                try (PreparedStatement borrarPedidos = cn.prepareStatement(
-                        "DELETE FROM pedido_historico WHERE fecha_llegada >= ? AND fecha_llegada < ?")) {
-                    borrarPedidos.setTimestamp(1, Timestamp.valueOf(inicio));
-                    borrarPedidos.setTimestamp(2, Timestamp.valueOf(siguiente));
-                    borrarPedidos.executeUpdate();
-                }
-                try (PreparedStatement borrarCarga = cn.prepareStatement(
-                        "DELETE FROM carga_pedidos_archivo WHERE huella = ?")) {
-                    borrarCarga.setString(1, huella);
-                    if (borrarCarga.executeUpdate() != 1) {
-                        throw new java.util.NoSuchElementException("No existe la carga histórica solicitada");
-                    }
+                EsquemaHistoricosEscenario.bloquear(cn, escenario);
+                try (var ps = cn.prepareStatement(
+                        "DELETE FROM carga_pedidos_escenario WHERE escenario=? AND huella=?")) {
+                    ps.setString(1, escenario.name()); ps.setString(2, huella);
+                    if (ps.executeUpdate() != 1)
+                        throw new java.util.NoSuchElementException("No existe esa carga en el escenario seleccionado");
                 }
                 cn.commit();
-            } catch (Exception e) {
-                cn.rollback();
-                throw e;
-            } finally {
-                cn.setAutoCommit(true);
-            }
+            } catch (SQLException | RuntimeException e) { cn.rollback(); throw e; }
         } catch (SQLException e) {
-            throw new IllegalStateException("No se pudo eliminar la carga histórica", e);
+            throw new IllegalStateException("No se pudo eliminar el histórico del escenario", e);
         }
     }
 
     @Override
     public List<CargaHistoricaPedidos> guardarCargasHistoricas(
-            List<CargaHistoricaPreparada> cargas
-    ) {
-
-        if (cargas == null || cargas.isEmpty()) {
-            throw new IllegalArgumentException(
-                    "Debe existir al menos una carga para guardar"
-            );
-        }
-
+            EscenarioSimulacion escenario, List<CargaHistoricaPreparada> cargas) {
+        if (cargas == null || cargas.isEmpty())
+            throw new IllegalArgumentException("Debe existir al menos una carga para guardar");
         try (Connection cn = fuente.getConnection()) {
-
-            EsquemaDatosSimulacion.asegurar(cn);
+            EsquemaHistoricosEscenario.asegurar(cn);
             cn.setAutoCommit(false);
-
             try {
-
-                /*
-                 * Los archivos de ventas son mensuales. Antes de insertar,
-                 * bloqueamos/verificamos todos los periodos para evitar que
-                 * exista más de un archivo oficial para el mismo mes.
-                 */
-                for (CargaHistoricaPreparada carga : cargas) {
-
-                    try (PreparedStatement ps =
-                                 cn.prepareStatement("""
-                                         SELECT huella
-                                         FROM carga_pedidos_archivo
-                                         WHERE anio = ?
-                                           AND mes = ?
-                                         LIMIT 1
-                                         FOR UPDATE
-                                         """)) {
-
-                        ps.setInt(1, carga.anio());
-                        ps.setInt(2, carga.mes());
-
-                        try (ResultSet rs = ps.executeQuery()) {
-
-                            if (rs.next()) {
-                                throw new IllegalArgumentException(
-                                        "Ya existen pedidos históricos "
-                                                + "cargados para "
-                                                + carga.anio()
-                                                + "-"
-                                                + String.format(
-                                                        "%02d",
-                                                        carga.mes()
-                                                )
-                                );
-                            }
+                EsquemaHistoricosEscenario.bloquear(cn, escenario);
+                for (var carga : cargas) {
+                    if (existePeriodo(cn, escenario, carga.anio(), carga.mes()))
+                        throw new IllegalArgumentException("Ya existen pedidos históricos para "
+                                + carga.anio() + "-" + String.format("%02d", carga.mes())
+                                + " en este escenario");
+                }
+                List<CargaHistoricaPedidos> resultado = new ArrayList<>();
+                for (var carga : cargas) {
+                    try (var ps = cn.prepareStatement("""
+                            INSERT INTO carga_pedidos_escenario(escenario,huella,anio,mes,filas)
+                            VALUES (?,?,?,?,?)
+                            """)) {
+                        ps.setString(1, escenario.name()); ps.setString(2, carga.huella());
+                        ps.setInt(3, carga.anio()); ps.setInt(4, carga.mes());
+                        ps.setInt(5, carga.pedidos().size()); ps.executeUpdate();
+                    }
+                    try (var ps = cn.prepareStatement("""
+                            INSERT INTO pedido_historico_escenario
+                                (escenario,huella,id_cliente,cantidad_qq,prioridad,horas_limite,
+                                 fecha_llegada,ubicacion_x,ubicacion_y) VALUES (?,?,?,?,?,?,?,?,?)
+                            """)) {
+                        int lote = 0;
+                        for (PedidoHistoricoImportado pedido : carga.pedidos()) {
+                            ps.setString(1, escenario.name()); ps.setString(2, carga.huella());
+                            ps.setString(3, pedido.cliente()); ps.setInt(4, pedido.cantidad());
+                            ps.setString(5, pedido.prioridad().name()); ps.setInt(6, pedido.horasLimite());
+                            ps.setTimestamp(7, Timestamp.valueOf(pedido.fechaLlegada()));
+                            ps.setInt(8, pedido.x()); ps.setInt(9, pedido.y()); ps.addBatch();
+                            if (++lote == 1000) { ps.executeBatch(); ps.clearBatch(); lote = 0; }
+                        }
+                        if (lote > 0) ps.executeBatch();
+                    }
+                    try (var ps = cn.prepareStatement(
+                            "SELECT fecha FROM carga_pedidos_escenario WHERE escenario=? AND huella=?")) {
+                        ps.setString(1, escenario.name()); ps.setString(2, carga.huella());
+                        try (var rs = ps.executeQuery()) {
+                            if (!rs.next()) throw new SQLException("No se pudo recuperar la carga importada");
+                            resultado.add(new CargaHistoricaPedidos(carga.huella(), carga.anio(), carga.mes(),
+                                    carga.pedidos().size(), rs.getTimestamp(1).toLocalDateTime()));
                         }
                     }
                 }
-
-                String insertarCarga = """
-                        INSERT INTO carga_pedidos_archivo(
-                            huella,
-                            anio,
-                            mes,
-                            filas
-                        )
-                        VALUES (?, ?, ?, ?)
-                        """;
-
-                String insertarPedido = """
-                        INSERT INTO pedido_historico(
-                            id_cliente,
-                            cantidad_qq,
-                            prioridad,
-                            horas_limite,
-                            fecha_llegada,
-                            ubicacion_x,
-                            ubicacion_y
-                        )
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                        """;
-
-                for (CargaHistoricaPreparada carga : cargas) {
-
-                    try (PreparedStatement ps =
-                                 cn.prepareStatement(insertarCarga)) {
-
-                        ps.setString(1, carga.huella());
-                        ps.setInt(2, carga.anio());
-                        ps.setInt(3, carga.mes());
-                        ps.setInt(4, carga.pedidos().size());
-                        ps.executeUpdate();
-                    }
-
-                    try (PreparedStatement ps =
-                                 cn.prepareStatement(insertarPedido)) {
-
-                        for (PedidoHistoricoImportado pedido :
-                                carga.pedidos()) {
-
-                            ps.setString(
-                                    1,
-                                    pedido.cliente()
-                            );
-
-                            ps.setInt(
-                                    2,
-                                    pedido.cantidad()
-                            );
-
-                            ps.setString(
-                                    3,
-                                    pedido.prioridad().name()
-                            );
-
-                            ps.setInt(
-                                    4,
-                                    pedido.horasLimite()
-                            );
-
-                            ps.setTimestamp(
-                                    5,
-                                    Timestamp.valueOf(
-                                            pedido.fechaLlegada()
-                                    )
-                            );
-
-                            ps.setInt(
-                                    6,
-                                    pedido.x()
-                            );
-
-                            ps.setInt(
-                                    7,
-                                    pedido.y()
-                            );
-
-                            ps.addBatch();
-                        }
-
-                        ps.executeBatch();
-                    }
-                }
-
-                List<CargaHistoricaPedidos> resultado =
-                        new ArrayList<>();
-
-                for (CargaHistoricaPreparada carga : cargas) {
-
-                    try (PreparedStatement ps =
-                                 cn.prepareStatement("""
-                                         SELECT fecha
-                                         FROM carga_pedidos_archivo
-                                         WHERE huella = ?
-                                         """)) {
-
-                        ps.setString(1, carga.huella());
-
-                        try (ResultSet rs = ps.executeQuery()) {
-
-                            if (!rs.next()) {
-                                throw new IllegalStateException(
-                                        "No se pudo recuperar la carga "
-                                                + carga.nombreArchivo()
-                                );
-                            }
-
-                            resultado.add(
-                                    new CargaHistoricaPedidos(
-                                            carga.huella(),
-                                            carga.anio(),
-                                            carga.mes(),
-                                            carga.pedidos().size(),
-                                            rs.getTimestamp("fecha")
-                                                    .toLocalDateTime()
-                                    )
-                            );
-                        }
-                    }
-                }
-
                 cn.commit();
                 return List.copyOf(resultado);
-
-            } catch (RuntimeException | SQLException e) {
-
-                cn.rollback();
-
-                if (e instanceof RuntimeException runtime) {
-                    throw runtime;
-                }
-
-                throw new IllegalStateException(
-                        "No se pudieron importar los archivos históricos",
-                        e
-                );
-            }
-
+            } catch (SQLException | RuntimeException e) { cn.rollback(); throw e; }
         } catch (SQLException e) {
-
-            throw new IllegalStateException(
-                    "No se pudieron importar los archivos históricos",
-                    e
-            );
+            throw new IllegalStateException("No se pudieron importar los históricos del escenario", e);
         }
     }
 

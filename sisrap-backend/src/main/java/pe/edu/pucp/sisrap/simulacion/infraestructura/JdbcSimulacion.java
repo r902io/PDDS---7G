@@ -1,6 +1,5 @@
 package pe.edu.pucp.sisrap.simulacion.infraestructura;
 
-import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -66,6 +65,7 @@ public class JdbcSimulacion implements RepositorioSimulacion {
     private static final long BLOQUE_IDS_SINTETICOS = 1_000_000L;
 
     private final DataSource fuente;
+    private final pe.edu.pucp.sisrap.configuracionoperativa.infraestructura.JdbcConfiguracionEscenario escenarios;
 
     @Value("${sisrap.simulacion.archivos-dir:${SISRAP_DATOS_DIR:datos-caso}}")
     private String directorioHistoricos = "";
@@ -94,8 +94,10 @@ public class JdbcSimulacion implements RepositorioSimulacion {
                                 LocalDateTime reloj, ResumenPedidosSimulacion valor) {}
     private ResumenCache resumenCache;
 
-    public JdbcSimulacion(DataSource fuente) {
+    public JdbcSimulacion(DataSource fuente,
+            pe.edu.pucp.sisrap.configuracionoperativa.infraestructura.JdbcConfiguracionEscenario escenarios) {
         this.fuente = fuente;
+        this.escenarios = escenarios;
     }
 
     @Override
@@ -105,6 +107,7 @@ public class JdbcSimulacion implements RepositorioSimulacion {
             throw new IllegalArgumentException("La configuración de simulación es obligatoria");
         }
 
+        escenarios.asegurar();
         try (Connection cn = fuente.getConnection()) {
             EsquemaDatosSimulacion.asegurar(cn);
             cn.setAutoCommit(false);
@@ -130,6 +133,7 @@ public class JdbcSimulacion implements RepositorioSimulacion {
                     EsquemaDatosSimulacion.archivar(cn, anterior);
                 }
                 EsquemaDatosSimulacion.limpiarOperacion(cn);
+                escenarios.aplicar(cn, configuracion.escenario());
 
                 try (PreparedStatement ps = cn.prepareStatement("""
                         UPDATE almacen SET stock_actual=capacidad_maxima WHERE tipo='INTERMEDIO'
@@ -162,7 +166,8 @@ public class JdbcSimulacion implements RepositorioSimulacion {
         mantenimientosProgramados.clear();
         if (directorioHistoricos == null || directorioHistoricos.isBlank()) return;
         programadorIncidencias = ProgramadorIncidenciasHistoricas.cargar(
-                Path.of(directorioHistoricos.trim()));
+                pe.edu.pucp.sisrap.configuracionoperativa.aplicacion.CalendariosCasoService
+                        .directorioEscenario(directorioHistoricos, configuracion.escenario()));
         try (PreparedStatement ps = cn.prepareStatement("SELECT ancho_km,alto_km FROM ciudad");
              ResultSet rs = ps.executeQuery()) {
             if (!rs.next()) throw new SQLException("No se encontró la ciudad configurada");
@@ -2153,56 +2158,60 @@ public class JdbcSimulacion implements RepositorioSimulacion {
                        fecha_llegada,
                        ubicacion_x,
                        ubicacion_y
-                FROM pedido_historico
+                FROM pedido_historico_escenario
+                WHERE escenario=?
                 ORDER BY fecha_llegada, id_historico
-                """);
-             ResultSet rs = ps.executeQuery()) {
+                """)) {
+            ps.setString(1, configuracion.escenario().name());
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    LocalDateTime llegada =
+                            rs.getTimestamp("fecha_llegada").toLocalDateTime();
 
-            while (rs.next()) {
-                LocalDateTime llegada =
-                        rs.getTimestamp("fecha_llegada").toLocalDateTime();
+                    PlantillaHistorica plantilla = new PlantillaHistorica(
+                            rs.getString("id_cliente"),
+                            rs.getInt("cantidad_qq"),
+                            TipoPrioridad.valueOf(rs.getString("prioridad")),
+                            rs.getInt("horas_limite"),
+                            llegada.toLocalTime(),
+                            rs.getInt("ubicacion_x"),
+                            rs.getInt("ubicacion_y")
+                    );
 
-                PlantillaHistorica plantilla = new PlantillaHistorica(
-                        rs.getString("id_cliente"),
-                        rs.getInt("cantidad_qq"),
-                        TipoPrioridad.valueOf(rs.getString("prioridad")),
-                        rs.getInt("horas_limite"),
-                        llegada.toLocalTime(),
-                        rs.getInt("ubicacion_x"),
-                        rs.getInt("ubicacion_y")
-                );
-
-                todas.add(plantilla);
-                porDia.computeIfAbsent(
-                                llegada.toLocalDate(),
-                                ignorado -> new ArrayList<>()
-                        )
-                        .add(plantilla);
+                    todas.add(plantilla);
+                    porDia.computeIfAbsent(
+                                    llegada.toLocalDate(),
+                                    ignorado -> new ArrayList<>()
+                            )
+                            .add(plantilla);
+                }
             }
         }
 
         if (todas.isEmpty()) {
             throw new IllegalArgumentException(
-                    "No existen pedidos históricos. Cargue al menos un archivo de ventas antes de simular"
+                    "No existen pedidos históricos para este escenario. Cargue al menos un archivo de ventas en sus Datos del caso"
             );
         }
 
         List<Integer> cantidadesDiarias = new ArrayList<>();
         try (PreparedStatement ps = cn.prepareStatement(
-                "SELECT DISTINCT anio,mes FROM carga_pedidos_archivo ORDER BY anio,mes");
-             ResultSet rs = ps.executeQuery()) {
-            while (rs.next()) {
-                java.time.YearMonth periodo = java.time.YearMonth.of(rs.getInt(1), rs.getInt(2));
-                for (int d = 1; d <= periodo.lengthOfMonth(); d++) {
-                    cantidadesDiarias.add(porDia.getOrDefault(
-                            periodo.atDay(d), List.of()).size());
+                "SELECT anio,mes FROM carga_pedidos_escenario WHERE escenario=? ORDER BY anio,mes")) {
+            ps.setString(1, configuracion.escenario().name());
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    java.time.YearMonth periodo = java.time.YearMonth.of(rs.getInt(1), rs.getInt(2));
+                    for (int d = 1; d <= periodo.lengthOfMonth(); d++) {
+                        cantidadesDiarias.add(porDia.getOrDefault(
+                                periodo.atDay(d), List.of()).size());
+                    }
                 }
             }
         }
-        // Compatibilidad: una instalación antigua pudo insertar datos sin registrar carga.
         if (cantidadesDiarias.isEmpty()) {
             porDia.values().forEach(dia -> cantidadesDiarias.add(dia.size()));
         }
+
         cantidadesDiarias.sort(Integer::compare);
 
         int mediana = cantidadesDiarias.get(cantidadesDiarias.size() / 2);
