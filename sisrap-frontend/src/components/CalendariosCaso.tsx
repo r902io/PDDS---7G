@@ -20,10 +20,11 @@ type Prevision = {
   mantenimientos: { idVehiculo: string; inicio: string; fin: string }[];
 };
 
-function finalPeriodo(fecha: string, escenario: EscenarioSimulacion): string {
+function finalPeriodo(fecha: string, escenario: EscenarioSimulacion, hora: string): string {
   const date = new Date(`${fecha}T12:00:00Z`);
   if (Number.isNaN(date.getTime())) return fecha;
   date.setUTCDate(date.getUTCDate() + (escenario === 'OPERACION_DIARIA' ? 0 : escenario === 'SIMULACION_CINCO_DIAS' ? 4 : 29));
+  if (hora && hora !== '00:00') date.setUTCDate(date.getUTCDate() + 1);
   return date.toISOString().slice(0, 10);
 }
 
@@ -36,9 +37,10 @@ function fechaHora(iso: string): string {
   return `${fechaCorta(iso)} ${iso.slice(11, 16)}`;
 }
 
-export function CalendariosCaso({ bloqueado, fechaInicio, escenario }: {
+export function CalendariosCaso({ bloqueado, fechaInicio, horaInicio = '00:00', escenario }: {
   bloqueado: boolean;
   fechaInicio: string;
+  horaInicio?: string;
   escenario: EscenarioSimulacion;
 }) {
   const [abierto, setAbierto] = useState<TipoCalendario | null>(null);
@@ -46,7 +48,7 @@ export function CalendariosCaso({ bloqueado, fechaInicio, escenario }: {
   const [procesando, setProcesando] = useState(false);
   const [eliminando, setEliminando] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const fin = finalPeriodo(fechaInicio, escenario);
+  const fin = finalPeriodo(fechaInicio, escenario, horaInicio);
   const periodoValido = /^\d{4}-\d{2}-\d{2}$/.test(fechaInicio) && /^\d{4}-\d{2}-\d{2}$/.test(fin);
   const consulta = useConsulta(s => apiFetch<ArchivoCalendario[]>('/api/datos-caso/calendarios', { autenticar: false, senal: s }), 'calendarios-archivos');
   const prevista = useConsulta(s => periodoValido ? apiFetch<Prevision>(

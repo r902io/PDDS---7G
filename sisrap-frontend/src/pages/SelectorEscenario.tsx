@@ -98,6 +98,7 @@ export function SelectorEscenario() {
   const { snapshot, sesion, iniciar, accionEnCurso, reintentarSesion } = useSimulacion();
   const [escenario, setEscenario] = useState<EscenarioSimulacion>('OPERACION_DIARIA');
   const [fechaInicio, setFechaInicio] = useState(hoyLocal());
+  const [horaInicio, setHoraInicio] = useState('00:00');
   const [errorInicio, setErrorInicio] = useState<string | null>(null);
   const [errorGuardar, setErrorGuardar] = useState<string | null>(null);
   const [guardando, setGuardando] = useState(false);
@@ -170,6 +171,7 @@ export function SelectorEscenario() {
   }
 
   const fechaValida = /^\d{4}-\d{2}-\d{2}$/.test(fechaInicio);
+  const horaValida = /^([01]\d|2[0-3]):[0-5]\d$/.test(horaInicio);
   const motivoBloqueo =
     sesion.fase === 'CARGANDO' ? 'Preparando la sesión.' :
     sesion.fase === 'ERROR' ? 'No hay una sesión disponible para iniciar.' :
@@ -180,13 +182,14 @@ export function SelectorEscenario() {
     errorValidacion ??
     (historicos.error || !historicos.datos ? 'No se pudo verificar la carga histórica.' :
     historicos.datos.length === 0 ? 'Carga al menos un mes histórico en Datos del caso.' :
-    !fechaValida ? 'Indica una fecha de inicio válida.' : undefined);
+    !fechaValida ? 'Indica una fecha de inicio válida.' :
+    !horaValida ? 'Indica una hora de inicio válida.' : undefined);
 
   async function alIniciar() {
     if (motivoBloqueo) return;
     setErrorInicio(null);
     const semilla = crypto.getRandomValues(new Uint32Array(1))[0] & 0x7fffffff;
-    const resultado = await iniciar(escenario, fechaInicio, semilla);
+    const resultado = await iniciar(escenario, fechaInicio, semilla, horaInicio);
     if (resultado.ok || resultado.corridaEnCurso) navegar({ nombre: 'operacion' });
     else setErrorInicio(resultado.mensaje);
   }
@@ -247,9 +250,13 @@ export function SelectorEscenario() {
         </section>
 
         <section className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <Panel titulo="2 · Inicio de la corrida" subtitulo="Indica la fecha desde la que comenzará la simulación.">
-            <Campo label="Fecha de inicio" type="date" value={fechaInicio}
-              onChange={e => setFechaInicio(e.target.value)} nota="La corrida empieza a las 00:00" required />
+          <Panel titulo="2 · Inicio de la corrida" subtitulo="Indica la fecha y hora desde las que comenzará la simulación.">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Campo label="Fecha de inicio" type="date" value={fechaInicio}
+                onChange={e => setFechaInicio(e.target.value)} required />
+              <Campo label="Hora de inicio" type="time" value={horaInicio} step={60}
+                onChange={e => setHoraInicio(e.target.value)} required />
+            </div>
             <div className="mt-4 flex flex-col items-start gap-2">
               <Boton variant="primario" icono={<IconoIniciar tamano={16} />} onClick={alIniciar}
                 disabled={motivoBloqueo != null} disabledReason={motivoBloqueo}
@@ -333,7 +340,7 @@ export function SelectorEscenario() {
               {consulta.error && !configuracionBackend &&
                 <ErrorCarga titulo="No se pudo consultar la configuración" error={consulta.error} reintentar={consulta.recargar} />}
               <HistorialPedidos consulta={historicos} bloqueado={activa || guardando} />
-              <CalendariosCaso bloqueado={activa || guardando} fechaInicio={fechaInicio} escenario={escenario} />
+              <CalendariosCaso bloqueado={activa || guardando} fechaInicio={fechaInicio} horaInicio={horaInicio} escenario={escenario} />
               <p className="text-xs text-texto2 border-l-2 border-azul pl-2.5 leading-relaxed">
                 Retícula de {mapa.datos ? `${mapa.datos.anchoKm} × ${mapa.datos.altoKm} km` : 'la ciudad'} con calles de doble sentido y turnos con cambio a las 07:00, 15:00 y 23:00.
               </p>

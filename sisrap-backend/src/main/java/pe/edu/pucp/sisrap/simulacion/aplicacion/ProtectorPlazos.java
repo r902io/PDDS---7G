@@ -1,64 +1,34 @@
 package pe.edu.pucp.sisrap.simulacion.aplicacion;
 
+import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Random;
-import java.util.Set;
-
-import pe.edu.pucp.sisrap.pedido.dominio.Pedido;
-import pe.edu.pucp.sisrap.planificador.dominio.construccion.ConstructorVoraz;
 import pe.edu.pucp.sisrap.planificador.dominio.modelo.ContextoPlanificacion;
+import pe.edu.pucp.sisrap.planificador.dominio.modelo.Ruta;
 import pe.edu.pucp.sisrap.planificador.dominio.modelo.Solucion;
 import pe.edu.pucp.sisrap.planificador.dominio.objetivo.FuncionObjetivo;
 
-/**
- * Salvaguarda operativa: GA sigue siendo el optimizador y mantiene intacta su
- * funcion objetivo. Si GA deja un pedido urgente sin ruta y una construccion
- * EDF consigue cubrirlo fisicamente sin retrasos, se usa esa alternativa.
- * Nunca se falsean plazos, sobrecargan vehiculos ni se omiten bloqueos.
- */
+/** Puerta de validación del despacho; GA conserva la decisión de asignación. */
 public final class ProtectorPlazos {
-
     private ProtectorPlazos() { }
+    public static Solucion proteger(ContextoPlanificacion contexto, Solucion solucion,
+                                    FuncionObjetivo objetivo, long semilla) {
+        objetivo.actualizarContexto(contexto);
+        objetivo.calcular(solucion);
+        if (solucion.getValorV() == 0 && solucion.getPedidosTardios() == 0) return solucion;
 
-    public static Solucion proteger(ContextoPlanificacion contexto,
-                                    Solucion solucionGa,
-                                    FuncionObjetivo objetivo,
-                                    long semilla) {
-        objetivo.calcular(solucionGa);
-        if (solucionGa.getPedidosNoAsignados().isEmpty()) return solucionGa;
-
-        Solucion alternativa = ConstructorVoraz.construir(
-                contexto, new Random(semilla ^ 0x51A51A5L), true);
-        objetivo.calcular(alternativa);
-        if (!alternativa.isEsFactible() || alternativa.getValorR() > 1e-9) {
-            return solucionGa;
+        Solucion segura = new Solucion();
+        var rutas = new ArrayList<>(solucion.getRutas().stream()
+                .filter(r -> !r.getSecuenciaPedidos().isEmpty()).toList());
+        rutas.sort(Comparator.comparing(r -> r.getSecuenciaPedidos().stream()
+                .map(p -> p.getFechaLimite()).min(Comparator.naturalOrder()).orElseThrow()));
+        for (Ruta ruta : rutas) {
+            Solucion candidata = segura.copiar();
+            candidata.getRutas().add(ruta.copiar());
+            objetivo.calcular(candidata);
+            if (candidata.getValorV() == 0 && candidata.getPedidosTardios() == 0)
+                segura = candidata;
         }
-        if (!solucionGa.isEsFactible() || solucionGa.getValorR() > 1e-9) {
-            return alternativa;
-        }
-
-        List<Pedido> criticos = contexto.getPedidos().stream()
-                .sorted(Comparator.comparing(Pedido::getFechaLimite)
-                        .thenComparing(Pedido::getIdPedido))
-                .toList();
-        Set<Long> ga = asignados(solucionGa);
-        Set<Long> edf = asignados(alternativa);
-        for (Pedido pedido : criticos) {
-            boolean cubreGa = ga.contains(pedido.getIdPedido());
-            boolean cubreEdf = edf.contains(pedido.getIdPedido());
-            if (cubreGa != cubreEdf) {
-                return cubreEdf ? alternativa : solucionGa;
-            }
-        }
-        return solucionGa;
-    }
-
-    private static Set<Long> asignados(Solucion solucion) {
-        Set<Long> ids = new HashSet<>();
-        solucion.getRutas().forEach(ruta -> ruta.getSecuenciaPedidos()
-                .forEach(pedido -> ids.add(pedido.getIdPedido())));
-        return ids;
+        objetivo.calcular(segura);
+        return segura;
     }
 }

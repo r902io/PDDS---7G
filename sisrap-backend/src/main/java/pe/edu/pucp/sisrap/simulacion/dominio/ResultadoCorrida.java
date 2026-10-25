@@ -37,7 +37,13 @@ public record ResultadoCorrida(
     public record PedidoRegistrado(
             long idPedido, String cliente, int cantidad, String prioridad,
             LocalDateTime fechaRegistro, LocalDateTime fechaArribo, LocalDateTime fechaEntrega,
-            String estado, int x, int y) { }
+            String estado, int x, int y, LocalDateTime fechaLimite, double retrasoMinutos) {
+        public PedidoRegistrado(long idPedido,String cliente,int cantidad,String prioridad,
+                LocalDateTime fechaRegistro,LocalDateTime fechaArribo,LocalDateTime fechaEntrega,
+                String estado,int x,int y) {
+            this(idPedido,cliente,cantidad,prioridad,fechaRegistro,fechaArribo,fechaEntrega,estado,x,y,null,0);
+        }
+    }
 
     public record IncidenciaRegistrada(
             long idIncidencia, String tipo, LocalDateTime fechaOcurrencia,

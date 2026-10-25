@@ -8,6 +8,8 @@ import {
   type Proyeccion,
   type RutaKm,
 } from '../components/mapa/geometria';
+import { useFlujoVisual } from '../estado/SimulacionContext';
+import { AnimadorVehiculos } from '../components/mapa/animacionVehiculos';
 import { colorDeVehiculo, estaAveriado, estaEnMantenimiento, tipoDesdeCodigo } from '../utilitarios/vehiculos';
 
 /**
@@ -51,6 +53,7 @@ interface Opciones {
   alSeleccionar: (s: Seleccion) => void;
   /** Atenúa todo el contenido (datos no vigentes). */
   atenuado: boolean;
+  animar: boolean;
 }
 
 const MARGEN = 34;
@@ -67,10 +70,12 @@ interface Grupo {
 export function useMapCanvas(op: Opciones) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const vehiculosCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const anteriores = useRef<VehiculoSnapshot[] | null>(null);
-  const corridaAnterior = useRef<number | null>(null);
-  const ultimaRecepcion = useRef<number | null>(null);
-  const transiciones = useRef<Map<string, Transicion>>(new Map());
+  const animador = useRef(new AnimadorVehiculos());
+  const flujo = useFlujoVisual();
+  const despertar = useRef<(() => void) | null>(null);
+  const relojVisualRef = useRef<HTMLSpanElement | null>(null);
+  const ultimaMuestra = useRef<unknown>(null);
+  const animacionHabilitada = useRef(false);
   const gruposAnimados = useRef<Grupo[]>([]);
   const [tamano, setTamano] = useState({ w: 0, h: 0 });
   /** zoom multiplica la escala base; x/y desplazan el centro de la ciudad en px. */
@@ -150,9 +155,10 @@ export function useMapCanvas(op: Opciones) {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.round(tamano.w * dpr);
-    canvas.height = Math.round(tamano.h * dpr);
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const ancho = Math.round(tamano.w * dpr), alto = Math.round(tamano.h * dpr);
+    if (canvas.width !== ancho) canvas.width = ancho;
+    if (canvas.height !== alto) canvas.height = alto;
     canvas.style.width = `${tamano.w}px`;
     canvas.style.height = `${tamano.h}px`;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -279,59 +285,50 @@ export function useMapCanvas(op: Opciones) {
   }, [tamano, proy, rutas, grupos, op.almacenes, op.bloqueos, op.pedidos, op.seleccion, op.atenuado, enfocado, vehiculoPorId, anchoKm, altoKm]);
 
   useEffect(() => {
-    const ahora = performance.now();
-    if (corridaAnterior.current !== op.corridaId) {
-      anteriores.current = null;
-      ultimaRecepcion.current = null;
-      corridaAnterior.current = op.corridaId;
-    }
-    const previos = anteriores.current;
-    const intervalo = ultimaRecepcion.current == null ? 500 : ahora - ultimaRecepcion.current;
-    const duracion = Math.max(150, Math.min(650, intervalo * 0.88));
-    const nuevos = new Map<string, Transicion>();
-    const porId = new Map(previos?.map((v) => [v.idVehiculo, v]) ?? []);
-    const cerrados = nodosCerrados(op.bloqueos);
-
-    for (const actual of op.vehiculos) {
-      const previo = porId.get(actual.idVehiculo);
-      if (!previo || (previo.x === actual.x && previo.y === actual.y)
-          || estaAveriado(actual.estado) || estaEnMantenimiento(actual.estado)) continue;
-      const camino = caminoRecorrido(previo, actual, cerrados);
-      if (camino) nuevos.set(actual.idVehiculo, { puntos: camino, inicio: ahora, duracion });
-    }
-
-    transiciones.current = nuevos;
-    anteriores.current = op.vehiculos;
-    ultimaRecepcion.current = ahora;
-  }, [op.vehiculos, op.corridaId]);
+    const recibir = () => {
+      const s = flujo?.actual;
+      const reducir = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const animar = (s ? s.estado === 'EJECUTANDO' : op.animar)
+        && !op.atenuado && !document.hidden && !reducir;
+      const muestra = s ?? op.vehiculos;
+      if (ultimaMuestra.current === muestra && animar && animacionHabilitada.current) return;
+      animacionHabilitada.current = animar;
+      ultimaMuestra.current = muestra;
+      animador.current.actualizar(s?.vehiculos ?? op.vehiculos, s?.idSimulacion ?? op.corridaId,
+        performance.now(), animar, s?.relojSimulado);
+      despertar.current?.();
+    };
+    recibir();
+    flujo?.oyentes.add(recibir);
+    return () => { flujo?.oyentes.delete(recibir); };
+  }, [flujo, op.vehiculos, op.corridaId, op.animar, op.atenuado]);
 
   useEffect(() => {
     const canvas = vehiculosCanvasRef.current;
     if (!canvas || tamano.w === 0 || tamano.h === 0) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.round(tamano.w * dpr);
-    canvas.height = Math.round(tamano.h * dpr);
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const ancho = Math.round(tamano.w * dpr), alto = Math.round(tamano.h * dpr);
+    if (canvas.width !== ancho) canvas.width = ancho;
+    if (canvas.height !== alto) canvas.height = alto;
     canvas.style.width = `${tamano.w}px`;
     canvas.style.height = `${tamano.h}px`;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const cerrados = nodosCerrados(op.bloqueos);
     let frame = 0;
 
     const dibujar = (ahora: number) => {
+      frame = 0;
+      const reloj = animador.current.reloj(ahora);
+      if (relojVisualRef.current && reloj) {
+        const texto = 'Hora del mapa: ' + reloj.slice(11, 19);
+        if (relojVisualRef.current.textContent !== texto) relojVisualRef.current.textContent = texto;
+      }
       ctx.clearRect(0, 0, tamano.w, tamano.h);
       const posiciones = new Map<string, { x: number; y: number }>();
-      let activo = false;
+      const activo = animador.current.enMovimiento(ahora);
       for (const v of op.vehiculos) {
-        const tr = transiciones.current.get(v.idVehiculo);
-        if (tr && !tr.puntos.some((n) => cerrados.has(`${n.x},${n.y}`))) {
-          const avance = Math.min(1, Math.max(0, (ahora - tr.inicio) / tr.duracion));
-          posiciones.set(v.idVehiculo, posicionEnCamino(tr.puntos, avance));
-          if (avance < 1) activo = true;
-        } else {
-          posiciones.set(v.idVehiculo, { x: v.x, y: v.y });
-        }
+        posiciones.set(v.idVehiculo, animador.current.posicion(v.idVehiculo, ahora) ?? { x: v.x, y: v.y });
       }
 
       const agrupados = new Map<string, Grupo>();
@@ -391,11 +388,28 @@ export function useMapCanvas(op: Opciones) {
         }
         ctx.restore();
       }
-      if (activo) frame = requestAnimationFrame(dibujar);
+      if (activo && !document.hidden) frame = requestAnimationFrame(dibujar);
     };
+    const alCambiarVisibilidad = () => {
+      cancelAnimationFrame(frame);
+      if (!document.hidden) {
+        // No reproducir una cola de movimientos acumulados con la pestaña oculta.
+        const s = flujo?.actual;
+        animador.current.actualizar(s?.vehiculos ?? op.vehiculos, s?.idSimulacion ?? op.corridaId,
+          performance.now(), false, s?.relojSimulado);
+        animacionHabilitada.current = false;
+        frame = requestAnimationFrame(dibujar);
+      }
+    };
+    despertar.current = () => { if (!frame && !document.hidden) frame = requestAnimationFrame(dibujar); };
+    document.addEventListener('visibilitychange', alCambiarVisibilidad);
     frame = requestAnimationFrame(dibujar);
-    return () => cancelAnimationFrame(frame);
-  }, [op.vehiculos, op.almacenes, op.bloqueos, op.seleccion, op.atenuado, tamano, proy, enfocado, vehiculoPorId]);
+    return () => {
+      cancelAnimationFrame(frame);
+      despertar.current = null;
+      document.removeEventListener('visibilitychange', alCambiarVisibilidad);
+    };
+  }, [op.vehiculos, op.corridaId, op.animar, op.almacenes, op.bloqueos, op.seleccion, op.atenuado, tamano, proy, enfocado, vehiculoPorId]);
 
   // ------------------------------------------------------------------------
   // Interacción
@@ -531,6 +545,7 @@ export function useMapCanvas(op: Opciones) {
 
   return {
     canvasRef,
+    relojVisualRef,
     vehiculosCanvasRef,
     hover,
     cursorKm,
@@ -539,80 +554,6 @@ export function useMapCanvas(op: Opciones) {
     encuadrar,
     manejadores: { onPointerDown, onPointerMove, onPointerUp, onPointerLeave },
   };
-}
-
-interface Transicion {
-  puntos: Array<{ x: number; y: number }>;
-  inicio: number;
-  duracion: number;
-}
-
-function nodosCerrados(bloqueos: BloqueoRespuesta[]): Set<string> {
-  const cerrados = new Set<string>();
-  for (const bloqueo of bloqueos) {
-    const vertices = bloqueo.vertices;
-    if (vertices.length === 0 || vertices.some((v) => !Number.isFinite(v.x) || !Number.isFinite(v.y))) continue;
-    let anterior = { x: Math.round(vertices[0].x), y: Math.round(vertices[0].y) };
-    cerrados.add(`${anterior.x},${anterior.y}`);
-    for (let i = 1; i < vertices.length; i++) {
-      const actual = { x: Math.round(vertices[i].x), y: Math.round(vertices[i].y) };
-      let x = anterior.x;
-      let y = anterior.y;
-      while (x !== actual.x) {
-        x += Math.sign(actual.x - x);
-        cerrados.add(`${x},${y}`);
-      }
-      while (y !== actual.y) {
-        y += Math.sign(actual.y - y);
-        cerrados.add(`${x},${y}`);
-      }
-      anterior = actual;
-    }
-  }
-  return cerrados;
-}
-
-function caminoRecorrido(
-  previo: VehiculoSnapshot,
-  actual: VehiculoSnapshot,
-  cerrados: Set<string>
-): Array<{ x: number; y: number }> | null {
-  const puntos = [{ x: previo.x, y: previo.y }];
-  const destino = `${actual.x},${actual.y}`;
-  let encontrado = false;
-  for (const nodo of previo.caminoActual.slice(0, 256)) {
-    const anterior = puntos[puntos.length - 1];
-    if (Math.abs(anterior.x - nodo.x) + Math.abs(anterior.y - nodo.y) !== 1) return null;
-    puntos.push({ x: nodo.x, y: nodo.y });
-    if (`${nodo.x},${nodo.y}` === destino) {
-      encontrado = true;
-      break;
-    }
-  }
-  if (!encontrado) {
-    if (previo.caminoActual.length > 0
-        || Math.abs(previo.x - actual.x) + Math.abs(previo.y - actual.y) !== 1) return null;
-    puntos.length = 1;
-    let x = previo.x;
-    let y = previo.y;
-    while (x !== actual.x || y !== actual.y) {
-      x += Math.sign(actual.x - x);
-      y += Math.sign(actual.y - y);
-      puntos.push({ x, y });
-      if (puntos.length > 65) return null;
-    }
-  }
-  if (puntos.some((p) => cerrados.has(`${p.x},${p.y}`))) return null;
-  return puntos.length >= 2 ? puntos : null;
-}
-
-function posicionEnCamino(puntos: Array<{ x: number; y: number }>, avance: number) {
-  const distancia = (puntos.length - 1) * avance;
-  const tramo = Math.min(puntos.length - 2, Math.floor(distancia));
-  const t = distancia - tramo;
-  const a = puntos[tramo];
-  const b = puntos[tramo + 1];
-  return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
 }
 
 function mismoObjetivo(a: Objetivo, b: Objetivo): boolean {

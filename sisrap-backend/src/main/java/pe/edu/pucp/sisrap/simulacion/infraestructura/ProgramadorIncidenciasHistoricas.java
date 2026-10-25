@@ -37,13 +37,19 @@ public final class ProgramadorIncidenciasHistoricas {
     }
 
     private final Map<LocalDate, List<Bloqueo>> bloqueosPorFecha;
+    private final long diasAntelacionBloqueos;
     private final Map<LocalDate, List<MantenimientoProgramado>> mantenimientosPorFecha;
 
     private ProgramadorIncidenciasHistoricas(Map<LocalDate, List<Bloqueo>> bloqueos,
                                              Map<LocalDate, List<MantenimientoProgramado>> mantenimientos) {
         this.bloqueosPorFecha = Map.copyOf(bloqueos);
+        this.diasAntelacionBloqueos = Math.max(1L, bloqueos.values().stream().flatMap(List::stream)
+                .mapToLong(b -> java.time.temporal.ChronoUnit.DAYS.between(
+                        b.inicio().toLocalDate(), b.fin().toLocalDate()) + 1).max().orElse(1));
         this.mantenimientosPorFecha = Map.copyOf(mantenimientos);
     }
+
+    public long diasAntelacionBloqueos() { return diasAntelacionBloqueos; }
 
     public static ProgramadorIncidenciasHistoricas cargar(Path directorio) {
         if (directorio == null || !Files.isDirectory(directorio)) {

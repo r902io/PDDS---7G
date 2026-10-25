@@ -90,12 +90,17 @@ public class JdbcSimulacion implements RepositorioSimulacion {
     private int medianaPedidosDiarios;
     private LocalDateTime turnoAsignado;
 
+    private record ResumenCache(LocalDateTime inicio, LocalDateTime fin,
+                                LocalDateTime reloj, ResumenPedidosSimulacion valor) {}
+    private ResumenCache resumenCache;
+
     public JdbcSimulacion(DataSource fuente) {
         this.fuente = fuente;
     }
 
     @Override
     public synchronized void prepararEjecucion(ConfiguracionSimulacion configuracion) {
+        resumenCache = null;
         if (configuracion == null) {
             throw new IllegalArgumentException("La configuración de simulación es obligatoria");
         }
@@ -173,13 +178,13 @@ public class JdbcSimulacion implements RepositorioSimulacion {
         programadorIncidencias.validarVehiculos(idsIncidencias,
                 configuracion.fechaInicio(), configuracion.fechaHoraFin().toLocalDate());
         programadorIncidencias.validarMapa(anchoIncidencias, altoIncidencias,
-                configuracion.fechaInicio().minusDays(1), configuracion.fechaHoraFin().toLocalDate());
-        // También se incorpora un bloqueo iniciado el día anterior si continúa vigente.
-        bloqueosProgramados.addAll(programadorIncidencias.generarDia(
-                configuracion.fechaInicio(), configuracion.fechaInicio().minusDays(1),
-                configuracion.semilla(), anchoIncidencias, altoIncidencias, idsIncidencias)
-                .bloqueos().stream()
-                .filter(b -> b.fin().isAfter(configuracion.fechaHoraInicio())).toList());
+                configuracion.fechaInicio().minusDays(programadorIncidencias.diasAntelacionBloqueos()), configuracion.fechaHoraFin().toLocalDate());
+        for (LocalDate dia = configuracion.fechaInicio().minusDays(programadorIncidencias.diasAntelacionBloqueos());
+             dia.isBefore(configuracion.fechaInicio()); dia = dia.plusDays(1)) {
+            bloqueosProgramados.addAll(programadorIncidencias.generarDia(configuracion.fechaInicio(), dia,
+                    configuracion.semilla(), anchoIncidencias, altoIncidencias, idsIncidencias)
+                    .bloqueos().stream().filter(b -> b.fin().isAfter(configuracion.fechaHoraInicio())).toList());
+        }
     }
 
     @Override
@@ -255,8 +260,16 @@ public class JdbcSimulacion implements RepositorioSimulacion {
     public synchronized boolean tieneMantenimientoProgramado(String idVehiculo,
                                                                LocalDateTime desde,
                                                                LocalDateTime hasta) {
-        if (programadorIncidencias == null || idVehiculo == null || desde == null
-                || hasta == null || hasta.isBefore(desde)) return false;
+        if (idVehiculo == null || desde == null || hasta == null || hasta.isBefore(desde)) return false;
+        try(Connection cn=fuente.getConnection(); PreparedStatement ps=cn.prepareStatement("""
+                SELECT 1 FROM mantenimiento_vehiculo WHERE id_vehiculo=? AND activo=TRUE
+                AND fecha_inicio<? AND fecha_fin>? LIMIT 1
+                """)) {
+            ps.setString(1,idVehiculo);ps.setTimestamp(2,Timestamp.valueOf(hasta));
+            ps.setTimestamp(3,Timestamp.valueOf(desde));
+            try(ResultSet rs=ps.executeQuery()){if(rs.next())return true;}
+        }catch(SQLException e){throw new IllegalStateException("No se pudo verificar mantenimiento previsto",e);}
+        if(programadorIncidencias==null) return false;
         for (LocalDate dia = desde.toLocalDate().minusDays(1);
              !dia.isAfter(hasta.toLocalDate()); dia = dia.plusDays(1)) {
             for (var mantenimiento : programadorIncidencias.generarDia(
@@ -276,10 +289,11 @@ public class JdbcSimulacion implements RepositorioSimulacion {
                 SELECT v.estado FROM vehiculo v WHERE v.id_vehiculo=?
                 AND NOT EXISTS (SELECT 1 FROM mantenimiento_vehiculo m
                    WHERE m.id_vehiculo=v.id_vehiculo AND m.activo=TRUE
-                   AND m.fecha_fin > ?)
+                   AND m.fecha_inicio <= ? AND m.fecha_fin > ?)
                 """)) {
             ps.setString(1, idVehiculo);
             ps.setTimestamp(2, Timestamp.valueOf(reloj));
+            ps.setTimestamp(3, Timestamp.valueOf(reloj));
             try (ResultSet rs = ps.executeQuery()) {
                 return rs.next() && "DISPONIBLE".equals(rs.getString(1));
             }
@@ -464,6 +478,7 @@ public class JdbcSimulacion implements RepositorioSimulacion {
     public synchronized PedidoOperativo registrarPedidoManual(
             String cliente, int cantidad, TipoPrioridad prioridad, int x, int y,
             LocalDateTime fecha) {
+        resumenCache = null;
         if (configuracionDemanda == null) {
             throw new IllegalStateException("No existe una simulación preparada");
         }
@@ -518,6 +533,7 @@ public class JdbcSimulacion implements RepositorioSimulacion {
     @Override
     public synchronized List<Pedido> cargarPrevisionDiaria(
             LocalDate fecha, LocalDateTime disponibleDesde) {
+        resumenCache = null;
         if (configuracionDemanda == null || fecha == null || disponibleDesde == null) {
             throw new IllegalStateException("La simulación no está preparada");
         }
@@ -545,6 +561,7 @@ public class JdbcSimulacion implements RepositorioSimulacion {
     /** Registra únicamente pedidos cuyo instante de llegada ya ocurrió. */
     @Override
     public synchronized void publicarPedidosHasta(LocalDateTime reloj) {
+        resumenCache = null;
         asegurarDemandaGeneradaHasta(reloj.toLocalDate());
         List<PedidoSimulado> nuevos = pedidosSimulados.values().stream()
                 .filter(p -> p.id < 0 && !p.fechaLlegada.isAfter(reloj))
@@ -872,12 +889,14 @@ public class JdbcSimulacion implements RepositorioSimulacion {
                         boolean arriboFueraDePlazo = arribo != null && arribo.isAfter(limite);
                         boolean vencidoSinArribo = (arribo == null || arriboFueraDePlazo)
                                 && fin != null && limite.isBefore(fin);
-                        if (arriboFueraDePlazo || vencidoSinArribo || "RETRASADO".equals(e)) {
+                        if (arriboFueraDePlazo || vencidoSinArribo) {
                             retrasados++;
                         }
                         pedidos.add(new ResultadoCorrida.PedidoRegistrado(
                                 rs.getLong(1),rs.getString(2),rs.getInt(3),rs.getString(4),
-                                llegada,arribo,entrega,e,rs.getInt(8),rs.getInt(9)));
+                                llegada,arribo,entrega,e,rs.getInt(8),rs.getInt(9), limite,
+                                Math.max(0.0, java.time.Duration.between(limite,
+                                    arribo != null ? arribo : (fin != null ? fin : llegada)).toMillis()/60000.0)));
                     }
                 }
             }
@@ -1046,7 +1065,7 @@ public class JdbcSimulacion implements RepositorioSimulacion {
                 int capacidadMaxima = vehiculos.stream().mapToInt(Vehiculo::getCapacidadPaquetes)
                         .max().orElseThrow(() -> new IllegalArgumentException("No hay flota configurada"));
                 int capacidadDisponible = vehiculos.stream().filter(Vehiculo::isDisponible)
-                        .mapToInt(Vehiculo::getCapacidadPaquetes).max().orElse(0);
+                        .mapToInt(Vehiculo::getCapacidadPaquetes).min().orElse(0);
                 List<Pedido> pedidos = leerPedidosSimuladosPlanificables(
                         reloj, finVentana, ancho, alto, capacidadMaxima, capacidadDisponible);
                 Set<String> bloqueados = leerNodosBloqueados(cn, reloj);
@@ -1063,7 +1082,8 @@ public class JdbcSimulacion implements RepositorioSimulacion {
                         reloj,
                         reglas,
                         bloqueados,
-                        true);
+                        true, cargarCalendarioBloqueos(reloj, reloj.plusHours(48)),
+                        cargarDisponibilidadHasta(reloj, reloj.plusHours(48)));
 
                 cn.commit();
                 return new ContextoOperativo(configuracion, contexto);
@@ -1077,6 +1097,114 @@ public class JdbcSimulacion implements RepositorioSimulacion {
         } catch (SQLException e) {
             throw new IllegalStateException("No se pudo construir el contexto operativo", e);
         }
+    }
+
+    private Map<String, LocalDateTime> cargarDisponibilidadHasta(LocalDateTime desde, LocalDateTime hasta) {
+        Map<String, LocalDateTime> limites = new HashMap<>();
+        if (programadorIncidencias != null) {
+            for (LocalDate dia = desde.toLocalDate(); !dia.isAfter(hasta.toLocalDate()); dia = dia.plusDays(1)) {
+                for (var m : programadorIncidencias.generarDia(configuracionIncidencias.fechaInicio(), dia,
+                        configuracionIncidencias.semilla(), anchoIncidencias, altoIncidencias, idsIncidencias).mantenimientos()) {
+                    if (m.fin().isAfter(desde) && !m.inicio().isAfter(hasta))
+                        limites.merge(m.idVehiculo(), m.inicio(), (a,b) -> a.isBefore(b) ? a : b);
+                }
+            }
+        }
+        try (Connection cn = fuente.getConnection(); PreparedStatement ps = cn.prepareStatement("""
+                SELECT id_vehiculo, MIN(fecha_inicio) FROM mantenimiento_vehiculo
+                WHERE activo=TRUE AND fecha_fin>? AND fecha_inicio<=? GROUP BY id_vehiculo
+                """)) {
+            ps.setTimestamp(1,Timestamp.valueOf(desde)); ps.setTimestamp(2,Timestamp.valueOf(hasta));
+            try (ResultSet rs = ps.executeQuery()) {
+                while(rs.next()) limites.merge(rs.getString(1), rs.getTimestamp(2).toLocalDateTime(),
+                        (a,b) -> a.isBefore(b) ? a : b);
+            }
+        } catch(SQLException e) { throw new IllegalStateException("No se pudo consultar la disponibilidad futura", e); }
+        return Map.copyOf(limites);
+    }
+
+    @Override
+    public synchronized List<Bloqueo> cargarCalendarioBloqueos(LocalDateTime desde, LocalDateTime hasta) {
+        Map<String,Bloqueo> todos = new LinkedHashMap<>();
+        if(programadorIncidencias!=null) {
+            for(LocalDate d=desde.toLocalDate().minusDays(programadorIncidencias.diasAntelacionBloqueos());!d.isAfter(hasta.toLocalDate());d=d.plusDays(1)) {
+                for(Bloqueo b:programadorIncidencias.generarDia(configuracionIncidencias.fechaInicio(),d,
+                        configuracionIncidencias.semilla(),anchoIncidencias,altoIncidencias,idsIncidencias).bloqueos()) {
+                    if(b.fin().isAfter(desde) && !b.inicio().isAfter(hasta)) todos.put(claveBloqueo(b),b);
+                }
+            }
+        }
+        try(Connection cn=fuente.getConnection(); PreparedStatement ps=cn.prepareStatement("""
+                SELECT b.id_incidencia,b.fecha_inicio,b.fecha_fin,bn.x,bn.y
+                FROM bloqueo b JOIN incidencia i ON i.id_incidencia=b.id_incidencia
+                JOIN bloqueo_nodo bn ON bn.id_incidencia=b.id_incidencia
+                WHERE i.activa=TRUE AND b.fecha_inicio<=? AND b.fecha_fin>?
+                ORDER BY b.id_incidencia,bn.orden
+                """)) {
+            ps.setTimestamp(1,Timestamp.valueOf(hasta)); ps.setTimestamp(2,Timestamp.valueOf(desde));
+            Map<Long,List<Nodo>> nodos=new LinkedHashMap<>();
+            Map<Long,LocalDateTime> inicios=new HashMap<>(), fines=new HashMap<>();
+            try(ResultSet rs=ps.executeQuery()) { while(rs.next()) {
+                long id=rs.getLong(1); inicios.put(id,rs.getTimestamp(2).toLocalDateTime());
+                fines.put(id,rs.getTimestamp(3).toLocalDateTime());
+                nodos.computeIfAbsent(id,k->new ArrayList<>()).add(new Nodo(rs.getInt(4),rs.getInt(5)));
+            }}
+            nodos.forEach((id,vertices)->{
+                Bloqueo b=new Bloqueo(inicios.get(id),fines.get(id),vertices);
+                todos.put(claveBloqueo(b),b);
+            });
+        } catch(SQLException e) { throw new IllegalStateException("No se pudo leer el calendario de bloqueos",e); }
+        return List.copyOf(todos.values());
+    }
+
+    private static String claveBloqueo(Bloqueo b) {
+        return b.inicio()+"/"+b.fin()+"/"+b.vertices().stream()
+                .map(n->n.getX()+","+n.getY()).collect(java.util.stream.Collectors.joining(";"));
+    }
+
+    @Override
+    public synchronized LocalDateTime proximoEvento(LocalDateTime desde,LocalDateTime hasta) {
+        asegurarDemandaGeneradaHasta(hasta.toLocalDate());
+        LocalDateTime siguiente=hasta;
+        for(PedidoSimulado p:pedidosSimulados.values()) {
+            if(p.fechaLlegada.isAfter(desde) && p.fechaLlegada.isBefore(siguiente)) siguiente=p.fechaLlegada;
+            if(p.id>0 && p.fechaArribo==null) {
+                LocalDateTime vence=p.fechaLimite().plusNanos(1);
+                if(vence.isAfter(desde) && vence.isBefore(siguiente)) siguiente=vence;
+            }
+        }
+        for (var averia : cargarAveriasActivas(desde).values()) {
+            LocalDateTime retorno=averia.horaRetornoEstimada();
+            if(retorno!=null && retorno.isAfter(desde) && retorno.isBefore(siguiente)) siguiente=retorno;
+            if(averia.tipoAveria()!=pe.edu.pucp.sisrap.flota.dominio.TipoAveria.TIPO1_MENOR) {
+                LocalDateTime traslado=averia.fechaOcurrencia().plusHours(4);
+                if(traslado.isAfter(desde) && traslado.isBefore(siguiente)) siguiente=traslado;
+            }
+        }
+        for(Bloqueo b:cargarCalendarioBloqueos(desde,hasta)) {
+            if(b.inicio().isAfter(desde) && b.inicio().isBefore(siguiente)) siguiente=b.inicio();
+            if(b.fin().isAfter(desde) && b.fin().isBefore(siguiente)) siguiente=b.fin();
+        }
+        if(programadorIncidencias!=null) {
+            for(LocalDate d=desde.toLocalDate().minusDays(1);!d.isAfter(hasta.toLocalDate());d=d.plusDays(1)) {
+                for(var m:programadorIncidencias.generarDia(configuracionIncidencias.fechaInicio(),d,
+                        configuracionIncidencias.semilla(),anchoIncidencias,altoIncidencias,idsIncidencias).mantenimientos()) {
+                    if(m.inicio().isAfter(desde)&&m.inicio().isBefore(siguiente)) siguiente=m.inicio();
+                    if(m.fin().isAfter(desde)&&m.fin().isBefore(siguiente)) siguiente=m.fin();
+                }
+            }
+        }
+        try(Connection cn=fuente.getConnection(); PreparedStatement ps=cn.prepareStatement("""
+                SELECT fecha_inicio,fecha_fin FROM mantenimiento_vehiculo
+                WHERE activo=TRUE AND fecha_inicio<=? AND fecha_fin>?
+                """)) {
+            ps.setTimestamp(1,Timestamp.valueOf(hasta));ps.setTimestamp(2,Timestamp.valueOf(desde));
+            try(ResultSet rs=ps.executeQuery()) {while(rs.next()) for(int i=1;i<=2;i++) {
+                LocalDateTime t=rs.getTimestamp(i).toLocalDateTime();
+                if(t.isAfter(desde)&&t.isBefore(siguiente)) siguiente=t;
+            }}
+        }catch(SQLException e){throw new IllegalStateException("No se pudieron consultar eventos operativos",e);}
+        return siguiente;
     }
 
     @Override
@@ -1221,6 +1349,11 @@ public class JdbcSimulacion implements RepositorioSimulacion {
 
     @Override
     public synchronized void sincronizarDisponibilidad(LocalDateTime reloj) {
+        sincronizarYCargarDisponibilidad(reloj);
+    }
+
+    @Override
+    public synchronized Map<String, VehiculoPersistido> sincronizarYCargarDisponibilidad(LocalDateTime reloj) {
         try (Connection cn = fuente.getConnection()) {
             cn.setAutoCommit(false);
             try {
@@ -1242,6 +1375,7 @@ public class JdbcSimulacion implements RepositorioSimulacion {
                 Set<String> mantenimientos = leerMantenimientosActivos(cn, reloj);
                 Map<String, VehiculoPersistido> vehiculos = leerVehiculosPersistidos(cn);
 
+                Map<String, VehiculoPersistido> actualizados = new HashMap<>();
                 try (PreparedStatement psEstado = cn.prepareStatement("""
                              UPDATE vehiculo
                              SET estado = ?
@@ -1256,8 +1390,11 @@ public class JdbcSimulacion implements RepositorioSimulacion {
                              """)) {
 
                     for (VehiculoPersistido v : vehiculos.values()) {
+                        actualizados.put(v.idVehiculo(), v);
                         PuntoSimulacion ubicacionAveria = averiados.get(v.idVehiculo());
                         if (ubicacionAveria != null) {
+                            actualizados.put(v.idVehiculo(), new VehiculoPersistido(v.idVehiculo(),
+                                    "EN_AVERIA", ubicacionAveria.x(), ubicacionAveria.y()));
                             if (!"EN_AVERIA".equals(v.estado())
                                     || v.x() != ubicacionAveria.x()
                                     || v.y() != ubicacionAveria.y()) {
@@ -1270,6 +1407,8 @@ public class JdbcSimulacion implements RepositorioSimulacion {
                         }
 
                         if (mantenimientos.contains(v.idVehiculo())) {
+                            actualizados.put(v.idVehiculo(), new VehiculoPersistido(v.idVehiculo(),
+                                    "EN_MANTENIMIENTO", v.x(), v.y()));
                             if (!"EN_MANTENIMIENTO".equals(v.estado())) {
                                 psEstado.setString(1, "EN_MANTENIMIENTO");
                                 psEstado.setString(2, v.idVehiculo());
@@ -1280,6 +1419,8 @@ public class JdbcSimulacion implements RepositorioSimulacion {
 
                         if ("EN_AVERIA".equals(v.estado())
                                 || "EN_MANTENIMIENTO".equals(v.estado())) {
+                            actualizados.put(v.idVehiculo(), new VehiculoPersistido(v.idVehiculo(),
+                                    "DISPONIBLE", v.x(), v.y()));
                             psEstado.setString(1, "DISPONIBLE");
                             psEstado.setString(2, v.idVehiculo());
                             psEstado.addBatch();
@@ -1292,6 +1433,7 @@ public class JdbcSimulacion implements RepositorioSimulacion {
 
                 cn.commit();
                 turnoAsignado = pe.edu.pucp.sisrap.planificador.dominio.modelo.JornadaOperativa.inicioTurno(reloj);
+                return Map.copyOf(actualizados);
             } catch (RuntimeException | SQLException e) {
                 cn.rollback();
                 if (e instanceof RuntimeException runtime) {
@@ -1312,6 +1454,7 @@ public class JdbcSimulacion implements RepositorioSimulacion {
 
     @Override
     public synchronized List<Pedido> dividirPedidoEnRuta(Pedido pedido, int capacidadPorVehiculo) {
+        resumenCache = null;
         if (pedido == null || capacidadPorVehiculo <= 0) {
             throw new IllegalArgumentException("Pedido y capacidad de trasvase inválidos");
         }
@@ -1364,6 +1507,7 @@ public class JdbcSimulacion implements RepositorioSimulacion {
     @Override
     public synchronized List<Pedido> registrarTrasvase(
             List<Pedido> pedidos, String idVehiculo) {
+        resumenCache = null;
         if (pedidos == null || idVehiculo == null || idVehiculo.isBlank()) {
             throw new IllegalArgumentException("Datos del trasvase inválidos");
         }
@@ -1399,6 +1543,7 @@ public class JdbcSimulacion implements RepositorioSimulacion {
 
     @Override
     public synchronized void marcarPedidosEnRuta(Collection<Long> idsPedidos) {
+        resumenCache = null;
         if (idsPedidos == null || idsPedidos.isEmpty()) return;
         for (Long id : idsPedidos) {
             FraccionPedido fraccion = fracciones.get(id);
@@ -1419,12 +1564,14 @@ public class JdbcSimulacion implements RepositorioSimulacion {
 
     @Override
     public synchronized void reencolarPedidos(Collection<Long> idsPedidos, LocalDateTime reloj) {
+        resumenCache = null;
         if (idsPedidos == null || idsPedidos.isEmpty()) return;
         for (Long id : idsPedidos) {
             FraccionPedido fraccion = fracciones.get(id);
             if (fraccion != null) {
                 if (fraccion.estado == EstadoPedido.EN_RUTA) {
                     PedidoSimulado padre = pedidosSimulados.get(fraccion.idPedido);
+                    fraccion.idVehiculo = null;
                     fraccion.estado = padre.fechaLimite().isBefore(reloj)
                             ? EstadoPedido.RETRASADO : EstadoPedido.REASIGNADO;
                     sincronizarPedidoAgrupado(padre);
@@ -1442,6 +1589,7 @@ public class JdbcSimulacion implements RepositorioSimulacion {
 
     @Override
     public synchronized void entregarPedido(long idPedido, LocalDateTime fechaEntrega) {
+        resumenCache = null;
         FraccionPedido fraccion = fracciones.get(idPedido);
         if (fraccion != null) {
             if (fraccion.estado == EstadoPedido.EN_RUTA || fraccion.estado == EstadoPedido.RETRASADO) {
@@ -1464,13 +1612,15 @@ public class JdbcSimulacion implements RepositorioSimulacion {
 
     @Override
     public synchronized void registrarArribo(long idPedido, LocalDateTime fechaArribo) {
+        resumenCache = null;
         FraccionPedido fraccion = fracciones.get(idPedido);
         PedidoSimulado pedido = fraccion != null
                 ? pedidosSimulados.get(fraccion.idPedido) : pedidosSimulados.get(idPedido);
         if (pedido == null || pedido.id < 0) {
             throw new IllegalArgumentException("Pedido no disponible: " + idPedido);
         }
-        if (fraccion != null) fraccion.fechaArribo = fechaArribo;
+        if (fraccion != null && (fraccion.fechaArribo == null || fechaArribo.isBefore(fraccion.fechaArribo)))
+            fraccion.fechaArribo = fechaArribo;
         LocalDateTime arriboPadre = fraccion == null ? fechaArribo :
                 pedido.fracciones.stream().allMatch(f -> f.fechaArribo != null)
                 ? pedido.fracciones.stream().map(f -> f.fechaArribo)
@@ -1479,12 +1629,12 @@ public class JdbcSimulacion implements RepositorioSimulacion {
         try (Connection cn = fuente.getConnection();
              PreparedStatement ps = cn.prepareStatement("""
                      INSERT INTO pedido_arribo(id_pedido,fecha_arribo) VALUES(?,?)
-                     ON DUPLICATE KEY UPDATE fecha_arribo=GREATEST(fecha_arribo,VALUES(fecha_arribo))
+                     ON DUPLICATE KEY UPDATE fecha_arribo=LEAST(fecha_arribo,VALUES(fecha_arribo))
                      """)) {
             ps.setLong(1,pedido.id);
             ps.setTimestamp(2,Timestamp.valueOf(arriboPadre));
             ps.executeUpdate();
-            if (pedido.fechaArribo == null || pedido.fechaArribo.isBefore(arriboPadre)) {
+            if (pedido.fechaArribo == null || pedido.fechaArribo.isAfter(arriboPadre)) {
                 pedido.fechaArribo = arriboPadre;
             }
         } catch(SQLException e) {
@@ -1494,6 +1644,7 @@ public class JdbcSimulacion implements RepositorioSimulacion {
 
     @Override
     public synchronized void marcarPedidosRetrasados(LocalDateTime reloj) {
+        resumenCache = null;
         for (PedidoSimulado pedido : pedidosSimulados.values()) {
             if (pedido.id < 0 || !pedido.fechaLimite().isBefore(reloj) ||
                     (pedido.fechaArribo != null && !pedido.fechaArribo.isAfter(pedido.fechaLimite()))) {
@@ -1772,6 +1923,10 @@ public class JdbcSimulacion implements RepositorioSimulacion {
             LocalDateTime fin,
             LocalDateTime reloj) {
 
+        if (resumenCache != null && resumenCache.inicio().equals(inicio)
+                && resumenCache.fin().equals(fin) && resumenCache.reloj().equals(reloj))
+            return resumenCache.valor();
+
         int total = 0;
         int futuros = 0;
         int pendientes = 0;
@@ -1782,6 +1937,8 @@ public class JdbcSimulacion implements RepositorioSimulacion {
         int retrasadosSinEntregar = 0;
         int retrasadosEntregados = 0;
         int retrasadosEnRuta = 0;
+        int arribadosEnPlazo = 0;
+        int sinArriboVigentes = 0;
 
         for (PedidoSimulado pedido : pedidosSimulados.values()) {
             if (pedido.id < 0 || pedido.fechaLlegada.isBefore(inicio)
@@ -1802,6 +1959,8 @@ public class JdbcSimulacion implements RepositorioSimulacion {
                     || (pedido.fechaLimite().isBefore(reloj)
                     && (pedido.fechaArribo == null
                     || pedido.fechaArribo.isAfter(pedido.fechaLimite())));
+            if (pedido.fechaArribo != null && !pedido.fechaArribo.isAfter(pedido.fechaLimite())) arribadosEnPlazo++;
+            else if (pedido.fechaArribo == null && !pedido.fechaLimite().isBefore(reloj)) sinArriboVigentes++;
             boolean entregado = pedido.estado == EstadoPedido.ENTREGADO;
             boolean enTraslado = pedido.estado == EstadoPedido.EN_RUTA
                     || pedido.fracciones.stream()
@@ -1828,10 +1987,12 @@ public class JdbcSimulacion implements RepositorioSimulacion {
             }
         }
 
-        return new ResumenPedidosSimulacion(
+        var resumen = new ResumenPedidosSimulacion(
                 total, futuros, pendientes, enRuta, reasignados,
                 retrasados, entregados, retrasadosSinEntregar,
-                retrasadosEntregados, retrasadosEnRuta);
+                retrasadosEntregados, retrasadosEnRuta, arribadosEnPlazo, sinArriboVigentes);
+        resumenCache = new ResumenCache(inicio, fin, reloj, resumen);
+        return resumen;
     }
 
     private List<Almacen> leerAlmacenes(Connection cn, int ancho, int alto) throws SQLException {
@@ -1895,6 +2056,7 @@ public class JdbcSimulacion implements RepositorioSimulacion {
             int alto,
             int capacidadMaxima,
             int capacidadDisponible) {
+        resumenCache = null;
 
         List<Pedido> salida = new ArrayList<>();
         for (PedidoSimulado pedido : pedidosSimulados.values()) {
@@ -1902,26 +2064,18 @@ public class JdbcSimulacion implements RepositorioSimulacion {
                     || !pedido.fechaLlegada.isBefore(finVentana)) {
                 continue;
             }
-            // En pedidos prioritarios próximos al vencimiento se permiten fracciones
-            // para vehículos menores, si no existe una unidad grande disponible.
-            int capacidadParte = capacidadMaxima;
-            boolean pedidoUrgente = pedido.prioridad == TipoPrioridad.PRIORIZADO_4H
-                    && pedido.fechaLlegada.plusHours(pedido.horasLimite).isAfter(reloj)
-                    && !pedido.fechaLlegada.plusHours(pedido.horasLimite)
-                            .isAfter(reloj.plusHours(3));
-            boolean pedidoVencido = pedido.fechaLimite().isBefore(reloj);
-            if ((pedidoUrgente || pedidoVencido) && capacidadDisponible > 0
-                    && pedido.cantidad > capacidadDisponible) {
-                capacidadParte = capacidadDisponible;
-            }
-            if (pedido.cantidad > capacidadParte && pedido.fracciones.isEmpty()) {
-                int restante = pedido.cantidad;
-                while (restante > 0) {
-                    int cantidad = Math.min(restante, capacidadParte);
-                    FraccionPedido fraccion = new FraccionPedido(siguienteFraccion--, pedido.id, cantidad);
-                    pedido.fracciones.add(fraccion);
-                    fracciones.put(fraccion.id, fraccion);
-                    restante -= cantidad;
+            int capacidadParte = capacidadDisponible > 0 ? capacidadDisponible : capacidadMaxima;
+            if (capacidadParte <= 0) throw new IllegalStateException("No hay capacidad de carga válida");
+            if (pedido.fracciones.isEmpty() && pendienteParaPlanificar(pedido.estado)
+                    && pedido.fechaArribo == null && pedido.cantidad > capacidadParte) {
+                crearFraccionesPendientes(pedido, pedido.cantidad, capacidadParte, pedido.estado);
+            } else if (!pedido.fracciones.isEmpty()) {
+                for (FraccionPedido f : new ArrayList<>(pedido.fracciones)) {
+                    if (pendienteParaPlanificar(f.estado) && f.fechaArribo == null
+                            && f.idVehiculo == null && f.cantidad > capacidadParte) {
+                        pedido.fracciones.remove(f); fracciones.remove(f.id);
+                        crearFraccionesPendientes(pedido, f.cantidad, capacidadParte, f.estado);
+                    }
                 }
             }
             if (pedido.fracciones.isEmpty()) {
@@ -1939,6 +2093,17 @@ public class JdbcSimulacion implements RepositorioSimulacion {
         salida.sort(Comparator.comparing(Pedido::getFechaLimite)
                 .thenComparing(Pedido::getIdPedido));
         return List.copyOf(salida);
+    }
+
+    private void crearFraccionesPendientes(PedidoSimulado pedido, int cantidad,
+                                           int capacidad, EstadoPedido estado) {
+        for (int restante=cantidad; restante>0;) {
+            int unidades=Math.min(restante,capacidad);
+            FraccionPedido f=new FraccionPedido(siguienteFraccion--,pedido.id,unidades);
+            f.estado=estado;
+            pedido.fracciones.add(f); fracciones.put(f.id,f);
+            restante-=unidades;
+        }
     }
 
     private static boolean pendienteParaPlanificar(EstadoPedido estado) {
@@ -2081,7 +2246,7 @@ public class JdbcSimulacion implements RepositorioSimulacion {
 
         LocalDate inicio = configuracionDemanda.fechaInicio();
         LocalDate ultimoPermitido = configuracionDemanda.fechaHoraFin()
-                .toLocalDate().minusDays(1);
+                .minusNanos(1).toLocalDate();
 
         if (fechaObjetivo.isBefore(inicio)) {
             return;
@@ -2166,6 +2331,9 @@ public class JdbcSimulacion implements RepositorioSimulacion {
             if (hora.equals(LocalTime.MIDNIGHT)) {
                 hora = LocalTime.of(0, 0, 1);
             }
+            LocalDateTime llegada = fecha.atTime(hora);
+            if (llegada.isBefore(configuracionDemanda.fechaHoraInicio())
+                    || !llegada.isBefore(configuracionDemanda.fechaHoraFin())) continue;
 
             long idTemporal = -Math.addExact(
                     Math.multiplyExact(indiceDia + 1L, BLOQUE_IDS_SINTETICOS),
@@ -2175,7 +2343,7 @@ public class JdbcSimulacion implements RepositorioSimulacion {
             PedidoSimulado nuevo = new PedidoSimulado(
                     idTemporal, clienteNuevo, muestra.cantidad(),
                     muestra.prioridad(), muestra.horasLimite(),
-                    fecha.atTime(hora), muestra.x(), muestra.y());
+                    llegada, muestra.x(), muestra.y());
             pedidosSimulados.put(idTemporal, nuevo);
         }
     }

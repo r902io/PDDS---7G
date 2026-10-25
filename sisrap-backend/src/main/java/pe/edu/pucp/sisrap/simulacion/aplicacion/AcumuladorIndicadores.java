@@ -105,13 +105,13 @@ public final class AcumuladorIndicadores {
         int retrasados = pedidos.retrasados();
         // Las entregas fuera de plazo ya están incluidas en «entregados».
         // Evitar contarlas dos veces al calcular el SLA evaluable al corte.
-        int entregadosPuntuales = Math.max(0, entregados - pedidos.retrasadosEntregados());
+        int entregadosPuntuales = pedidos.arribadosEnPlazo();
         int evaluados = entregadosPuntuales + retrasados;
         double porcentaje = evaluados > 0 ? 100.0 * entregadosPuntuales / evaluados : 100.0;
         IndicadoresOperacion.MuestraTemporal nueva = new IndicadoresOperacion.MuestraTemporal(
                 instante, distanciaKm, costoSoles, entregados, retrasados, porcentaje);
         if (!muestras.isEmpty()) {
-            var ultima = muestras.getLast();
+            var ultima = muestras.get(muestras.size()-1);
             if (ultima.instante().equals(instante)) {
                 muestras.set(muestras.size() - 1, nueva);
                 return;
@@ -124,9 +124,9 @@ public final class AcumuladorIndicadores {
         if (muestras.size() > MAX_MUESTRAS) {
             // Retener extremos y muestras alternadas para limitar tamaño de SSE en corridas largas.
             List<IndicadoresOperacion.MuestraTemporal> reducidas = new ArrayList<>();
-            reducidas.add(muestras.getFirst());
+            reducidas.add(muestras.get(0));
             for (int i = 2; i < muestras.size() - 1; i += 2) reducidas.add(muestras.get(i));
-            reducidas.add(muestras.getLast());
+            reducidas.add(muestras.get(muestras.size()-1));
             muestras.clear();
             muestras.addAll(reducidas);
         }

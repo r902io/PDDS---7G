@@ -47,6 +47,11 @@ export interface VehiculoSnapshot {
   cargaActualPaquetes: number;
   cargaPorRecogerPaquetes: number;
   entregasPendientes: number;
+  /** Avance visual sobre una calle; no reemplaza el nodo operativo x/y. */
+  xVisual?: number;
+  yVisual?: number;
+  secuenciaMovimiento?: number;
+  movimientosRecientes?: Array<{ secuencia: number; x: number; y: number }>;
 }
 
 /** ResumenPedidosSimulacion */
@@ -108,6 +113,7 @@ export interface IndicadoresOperacion {
 export interface IniciarSimulacionRequest {
   escenario: EscenarioSimulacion;
   fechaInicio: FechaLocal;
+  horaInicio?: string;
   semilla: number | null;
 }
 

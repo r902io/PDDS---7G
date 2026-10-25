@@ -80,6 +80,13 @@ public interface RepositorioSimulacion {
 
     void sincronizarDisponibilidad(LocalDateTime reloj);
 
+    /** Estado resultante de la misma sincronización, sin releer la flota en JDBC. */
+    default Map<String, VehiculoPersistido> sincronizarYCargarDisponibilidad(LocalDateTime reloj) {
+        sincronizarDisponibilidad(reloj);
+        return cargarVehiculosPersistidos();
+    }
+
+
     long idPedidoVisible(long idPedidoPlanificado);
 
     /** Divide una carga ya embarcada en entregas parciales para su trasvase. */
@@ -121,4 +128,8 @@ public interface RepositorioSimulacion {
             LocalDateTime inicio,
             LocalDateTime fin,
             LocalDateTime reloj);
+    default List<pe.edu.pucp.sisrap.experimentacion.dominio.Bloqueo> cargarCalendarioBloqueos(
+            LocalDateTime desde, LocalDateTime hasta) { return List.of(); }
+
+    default LocalDateTime proximoEvento(LocalDateTime desde, LocalDateTime hasta) { return hasta; }
 }

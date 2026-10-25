@@ -158,19 +158,60 @@ interface ValorContexto extends Estado {
   /** El último snapshot es vigente: conexión SSE abierta y sin silencio prolongado. */
   datosVigentes: boolean;
   reintentarSesion: () => void;
-  iniciar: (escenario: EscenarioSimulacion, fechaInicio: string, semilla: number | null) => Promise<ResultadoIniciar>;
+  iniciar: (escenario: EscenarioSimulacion, fechaInicio: string, semilla: number | null, horaInicio?: string) => Promise<ResultadoIniciar>;
   detener: () => Promise<void>;
   cerrarAviso: () => void;
 }
 
 const Contexto = createContext<ValorContexto | null>(null);
 
+interface FlujoVisual {
+  actual: SnapshotSimulacion | null;
+  oyentes: Set<(s: SnapshotSimulacion) => void>;
+}
+const ContextoVisual = createContext<FlujoVisual | null>(null);
+export function useFlujoVisual() { return useContext(ContextoVisual); }
+
 export function SimulacionProvider({ children }: { children: React.ReactNode }) {
   const [estado, despachar] = useReducer(reductor, estadoInicial);
   const [intentoSesion, setIntentoSesion] = useState(0);
   const [ahora, setAhora] = useState(() => Date.now());
   const snapshotActual = useRef<SnapshotSimulacion | null>(null);
-  snapshotActual.current = estado.snapshot;
+  const flujoVisual = useRef<FlujoVisual>({ actual: null, oyentes: new Set() });
+  const pendiente = useRef<SnapshotSimulacion | null>(null);
+  const ultimoPanel = useRef(0);
+  const temporizador = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const recibir = useCallback((s: SnapshotSimulacion, origen: 'SSE' | 'HTTP') => {
+    if (!esMasReciente(s, snapshotActual.current)) return;
+    const anterior = snapshotActual.current;
+    snapshotActual.current = s;
+    flujoVisual.current.actual = s;
+    for (const oyente of flujoVisual.current.oyentes) oyente(s);
+    pendiente.current = s;
+    const publicar = () => {
+      temporizador.current = null;
+      const ultimo = pendiente.current;
+      pendiente.current = null;
+      if (ultimo) {
+        ultimoPanel.current = performance.now();
+        despachar({ tipo: 'SNAPSHOT', snapshot: ultimo, origen });
+      }
+    };
+    const inmediata = origen === 'HTTP' || !anterior || anterior.idSimulacion !== s.idSimulacion
+      || anterior.estado !== s.estado || s.estado !== 'EJECUTANDO';
+    const espera = Math.max(0, 1_000 - (performance.now() - ultimoPanel.current));
+    if (inmediata || espera === 0) {
+      if (temporizador.current != null) clearTimeout(temporizador.current);
+      publicar();
+    } else if (temporizador.current == null) {
+      temporizador.current = setTimeout(publicar, espera);
+    }
+  }, []);
+  useEffect(() => () => {
+    if (temporizador.current != null) clearTimeout(temporizador.current);
+    pendiente.current = null;
+    temporizador.current = null;
+  }, []);
 
   // Sesión anónima automática.
   useEffect(() => {
@@ -189,11 +230,11 @@ export function SimulacionProvider({ children }: { children: React.ReactNode }) 
     let vigente = true;
     simulacionService
       .estado()
-      .then((s) => vigente && despachar({ tipo: 'SNAPSHOT', snapshot: s, origen: 'HTTP' }))
+      .then((s) => vigente && recibir(s, 'HTTP'))
       .catch((e) => vigente && despachar({ tipo: 'ERROR_ESTADO', error: textoError(e) }));
 
     const cerrar = suscribirEventos({
-      alRecibir: (s) => despachar({ tipo: 'SNAPSHOT', snapshot: s, origen: 'SSE' }),
+      alRecibir: (s) => recibir(s, 'SSE'),
       alCambiarConexion: (c) => despachar({ tipo: 'CONEXION', conexion: c }),
       esperaActividad: () => corridaActiva(snapshotActual.current),
     });
@@ -233,15 +274,15 @@ export function SimulacionProvider({ children }: { children: React.ReactNode }) 
   }, []);
 
   const iniciar = useCallback<ValorContexto['iniciar']>(
-    async (escenario, fechaInicio, semilla) => {
+    async (escenario, fechaInicio, semilla, horaInicio = '00:00') => {
       if (!sesionId) {
         return { ok: false, corridaEnCurso: false, mensaje: 'No hay una sesión válida con el backend.' };
       }
       despachar({ tipo: 'ACCION', accion: 'INICIAR' });
       try {
-        const s = await simulacionService.iniciar({ escenario, fechaInicio, semilla });
+        const s = await simulacionService.iniciar({ escenario, fechaInicio, horaInicio, semilla });
         if (s.idSimulacion != null) fijarControl({ sesionId, idSimulacion: s.idSimulacion });
-        despachar({ tipo: 'SNAPSHOT', snapshot: s, origen: 'HTTP' });
+        recibir(s, 'HTTP');
         despachar({ tipo: 'AVISO', aviso: null });
         return { ok: true };
       } catch (e) {
@@ -249,7 +290,7 @@ export function SimulacionProvider({ children }: { children: React.ReactNode }) 
           // Ya hay una corrida activa: se muestra la vigente.
           simulacionService
             .estado()
-            .then((s) => despachar({ tipo: 'SNAPSHOT', snapshot: s, origen: 'HTTP' }))
+            .then((s) => recibir(s, 'HTTP'))
             .catch(() => undefined);
           const mensaje =
             'Ya hay una corrida en curso. El backend ejecuta una sola corrida a la vez y la controla ' +
@@ -263,14 +304,14 @@ export function SimulacionProvider({ children }: { children: React.ReactNode }) 
         despachar({ tipo: 'ACCION', accion: null });
       }
     },
-    [sesionId, fijarControl]
+    [sesionId, fijarControl, recibir]
   );
 
   const detener = useCallback(async () => {
     despachar({ tipo: 'ACCION', accion: 'DETENER' });
     try {
       const s = await simulacionService.detener();
-      despachar({ tipo: 'SNAPSHOT', snapshot: s, origen: 'HTTP' });
+      recibir(s, 'HTTP');
       fijarControl(null);
     } catch (e) {
       if (e instanceof ApiError && e.status === 403) {
@@ -303,7 +344,7 @@ export function SimulacionProvider({ children }: { children: React.ReactNode }) 
     [estado, rol, datosVigentes, iniciar, detener]
   );
 
-  return <Contexto.Provider value={valor}>{children}</Contexto.Provider>;
+  return <ContextoVisual.Provider value={flujoVisual.current}><Contexto.Provider value={valor}>{children}</Contexto.Provider></ContextoVisual.Provider>;
 }
 
 export function useSimulacion(): ValorContexto {

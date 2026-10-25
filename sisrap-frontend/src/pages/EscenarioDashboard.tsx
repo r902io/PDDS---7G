@@ -50,6 +50,9 @@ import {
 } from '../utilitarios/vehiculos';
 
 /** Dimensiones del enunciado; se reemplazan por las de /api/mapa cuando responde. */
+const SIN_VEHICULOS: VehiculoSnapshot[] = [];
+const SIN_ALMACENES: AlmacenOperativo[] = [];
+const SIN_PEDIDOS: PedidoOperativo[] = [];
 const CIUDAD_ENUNCIADO = { anchoKm: 70, altoKm: 50 };
 
 export function EscenarioDashboard() {
@@ -97,7 +100,7 @@ export function EscenarioDashboard() {
   }, []);
 
   // Si la unidad seleccionada desaparece del snapshot, se mantiene: el panel lo explica.
-  const vehiculos: VehiculoSnapshot[] = snapshot?.vehiculos ?? [];
+  const vehiculos: VehiculoSnapshot[] = snapshot?.vehiculos ?? SIN_VEHICULOS;
 
   if (!snapshot) {
     return (
@@ -160,22 +163,23 @@ export function EscenarioDashboard() {
             </div>}
           <MapaCiudad
             dimensiones={dimensiones}
-            almacenes={almacenes.datos ?? []}
+            almacenes={almacenes.datos ?? SIN_ALMACENES}
             vehiculos={vehiculos}
             corridaId={snapshot.idSimulacion}
-            pedidos={pedidosMap.datos?.contenido ?? []}
+            pedidos={pedidosMap.datos?.contenido ?? SIN_PEDIDOS}
             bloqueos={bloqueosActivos}
             seleccion={seleccion}
             alSeleccionar={setSeleccion}
             atenuado={corrida && !datosVigentes}
+            animar={snapshot.estado === 'EJECUTANDO' && datosVigentes}
           />
           {seleccion && (
             <PanelDetalle
               seleccion={seleccion}
               vehiculos={vehiculos}
-              pedidos={pedidosMap.datos?.contenido ?? []}
+              pedidos={pedidosMap.datos?.contenido ?? SIN_PEDIDOS}
               catalogo={flota.datos}
-              almacenes={almacenes.datos ?? []}
+              almacenes={almacenes.datos ?? SIN_ALMACENES}
               alSeleccionar={setSeleccion}
             />
           )}
@@ -190,7 +194,7 @@ export function EscenarioDashboard() {
         alternar={() => setDerColapsado((v) => !v)}
       >
         <PanelIndicadores snapshot={snapshot} bloqueosCargados={bloqueos.datos != null}
-          pedidos={pedidosMap.datos?.contenido ?? []} pedidosCompletos={pedidosMap.datos != null && pedidosMap.datos.total <= pedidosMap.datos.contenido.length} />
+          pedidos={pedidosMap.datos?.contenido ?? SIN_PEDIDOS} pedidosCompletos={pedidosMap.datos != null && pedidosMap.datos.total <= pedidosMap.datos.contenido.length} />
       </PanelLateral>
 
       <Modal isOpen={confirmarDetener} onClose={() => setConfirmarDetener(false)} titulo="Detener la corrida">

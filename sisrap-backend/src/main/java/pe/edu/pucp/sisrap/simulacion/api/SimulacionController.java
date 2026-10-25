@@ -1,6 +1,7 @@
 package pe.edu.pucp.sisrap.simulacion.api;
 
 import java.time.LocalDate;
+import java.time.LocalTime;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -116,6 +117,7 @@ public class SimulacionController {
                     new ConfiguracionSimulacion(
                             request.escenario(),
                             request.fechaInicio(),
+                            request.horaInicio(),
                             semilla
                     )
             );
@@ -253,6 +255,7 @@ public class SimulacionController {
     public record IniciarSimulacionRequest(
             EscenarioSimulacion escenario,
             LocalDate fechaInicio,
+            LocalTime horaInicio,
             Long semilla
     ) {
     }
