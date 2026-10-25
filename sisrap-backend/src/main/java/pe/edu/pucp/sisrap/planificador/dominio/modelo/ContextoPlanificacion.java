@@ -17,9 +17,13 @@ public record ContextoPlanificacion(
         LocalDateTime instante,
         ReglasPlanificacion reglas,
         Set<String> nodosBloqueados,
-        boolean respetarPosicionVehiculo) {
+        boolean respetarPosicionVehiculo,
+        java.util.List<pe.edu.pucp.sisrap.experimentacion.dominio.Bloqueo> calendarioBloqueos,
+        java.util.Map<String, LocalDateTime> disponibleHasta) {
 
     public ContextoPlanificacion {
+        disponibleHasta = disponibleHasta == null ? java.util.Map.of() : java.util.Map.copyOf(disponibleHasta);
+        calendarioBloqueos = calendarioBloqueos == null ? List.of() : List.copyOf(calendarioBloqueos);
         pedidos = List.copyOf(pedidos);
         vehiculos = List.copyOf(vehiculos);
         almacenes = List.copyOf(almacenes);
@@ -49,6 +53,21 @@ public record ContextoPlanificacion(
                 .count() != vehiculos.size()) {
             throw new IllegalArgumentException("Vehículo duplicado");
         }
+    }
+
+    public ContextoPlanificacion(List<Pedido> pedidos, List<Vehiculo> vehiculos,
+            List<Almacen> almacenes, LocalDateTime instante, ReglasPlanificacion reglas,
+            Set<String> nodosBloqueados, boolean respetarPosicionVehiculo,
+            java.util.List<pe.edu.pucp.sisrap.experimentacion.dominio.Bloqueo> calendarioBloqueos) {
+        this(pedidos, vehiculos, almacenes, instante, reglas, nodosBloqueados,
+                respetarPosicionVehiculo, calendarioBloqueos, java.util.Map.of());
+    }
+
+    public ContextoPlanificacion(List<Pedido> pedidos, List<Vehiculo> vehiculos,
+            List<Almacen> almacenes, LocalDateTime instante, ReglasPlanificacion reglas,
+            Set<String> nodosBloqueados, boolean respetarPosicionVehiculo) {
+        this(pedidos, vehiculos, almacenes, instante, reglas, nodosBloqueados,
+                respetarPosicionVehiculo, List.of());
     }
 
     /** Compatibilidad total con la experimentación existente. */

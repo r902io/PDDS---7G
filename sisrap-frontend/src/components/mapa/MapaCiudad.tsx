@@ -26,13 +26,14 @@ interface Props {
   seleccion: Seleccion;
   alSeleccionar: (s: Seleccion) => void;
   atenuado: boolean;
+  animar: boolean;
 }
 
 /** Longitudes "redondas" para la escala gráfica. */
 const LARGOS_ESCALA = [1, 2, 5, 10, 20];
 
 export function MapaCiudad(props: Props) {
-  const { canvasRef, vehiculosCanvasRef, hover, cursorKm, escalaPx, zoom, encuadrar, manejadores } = useMapCanvas(props);
+  const { canvasRef, relojVisualRef, vehiculosCanvasRef, hover, cursorKm, escalaPx, zoom, encuadrar, manejadores } = useMapCanvas(props);
   const [leyendaAbierta, setLeyendaAbierta] = useState(true);
 
   // Escala gráfica: el mayor largo redondo que quepa en ~120 px.
@@ -49,6 +50,8 @@ export function MapaCiudad(props: Props) {
       />
 
       <canvas ref={vehiculosCanvasRef} className="absolute left-0 top-0 pointer-events-none" aria-hidden="true" />
+
+      <span ref={relojVisualRef} className="absolute right-2.5 top-2.5 z-10 bg-panel/95 border border-borde rounded px-2 py-1 font-mono text-xs text-texto2" />
 
       {/* Leyenda */}
       <div className="absolute left-2.5 top-2.5 z-10 bg-panel/95 border border-borde rounded-lg px-3 py-2 text-xs max-w-[340px]">

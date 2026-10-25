@@ -296,11 +296,13 @@ public final class DistanciaReticula {
      */
     public static void limpiarCache() {
         CACHE.get().limpiar();
+        TEMPORALES.get().clear();
     }
 
     /** Libera completamente la caché asociada al hilo actual. */
     public static void liberarCache() {
         CACHE.remove();
+        TEMPORALES.remove();
     }
 
     public static int entradasCache() {
@@ -327,5 +329,134 @@ public final class DistanciaReticula {
 
         return Math.abs(x1 - x2)
                 + Math.abs(y1 - y2);
+    }
+
+    public record Trayecto(java.time.LocalDateTime llegada, java.util.List<Nodo> nodos,
+                           java.util.List<java.time.LocalDateTime> salidas) { }
+
+    private record ClaveTemporal(int ox, int oy, int dx, int dy, int px, int py,
+            java.time.LocalDateTime salida, double velocidad, double distancia, int ancho, int alto,
+            Set<String> fijos, java.util.List<pe.edu.pucp.sisrap.experimentacion.dominio.Bloqueo> calendario) { }
+    private static final ThreadLocal<Map<ClaveTemporal, java.util.Optional<Trayecto>>> TEMPORALES =
+            ThreadLocal.withInitial(HashMap::new);
+
+    /** Camino de llegada más temprana. Esperar una reapertura es una alternativa física. */
+    public static java.util.Optional<Trayecto> trayectoTemporal(Nodo origen, Nodo destino,
+            Nodo anterior, java.time.LocalDateTime salida, double velocidad, double distanciaNodo,
+            Set<String> bloqueosActuales,
+            java.util.List<pe.edu.pucp.sisrap.experimentacion.dominio.Bloqueo> calendario,
+            int ancho, int alto) {
+        if (velocidad <= 0 || distanciaNodo <= 0 || salida == null)
+            throw new IllegalArgumentException("Parámetros temporales inválidos");
+        var conocidos = calendario == null ? java.util.List.<pe.edu.pucp.sisrap.experimentacion.dominio.Bloqueo>of()
+                : calendario;
+        Set<String> fijos = new java.util.HashSet<>(bloqueosActuales == null ? Set.of() : bloqueosActuales);
+        for (var b : conocidos) fijos.removeAll(BloqueosReticula.cerrarTramos(b.vertices()));
+        var clave = new ClaveTemporal(origen.getX(), origen.getY(), destino.getX(), destino.getY(),
+                anterior == null ? -1 : anterior.getX(), anterior == null ? -1 : anterior.getY(),
+                salida, velocidad, distanciaNodo, ancho, alto, Set.copyOf(fijos), conocidos);
+        var cache = TEMPORALES.get();
+        var existente = cache.get(clave);
+        if (existente != null) return existente;
+        var resultado = buscarTemporal(origen, destino, anterior, salida, velocidad, distanciaNodo,
+                fijos, conocidos, ancho, alto);
+        if (cache.size() >= 12000) cache.clear();
+        cache.put(clave, resultado);
+        return resultado;
+    }
+
+    private record Etiqueta(int x, int y, int px, int py, java.time.LocalDateTime llegada,
+                             java.time.LocalDateTime salidaArco, Etiqueta previa,
+                             java.time.LocalDateTime estimada) { }
+    private record EstadoTemporal(int x, int y, int px, int py) { }
+
+    private static java.util.Optional<Trayecto> buscarTemporal(Nodo origen, Nodo destino,
+            Nodo anterior, java.time.LocalDateTime inicio, double velocidad, double distanciaNodo,
+            Set<String> fijos, java.util.List<pe.edu.pucp.sisrap.experimentacion.dominio.Bloqueo> calendario,
+            int ancho, int alto) {
+        if (!dentro(origen.getX(), origen.getY(), ancho, alto)
+                || !dentro(destino.getX(), destino.getY(), ancho, alto)) return java.util.Optional.empty();
+        if (fijos.isEmpty() && calendario.isEmpty()) {
+            var nodos = new java.util.ArrayList<Nodo>();
+            var salidas = new java.util.ArrayList<java.time.LocalDateTime>();
+            int x=origen.getX(), y=origen.getY();
+            var tiempo=inicio;
+            while (x!=destino.getX() || y!=destino.getY()) {
+                tiempo=JornadaOperativa.avanzar(tiempo,0);
+                salidas.add(tiempo);
+                if (x!=destino.getX()) x+=Integer.signum(destino.getX()-x);
+                else y+=Integer.signum(destino.getY()-y);
+                nodos.add(new Nodo(x,y));
+                tiempo=JornadaOperativa.avanzar(tiempo,distanciaNodo/velocidad);
+            }
+            return java.util.Optional.of(new Trayecto(tiempo,java.util.List.copyOf(nodos),
+                    java.util.List.copyOf(salidas)));
+        }
+        var cierres = calendario.stream().map(b -> new CierreTemporal(b.inicio(), b.fin(),
+                BloqueosReticula.cerrarTramos(b.vertices()))).toList();
+        double horasArco = distanciaNodo / velocidad;
+        var cola = new PriorityQueue<Etiqueta>(Comparator.comparing(Etiqueta::estimada)
+                .thenComparing(Etiqueta::llegada, Comparator.reverseOrder()).thenComparingInt(Etiqueta::x).thenComparingInt(Etiqueta::y));
+        Map<EstadoTemporal, java.time.LocalDateTime> mejores = new HashMap<>();
+        var primero = new Etiqueta(origen.getX(), origen.getY(), anterior == null ? -1 : anterior.getX(),
+                anterior == null ? -1 : anterior.getY(), inicio, inicio, null, inicio);
+        cola.add(primero);
+        mejores.put(new EstadoTemporal(primero.x(),primero.y(),primero.px(),primero.py()), inicio);
+        while (!cola.isEmpty()) {
+            var e = cola.poll();
+            var estado = new EstadoTemporal(e.x(),e.y(),e.px(),e.py());
+            if (!e.llegada().equals(mejores.get(estado))) continue;
+            if (e.x() == destino.getX() && e.y() == destino.getY()) {
+                var nodos = new java.util.ArrayList<Nodo>();
+                var salidas = new java.util.ArrayList<java.time.LocalDateTime>();
+                for (var n = e; n.previa() != null; n = n.previa()) {
+                    nodos.add(new Nodo(n.x(),n.y())); salidas.add(n.salidaArco());
+                }
+                java.util.Collections.reverse(nodos); java.util.Collections.reverse(salidas);
+                return java.util.Optional.of(new Trayecto(e.llegada(), java.util.List.copyOf(nodos),
+                        java.util.List.copyOf(salidas)));
+            }
+            for (int[] d : MOVIMIENTOS) {
+                int nx=e.x()+d[0], ny=e.y()+d[1];
+                if (!dentro(nx,ny,ancho,alto)) continue;
+                boolean finalTramo = nx==destino.getX() && ny==destino.getY();
+                java.time.LocalDateTime partida = e.llegada();
+                java.time.LocalDateTime llegada = null;
+                for (int intento=0; intento<=cierres.size()+1; intento++) {
+                    partida = JornadaOperativa.avanzar(partida, 0);
+                    llegada = JornadaOperativa.avanzar(partida, horasArco);
+                    if (!pasoPermitido(e.x(),e.y(),nx,ny,e.px(),e.py(),finalTramo,fijos)) {
+                        llegada=null; break;
+                    }
+                    java.time.LocalDateTime esperarHasta=null;
+                    for (var cierre : cierres) {
+                        if (cierre.inicio().isBefore(llegada) && cierre.fin().isAfter(partida)
+                                && !pasoPermitido(e.x(),e.y(),nx,ny,e.px(),e.py(),finalTramo,cierre.nodos())) {
+                            if (esperarHasta==null || cierre.fin().isAfter(esperarHasta)) esperarHasta=cierre.fin();
+                        }
+                    }
+                    if (esperarHasta==null) break;
+                    partida=esperarHasta; llegada=null;
+                }
+                if (llegada==null) continue;
+                var siguiente=new EstadoTemporal(nx,ny,e.x(),e.y());
+                var conocida=mejores.get(siguiente);
+                if (conocida!=null && !llegada.isBefore(conocida)) continue;
+                mejores.put(siguiente,llegada);
+                long heuristicaNs=Math.round(heuristica(nx,ny,destino.getX(),destino.getY())
+                        *horasArco*3_600_000_000_000.0);
+                cola.add(new Etiqueta(nx,ny,e.x(),e.y(),llegada,partida,e,llegada.plusNanos(heuristicaNs)));
+            }
+        }
+        return java.util.Optional.empty();
+    }
+
+    private record CierreTemporal(java.time.LocalDateTime inicio, java.time.LocalDateTime fin,
+                                   Set<String> nodos) { }
+
+    private static boolean pasoPermitido(int x,int y,int nx,int ny,int px,int py,
+                                         boolean destino,Set<String> cierres) {
+        if (!ArcoReticula.transitableComoExtremo(x,y,nx,ny,cierres,true,destino)) return false;
+        return !cierres.contains(x+","+y) || px<0 || (nx==px && ny==py);
     }
 }

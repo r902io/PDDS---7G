@@ -3,13 +3,19 @@ package pe.edu.pucp.sisrap.simulacion.dominio;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 
 
 public record ConfiguracionSimulacion(
         EscenarioSimulacion escenario,
         LocalDate fechaInicio,
+        LocalTime horaInicio,
         long semilla
 ) {
+
+    public ConfiguracionSimulacion(EscenarioSimulacion escenario, LocalDate fechaInicio, long semilla) {
+        this(escenario, fechaInicio, LocalTime.MIDNIGHT, semilla);
+    }
 
     public ConfiguracionSimulacion {
         if (escenario == null) {
@@ -18,10 +24,11 @@ public record ConfiguracionSimulacion(
         if (fechaInicio == null) {
             throw new IllegalArgumentException("La fecha de inicio es obligatoria");
         }
+        horaInicio = horaInicio == null ? LocalTime.MIDNIGHT : horaInicio;
     }
 
     public LocalDateTime fechaHoraInicio() {
-        return fechaInicio.atStartOfDay();
+        return fechaInicio.atTime(horaInicio);
     }
 
     public LocalDateTime fechaHoraFin() {

@@ -16,6 +16,9 @@ public class Solucion {
     private int valorN;
     private double valorV;
     private boolean esFactible;
+    private int pedidosTardios;
+    private double holguraMinimaHoras;
+    private List<Boolean> coberturaUrgente = new ArrayList<>();
 
     public Solucion copiar() {
         Solucion copia = new Solucion();
@@ -28,8 +31,18 @@ public class Solucion {
         copia.valorN = this.valorN;
         copia.valorV = this.valorV;
         copia.esFactible = this.esFactible;
+        copia.pedidosTardios = pedidosTardios;
+        copia.holguraMinimaHoras = holguraMinimaHoras;
+        copia.coberturaUrgente = List.copyOf(coberturaUrgente);
         return copia;
     }
+
+    public int getPedidosTardios() { return pedidosTardios; }
+    public void setPedidosTardios(int n) { pedidosTardios = n; }
+    public double getHolguraMinimaHoras() { return holguraMinimaHoras; }
+    public void setHolguraMinimaHoras(double h) { holguraMinimaHoras = h; }
+    public List<Boolean> getCoberturaUrgente() { return coberturaUrgente; }
+    public void setCoberturaUrgente(List<Boolean> c) { coberturaUrgente = List.copyOf(c); }
 
     public List<Ruta> getRutas() { return rutas; }
     public void setRutas(List<Ruta> rutas) { this.rutas = rutas; }

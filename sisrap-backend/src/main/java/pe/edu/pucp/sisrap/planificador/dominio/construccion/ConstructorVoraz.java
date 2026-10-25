@@ -29,7 +29,7 @@ public final class ConstructorVoraz {
 
         insertarPedidos(
                 s.getRutas(),
-                ordenarPedidos(c.getPedidos(), random, voraz),
+                voraz && c.respetarPosicionVehiculo() ? ordenarPorUrgencia(c) : ordenarPedidos(c.getPedidos(), random, voraz),
                 s.getPedidosNoAsignados());
 
         s.getRutas().forEach(Ruta::recalcular);
@@ -65,6 +65,8 @@ public final class ConstructorVoraz {
                             c.reglas());
 
             ruta.setNodosBloqueados(c.nodosBloqueados());
+            ruta.setCalendarioBloqueos(c.calendarioBloqueos());
+            ruta.setDisponibleHasta(c.disponibleHasta().get(vehiculo.getIdVehiculo()));
             ruta.setAlmacenesCandidatos(c.getAlmacenes());
             rutas.add(ruta);
         }
@@ -83,6 +85,58 @@ public final class ConstructorVoraz {
             copia.sort(Comparator.comparing(Pedido::getFechaLimite));
         }
         return copia;
+    }
+
+    /** Menor holgura operativa primero, con vencimiento absoluto como desempate. */
+    public static List<Pedido> ordenarPorUrgencia(ContextoPlanificacion contexto) {
+        Map<Long, Double> margenes = new HashMap<>();
+        for (Pedido p : contexto.getPedidos()) margenes.put(p.getIdPedido(), holguraOptimista(p, contexto));
+        return contexto.getPedidos().stream().sorted(
+                Comparator.comparingDouble((Pedido p) -> margenes.get(p.getIdPedido()))
+                        .thenComparing(Pedido::getFechaLimite).thenComparing(Pedido::getIdPedido)).toList();
+    }
+
+    /** Cota optimista usada solo para ordenar y alertar; nunca autoriza un despacho. */
+    public static double holguraOptimista(Pedido pedido, ContextoPlanificacion contexto) {
+        double mejor = Double.POSITIVE_INFINITY;
+        for (var v : contexto.getVehiculos()) {
+            if (!v.isDisponible() || v.getCapacidadPaquetes() < pedido.getCantidadQq()) continue;
+            for (var a : contexto.getAlmacenes()) {
+                if (!a.tieneStockDisponible() || (a.getCapacidadMaxima() != null
+                        && a.getStockActual() < pedido.getCantidadQq())) continue;
+                double distancia = v.getPosicionActual().distanciaManhattan(a.getUbicacion())
+                        + a.getUbicacion().distanciaManhattan(pedido.getUbicacion());
+                var llegada = pe.edu.pucp.sisrap.planificador.dominio.modelo.JornadaOperativa.avanzar(
+                        contexto.instante(), distancia * contexto.reglas().distanciaNodoKm()/v.getVelocidadKmh());
+                mejor = Math.min(mejor, java.time.Duration.between(contexto.instante(),llegada)
+                        .toNanos()/3_600_000_000_000.0);
+            }
+        }
+        double restante=java.time.Duration.between(contexto.instante(),pedido.getFechaLimite())
+                .toNanos()/3_600_000_000_000.0;
+        return Double.isFinite(mejor) ? restante-mejor : Double.NEGATIVE_INFINITY;
+    }
+
+    public static double holgura(Pedido pedido, ContextoPlanificacion contexto) {
+        double mejor = Double.POSITIVE_INFINITY;
+        for (var v : contexto.getVehiculos()) {
+            if (!v.isDisponible() || v.getCapacidadPaquetes() < pedido.getCantidadQq()) continue;
+            for (var a : contexto.getAlmacenes()) {
+                if (!a.tieneStockDisponible() || (a.getCapacidadMaxima() != null
+                        && a.getStockActual() < pedido.getCantidadQq())) continue;
+                Ruta r = new Ruta(v, a, v.getPosicionActual(),
+                        contexto.respetarPosicionVehiculo(), contexto.instante(), contexto.reglas());
+                r.setNodosBloqueados(contexto.nodosBloqueados());
+                r.setCalendarioBloqueos(contexto.calendarioBloqueos());
+                r.setDisponibleHasta(contexto.disponibleHasta().get(v.getIdVehiculo()));
+                r.getSecuenciaPedidos().add(pedido);
+                r.recalcular();
+                if (!r.isIntransitable()) mejor = Math.min(mejor, r.horaLlegadaDe(0));
+            }
+        }
+        double restante = java.time.Duration.between(contexto.instante(), pedido.getFechaLimite())
+                .toNanos() / 3_600_000_000_000.0;
+        return Double.isFinite(mejor) ? restante - mejor : Double.NEGATIVE_INFINITY;
     }
 
     /**
@@ -119,13 +173,8 @@ public final class ConstructorVoraz {
                         continue;
                     }
 
-                    double tiempo = ruta.horaLlegadaSiAgrega(
-                            pedido,
-                            almacen);
-
-                    if (!Double.isFinite(tiempo)) {
-                        continue;
-                    }
+                    double tiempo = ruta.horaLlegadaSiAgrega(pedido, almacen);
+                    if (!Double.isFinite(tiempo)) continue;
 
                     if (tiempo < mejorTiempo) {
                         mejorTiempo = tiempo;

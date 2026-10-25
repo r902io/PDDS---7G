@@ -75,6 +75,8 @@ public final class RecuperacionPedidosVencidos {
                                 : new Ruta(vehiculo, origen,
                                         contexto.instante(), contexto.reglas());
                         candidata.setNodosBloqueados(contexto.nodosBloqueados());
+                        candidata.setCalendarioBloqueos(contexto.calendarioBloqueos());
+                        candidata.setDisponibleHasta(contexto.disponibleHasta().get(vehiculo.getIdVehiculo()));
                         candidata.setAlmacenesCandidatos(contexto.getAlmacenes());
                     }
                     candidata.getSecuenciaPedidos().add(pedido);
