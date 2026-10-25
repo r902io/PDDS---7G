@@ -1,5 +1,7 @@
 package pe.edu.pucp.sisrap.pedido.api;
 
+import pe.edu.pucp.sisrap.simulacion.dominio.EscenarioSimulacion;
+
 import java.util.List;
 import java.util.NoSuchElementException;
 
@@ -122,18 +124,19 @@ public class PedidoController {
 
     @GetMapping("/cargas-historicas")
     public List<CargaHistoricaPedidos>
-    listarCargasHistoricas() {
+    listarCargasHistoricas(@RequestParam EscenarioSimulacion escenario) {
 
         return servicio
-                .listarCargasHistoricas();
+                .listarCargasHistoricas(escenario);
     }
 
     @DeleteMapping("/cargas-historicas/{huella}")
     public ResponseEntity<Void> eliminarCargaHistorica(
             @RequestHeader(value = "Authorization", required = false) String authorization,
-            @PathVariable String huella) {
+            @PathVariable String huella,
+            @RequestParam EscenarioSimulacion escenario) {
         try {
-            servicio.eliminarCargaHistorica(extraerToken(authorization), huella);
+            servicio.eliminarCargaHistorica(extraerToken(authorization), escenario, huella);
             return ResponseEntity.noContent().build();
         } catch (SesionNoValidaException e) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, e.getMessage());
@@ -158,6 +161,8 @@ public class PedidoController {
             )
             String authorization,
 
+            @RequestParam EscenarioSimulacion escenario,
+
             @RequestPart("archivos")
             List<MultipartFile> archivos
     ) {
@@ -172,6 +177,7 @@ public class PedidoController {
             ResultadoCargaHistorica resultado =
                     servicio.importarHistoricos(
                             token,
+                            escenario,
                             archivos
                     );
 

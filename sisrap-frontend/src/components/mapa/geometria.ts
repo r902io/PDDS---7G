@@ -38,17 +38,20 @@ const clave = (a: Nodo, b: Nodo) => {
 
 /** Expande una secuencia de puntos en pasos unitarios ortogonales. */
 export function pasosUnitarios(puntos: ReadonlyArray<Nodo>): Nodo[] {
-  if (puntos.length === 0) return [];
+  if (puntos.length === 0 || puntos.some(p => !Number.isFinite(p.x) || !Number.isFinite(p.y))) return [];
   const salida: Nodo[] = [{ x: puntos[0].x, y: puntos[0].y }];
   for (let i = 1; i < puntos.length; i++) {
     let { x, y } = salida[salida.length - 1];
     const destino = puntos[i];
     while (x !== destino.x) {
-      x += Math.sign(destino.x - x);
+      // El primer punto puede estar entre dos nodos durante la animación.
+      x = destino.x > x ? Math.min(destino.x, Math.floor(x) + 1)
+        : Math.max(destino.x, Math.ceil(x) - 1);
       salida.push({ x, y });
     }
     while (y !== destino.y) {
-      y += Math.sign(destino.y - y);
+      y = destino.y > y ? Math.min(destino.y, Math.floor(y) + 1)
+        : Math.max(destino.y, Math.ceil(y) - 1);
       salida.push({ x, y });
     }
   }

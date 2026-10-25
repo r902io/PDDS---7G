@@ -3,6 +3,7 @@ import type { AlmacenOperativo, PaginaPedidos, PedidoOperativo, SnapshotSimulaci
 import { useSimulacion } from '../estado/SimulacionContext';
 import { navegar } from '../estado/navegacion';
 import { catalogoService } from '../services/catalogoService';
+import { apiFetch } from '../services/apiClient';
 import { useConsulta } from '../hooks/useConsulta';
 import type { Seleccion } from '../hooks/useMapCanvas';
 import { MapaCiudad } from '../components/mapa/MapaCiudad';
@@ -53,6 +54,7 @@ import {
 const SIN_VEHICULOS: VehiculoSnapshot[] = [];
 const SIN_ALMACENES: AlmacenOperativo[] = [];
 const SIN_PEDIDOS: PedidoOperativo[] = [];
+type Criticidad = { idSimulacion: number | null; relojSimulado: string | null; pedido: PedidoOperativo | null };
 const CIUDAD_ENUNCIADO = { anchoKm: 70, altoKm: 50 };
 
 export function EscenarioDashboard() {
@@ -68,9 +70,9 @@ export function EscenarioDashboard() {
   const [confirmarDetener, setConfirmarDetener] = useState(false);
 
   // Datos complementarios del backend.
-  const mapa = useConsulta((s) => catalogoService.mapa(s), 'mapa');
-  const almacenes = useConsulta((s) => catalogoService.almacenes(s), `almacenes-${snapshot?.estado}`, activa ? 15_000 : null);
-  const flota = useConsulta((s) => catalogoService.vehiculos(s), 'vehiculos');
+  const mapa = useConsulta((s) => catalogoService.mapa(s), `mapa-${snapshot?.idSimulacion}`);
+  const almacenes = useConsulta((s) => catalogoService.almacenes(s), `almacenes-${snapshot?.idSimulacion}-${snapshot?.estado}`, activa ? 15_000 : null);
+  const flota = useConsulta((s) => catalogoService.vehiculos(s), `vehiculos-${snapshot?.idSimulacion}`);
   const reloj = useRef<string | null>(null);
   reloj.current = snapshot?.relojSimulado ?? null;
   const bloqueos = useConsulta(
@@ -84,6 +86,10 @@ export function EscenarioDashboard() {
     `mapa-pedidos-${snapshot?.idSimulacion}-${snapshot?.estado}`,
     activa ? 8_000 : null
   );
+  const criticidad = useConsulta(s => corrida
+    ? apiFetch<Criticidad>('/api/pedidos/criticidad', { autenticar: false, senal: s })
+    : Promise.resolve({ idSimulacion: null, relojSimulado: null, pedido: null }),
+    `criticidad-${snapshot?.idSimulacion}-${snapshot?.estado}`, activa ? 8_000 : null);
   const bloqueosActivos = useMemo(() => {
     if (!corrida || !snapshot?.relojSimulado) return [];
     const instante = snapshot.relojSimulado.slice(0, 19);
@@ -157,10 +163,6 @@ export function EscenarioDashboard() {
           errorBloqueos={bloqueos.error}
         />
         <div className="relative flex-1 min-h-0">
-          {pedidosMap.datos && pedidosMap.datos.total > pedidosMap.datos.contenido.length &&
-            <div className="absolute bottom-14 left-4 z-10 bg-panel/95 border border-borde rounded px-2 py-1 text-xs text-texto2">
-              Mostrando {pedidosMap.datos.contenido.length} de {pedidosMap.datos.total} destinos. Consulta el resto en Pedidos.
-            </div>}
           <MapaCiudad
             dimensiones={dimensiones}
             almacenes={almacenes.datos ?? SIN_ALMACENES}
@@ -194,7 +196,8 @@ export function EscenarioDashboard() {
         alternar={() => setDerColapsado((v) => !v)}
       >
         <PanelIndicadores snapshot={snapshot} bloqueosCargados={bloqueos.datos != null}
-          pedidos={pedidosMap.datos?.contenido ?? SIN_PEDIDOS} pedidosCompletos={pedidosMap.datos != null && pedidosMap.datos.total <= pedidosMap.datos.contenido.length} />
+          criticidad={criticidad.datos?.idSimulacion === snapshot.idSimulacion ? criticidad.datos : null}
+          errorCriticidad={criticidad.error} recargarCriticidad={criticidad.recargar} />
       </PanelLateral>
 
       <Modal isOpen={confirmarDetener} onClose={() => setConfirmarDetener(false)} titulo="Detener la corrida">
@@ -598,19 +601,18 @@ function PanelParametros({
 // Panel derecho
 // ---------------------------------------------------------------------------
 
-function PanelIndicadores({ snapshot, bloqueosCargados, pedidos, pedidosCompletos }: {
+function PanelIndicadores({ snapshot, bloqueosCargados, criticidad, errorCriticidad, recargarCriticidad }: {
   snapshot: SnapshotSimulacion;
   bloqueosCargados: boolean;
-  pedidos: PedidoOperativo[];
-  pedidosCompletos: boolean;
+  criticidad: Criticidad | null;
+  errorCriticidad: string | null;
+  recargarCriticidad: () => void;
 }) {
   const p = snapshot.pedidos;
-  const pendientesCriticos = pedidos.filter(p => p.estado === 'PENDIENTE' || p.estado === 'EN_RUTA' || p.estado === 'REASIGNADO' || p.estado === 'RETRASADO');
-  const relojMs = snapshot.relojSimulado ? Date.parse(snapshot.relojSimulado) : NaN;
-  const criticos = pendientesCriticos.map(p => ({
-    id: p.idPedido, restante: (Date.parse(p.fechaLlegada) + p.horasLimite * 3_600_000 - relojMs) / 60_000,
-  })).filter(p => Number.isFinite(p.restante)).sort((a, b) => a.restante - b.restante);
-  const critico = criticos[0] ?? null;
+  const relojMs = criticidad?.relojSimulado ? Date.parse(criticidad.relojSimulado) : NaN;
+  const pedido = criticidad?.pedido;
+  const critico = pedido ? { id: pedido.idPedido,
+    restante: (Date.parse(pedido.fechaLlegada) + pedido.horasLimite * 3_600_000 - relojMs) / 60_000 } : null;
   const colapso = enColapso(snapshot);
   const corrida = hayCorrida(snapshot);
   const dia = diaSimulado(snapshot.fechaHoraInicio, snapshot.relojSimulado);
@@ -668,15 +670,6 @@ function PanelIndicadores({ snapshot, bloqueosCargados, pedidos, pedidosCompleto
         <Fila k="Reasignados" v={formatoEntero(p.reasignados)} />
         <Fila k="Ingresados hasta ahora" v={formatoEntero(Math.max(0, p.total - p.futuros))} />
         <Fila k="Futuros estimados (aún no llegan)" v={formatoEntero(p.futuros)} />
-        <Fila
-          k="Incumplimientos acumulados (incluye entregados tarde)"
-          v={formatoEntero(p.retrasados)}
-          claseValor={p.retrasados > 0 ? '!text-rojo font-bold' : ''}
-        />
-        <Fila k="Vencidos aún sin entregar" v={formatoEntero(p.retrasadosSinEntregar ?? p.retrasados)} />
-        <Fila k="De ellos, en ruta" v={formatoEntero(p.retrasadosEnRuta ?? 0)} />
-        <Fila k="Entregados fuera de plazo" v={formatoEntero(p.retrasadosEntregados ?? 0)} />
-        <p className="text-[11px] text-texto2 mt-1">El incumplimiento es una condición del SLA y puede corresponder a un pedido en ruta o ya entregado. No debe sumarse a los estados físicos.</p>
         <div className="border-t border-borde mt-1.5 pt-1.5">
           <Fila k="Total previsto del periodo" v={formatoEntero(p.total)} />
         </div>
@@ -684,7 +677,8 @@ function PanelIndicadores({ snapshot, bloqueosCargados, pedidos, pedidosCompleto
 
 
       <Bloque titulo="Pedido de mayor criticidad">
-        {!pedidosCompletos ? <p className="text-xs text-texto2">La vista contiene solo una parte de los pedidos; la holgura global no se puede calcular con seguridad.</p> :
+        {errorCriticidad ? <ErrorCarga titulo="No se pudo consultar la criticidad" error={errorCriticidad} reintentar={recargarCriticidad} /> :
+          !criticidad && corrida ? <Cargando texto="Consultando pedidos activos…" /> :
           critico ? <>
             <Fila k="Pedido" v={`#${critico.id}`} />
             <Fila k="Tiempo hasta su plazo" v={`${Math.round(critico.restante)} min`} claseValor={critico.restante < 0 ? '!text-rojo' : critico.restante < 120 ? '!text-ambar' : '!text-mint'} />

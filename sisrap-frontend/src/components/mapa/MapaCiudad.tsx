@@ -32,9 +32,11 @@ interface Props {
 /** Longitudes "redondas" para la escala gráfica. */
 const LARGOS_ESCALA = [1, 2, 5, 10, 20];
 
+let preferenciaLeyendaAbierta = true;
+
 export function MapaCiudad(props: Props) {
   const { canvasRef, relojVisualRef, vehiculosCanvasRef, hover, cursorKm, escalaPx, zoom, encuadrar, manejadores } = useMapCanvas(props);
-  const [leyendaAbierta, setLeyendaAbierta] = useState(true);
+  const [leyendaAbierta, setLeyendaAbierta] = useState(preferenciaLeyendaAbierta);
 
   // Escala gráfica: el mayor largo redondo que quepa en ~120 px.
   const kmEscala = [...LARGOS_ESCALA].reverse().find((k) => k * escalaPx <= 130) ?? 1;
@@ -59,7 +61,7 @@ export function MapaCiudad(props: Props) {
           <span className="text-[11px] uppercase tracking-wider text-texto2 font-semibold">Leyenda</span>
           <button
             className="ml-auto text-[11px] text-texto2 border border-borde rounded px-1.5 py-0.5 hover:text-texto"
-            onClick={() => setLeyendaAbierta((v) => !v)}
+            onClick={() => { preferenciaLeyendaAbierta = !leyendaAbierta; setLeyendaAbierta(preferenciaLeyendaAbierta); }}
             aria-expanded={leyendaAbierta}
           >
             {leyendaAbierta ? 'Ocultar' : 'Mostrar'}

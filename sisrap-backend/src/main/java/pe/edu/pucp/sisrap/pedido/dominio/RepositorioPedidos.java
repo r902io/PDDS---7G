@@ -3,6 +3,7 @@ package pe.edu.pucp.sisrap.pedido.dominio;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
+import pe.edu.pucp.sisrap.simulacion.dominio.EscenarioSimulacion;
 
 public interface RepositorioPedidos {
 
@@ -24,11 +25,12 @@ public interface RepositorioPedidos {
             long idPedido
     );
 
-    List<CargaHistoricaPedidos> listarCargasHistoricas();
+    List<CargaHistoricaPedidos> listarCargasHistoricas(EscenarioSimulacion escenario);
 
-    void eliminarCargaHistorica(String huella);
+    void eliminarCargaHistorica(EscenarioSimulacion escenario, String huella);
 
     boolean existeCargaPeriodo(
+            EscenarioSimulacion escenario,
             int anio,
             int mes
     );
@@ -38,6 +40,7 @@ public interface RepositorioPedidos {
      * Si uno falla, no se persiste ninguno.
      */
     List<CargaHistoricaPedidos> guardarCargasHistoricas(
+            EscenarioSimulacion escenario,
             List<CargaHistoricaPreparada> cargas
     );
 }

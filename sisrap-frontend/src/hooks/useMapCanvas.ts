@@ -59,6 +59,33 @@ interface Opciones {
 const MARGEN = 34;
 const GROSOR_RUTA = 2.4;
 const RADIO_MARCA = 11;
+const RETENCION_RUTA_MS = 1_200;
+const FUNDIDO_RUTA_MS = 320;
+const APARICION_RUTA_MS = 180;
+
+interface RutaVisible {
+  ruta: RutaKm;
+  progreso: number;
+  creada: number;
+  ausenteDesde: number | null;
+  retencion: number;
+}
+
+/** Recorta únicamente el tramo recorrido, sin proyectar el vehículo sobre otra calle. */
+function rutaDesdePosicion(visible: RutaVisible, pos: { x: number; y: number }): RutaKm | null {
+  const aristas = visible.ruta.aristas;
+  for (let i = visible.progreso; i < aristas.length; i++) {
+    const { a, b } = aristas[i];
+    const horizontal = a.y === b.y;
+    const sobreCalle = horizontal ? Math.abs(pos.y - a.y) < 1e-5 : Math.abs(pos.x - a.x) < 1e-5;
+    const coordenada = horizontal ? pos.x : pos.y;
+    const inicio = horizontal ? a.x : a.y, fin = horizontal ? b.x : b.y;
+    if (!sobreCalle || coordenada < Math.min(inicio, fin) - 1e-5 || coordenada > Math.max(inicio, fin) + 1e-5) continue;
+    visible.progreso = i;
+    return { ...visible.ruta, aristas: [{ ...aristas[i], a: pos }, ...aristas.slice(i + 1)] };
+  }
+  return null;
+}
 
 interface Grupo {
   x: number;
@@ -83,6 +110,10 @@ export function useMapCanvas(op: Opciones) {
   const [hover, setHover] = useState<EstadoHover | null>(null);
   const [cursorKm, setCursorKm] = useState<{ x: number; y: number } | null>(null);
   const arrastre = useRef<{ x0: number; y0: number; dx0: number; dy0: number; movido: boolean } | null>(null);
+  const vehiculosVisuales = useRef(op.vehiculos);
+  const rutasVisibles = useRef(new Map<string, RutaVisible>());
+  const rutasPendientes = useRef(true);
+  const corridaVisual = useRef(op.corridaId);
   const polilineas = useRef<Map<string, Array<[number, number]>>>(new Map());
 
   const { anchoKm, altoKm } = op.dimensiones;
@@ -117,7 +148,6 @@ export function useMapCanvas(op: Opciones) {
     };
   }, [tamano, vista, anchoKm, altoKm]);
 
-  const rutas: RutaKm[] = useMemo(() => construirRutas(op.vehiculos), [op.vehiculos]);
 
   // Vehículos agrupados por nodo. Los que están en un almacén quedan DENTRO de él.
   const grupos: Grupo[] = useMemo(() => {
@@ -136,7 +166,6 @@ export function useMapCanvas(op: Opciones) {
     return [...porNodo.values()];
   }, [op.vehiculos, op.almacenes]);
 
-  const vehiculoPorId = useMemo(() => new Map(op.vehiculos.map((v) => [v.idVehiculo, v])), [op.vehiculos]);
 
   // Vehículo resaltado: el que está bajo el cursor o, si no, el seleccionado.
   const enfocado: string | null =
@@ -199,62 +228,6 @@ export function useMapCanvas(op: Opciones) {
 
     const alfaBase = op.atenuado ? 0.45 : 1;
 
-    // 2. Bloqueos activos (programados desde el archivo mensual).
-    for (const b of op.bloqueos) {
-      if (b.vertices.length < 2) continue;
-      ctx.save();
-      ctx.globalAlpha = alfaBase;
-      ctx.strokeStyle = '#ef4444';
-      ctx.lineWidth = 4;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'miter';
-      ctx.beginPath();
-      // Se respeta la ortogonalidad aunque un vértice llegara mal formado.
-      let previo = b.vertices[0];
-      ctx.moveTo(px(previo.x), py(previo.y));
-      for (let i = 1; i < b.vertices.length; i++) {
-        const v = b.vertices[i];
-        if (v.x !== previo.x && v.y !== previo.y) ctx.lineTo(px(v.x), py(previo.y));
-        ctx.lineTo(px(v.x), py(v.y));
-        previo = v;
-      }
-      ctx.stroke();
-      const a = b.vertices[0];
-      const z = b.vertices[1];
-      dibujarForma(ctx, 'bloqueo', (px(a.x) + px(z.x)) / 2, (py(a.y) + py(z.y)) / 2);
-      ctx.restore();
-    }
-
-    // 3. Rutas pendientes (caminoActual), con carriles en tramos compartidos.
-    const nuevas = new Map<string, Array<[number, number]>>();
-    const ordenadas = [...rutas].sort((r1, r2) =>
-      r1.idVehiculo === enfocado ? 1 : r2.idVehiculo === enfocado ? -1 : 0
-    );
-    for (const r of ordenadas) {
-      const pts = polilineaPx(r, proy, GROSOR_RUTA);
-      nuevas.set(r.idVehiculo, pts);
-      if (pts.length < 2) continue;
-      const esEnfocada = r.idVehiculo === enfocado;
-      const color = colorDeVehiculo(r.idVehiculo);
-      ctx.save();
-      ctx.globalAlpha = alfaBase * (enfocado == null ? 0.85 : esEnfocada ? 1 : 0.15);
-      ctx.lineJoin = 'miter';
-      ctx.lineCap = 'butt';
-      if (esEnfocada) {
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = GROSOR_RUTA + 3;
-        trazar(ctx, pts);
-      }
-      ctx.strokeStyle = color;
-      ctx.lineWidth = esEnfocada ? GROSOR_RUTA + 1 : GROSOR_RUTA;
-      trazar(ctx, pts);
-      if (r.destino && vehiculoPorId.get(r.idVehiculo)?.pedidoObjetivo != null) {
-        dibujarForma(ctx, 'destinoCliente', px(r.destino.x), py(r.destino.y), color);
-      }
-      ctx.restore();
-    }
-    polilineas.current = nuevas;
-
     // Destinos de pedidos que YA ingresaron. Los históricos no pertenecen a esta lista.
     for (const p of op.pedidos) {
       if (p.estado === 'ENTREGADO') continue;
@@ -270,19 +243,8 @@ export function useMapCanvas(op: Opciones) {
       ctx.restore();
     }
 
-    // 4. Almacenes, con la cantidad de unidades que contienen.
-    for (const a of op.almacenes) {
-      const x = px(a.ubicacionX);
-      const y = py(a.ubicacionY);
-      const central = a.tipo === 'CENTRAL';
-      ctx.save();
-      ctx.globalAlpha = alfaBase;
-      dibujarForma(ctx, central ? 'almacenCentral' : 'almacenIntermedio', x, y, undefined, 1.25);
-      etiqueta(ctx, `${a.nombre} (${a.ubicacionX},${a.ubicacionY})`, x, y + 18, '#34d399');
-      ctx.restore();
-    }
 
-  }, [tamano, proy, rutas, grupos, op.almacenes, op.bloqueos, op.pedidos, op.seleccion, op.atenuado, enfocado, vehiculoPorId, anchoKm, altoKm]);
+  }, [tamano, proy, op.pedidos, op.seleccion, op.atenuado, anchoKm, altoKm]);
 
   useEffect(() => {
     const recibir = () => {
@@ -292,6 +254,15 @@ export function useMapCanvas(op: Opciones) {
         && !op.atenuado && !document.hidden && !reducir;
       const muestra = s ?? op.vehiculos;
       if (ultimaMuestra.current === muestra && animar && animacionHabilitada.current) return;
+      const corrida = s?.idSimulacion ?? op.corridaId;
+      if (corridaVisual.current !== corrida) {
+        rutasVisibles.current.clear();
+        polilineas.current.clear();
+        gruposAnimados.current = [];
+        corridaVisual.current = corrida;
+      }
+      vehiculosVisuales.current = s?.vehiculos ?? op.vehiculos;
+      rutasPendientes.current = true;
       animacionHabilitada.current = animar;
       ultimaMuestra.current = muestra;
       animador.current.actualizar(s?.vehiculos ?? op.vehiculos, s?.idSimulacion ?? op.corridaId,
@@ -316,23 +287,136 @@ export function useMapCanvas(op: Opciones) {
     canvas.style.height = `${tamano.h}px`;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     let frame = 0;
+    let ultimoDibujo = -Infinity;
+    rutasPendientes.current = true;
 
     const dibujar = (ahora: number) => {
       frame = 0;
+      // La capa estática no se repinta durante el movimiento. Esta capa se limita a 30 FPS.
+      if (ahora - ultimoDibujo < 1_000 / 30) {
+        frame = requestAnimationFrame(dibujar);
+        return;
+      }
+      ultimoDibujo = ahora;
       const reloj = animador.current.reloj(ahora);
       if (relojVisualRef.current && reloj) {
         const texto = 'Hora del mapa: ' + reloj.slice(11, 19);
         if (relojVisualRef.current.textContent !== texto) relojVisualRef.current.textContent = texto;
       }
-      ctx.clearRect(0, 0, tamano.w, tamano.h);
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const vehiculos = vehiculosVisuales.current;
+      const vehiculoPorId = new Map(vehiculos.map(v => [v.idVehiculo, v]));
       const posiciones = new Map<string, { x: number; y: number }>();
       const activo = animador.current.enMovimiento(ahora);
-      for (const v of op.vehiculos) {
+      for (const v of vehiculos) {
         posiciones.set(v.idVehiculo, animador.current.posicion(v.idVehiculo, ahora) ?? { x: v.x, y: v.y });
       }
 
+      if (rutasPendientes.current) {
+        rutasPendientes.current = false;
+        const confirmadas = construirRutas(vehiculos.flatMap(v => {
+          if (!v.caminoActual.length) return [];
+          const camino = animador.current.camino(v.idVehiculo, ahora);
+          return camino.length > 1 ? [{ ...v, x: camino[0].x, y: camino[0].y, caminoActual: camino.slice(1) }] : [];
+        }));
+        const ids = new Set(confirmadas.map(r => r.idVehiculo));
+        for (const ruta of confirmadas) {
+          const anterior = rutasVisibles.current.get(ruta.idVehiculo);
+          rutasVisibles.current.set(ruta.idVehiculo, { ruta, progreso: 0,
+            creada: anterior?.creada ?? ahora, ausenteDesde: null, retencion: 0 });
+        }
+        for (const [id, anterior] of rutasVisibles.current) {
+          const v = vehiculoPorId.get(id);
+          if (!v || estaAveriado(v.estado) || estaEnMantenimiento(v.estado)) {
+            rutasVisibles.current.delete(id);
+          } else if (!ids.has(id) && anterior.ausenteDesde == null) {
+            anterior.ausenteDesde = ahora;
+            anterior.retencion = v.estado === 'EN_RUTA' || v.estado === 'RETORNANDO_ALMACEN'
+              ? RETENCION_RUTA_MS : 0;
+          }
+        }
+      }
+      const { px, py } = proy;
+      const alfaBase = op.atenuado ? 0.45 : 1;
+      const nuevas = new Map<string, Array<[number, number]>>();
+      let transicionRutas = false;
+      const ordenadas = [...rutasVisibles.current.values()].sort((a, b) =>
+        a.ruta.idVehiculo === enfocado ? 1 : b.ruta.idVehiculo === enfocado ? -1 : 0);
+      for (const visible of ordenadas) {
+        const id = visible.ruta.idVehiculo;
+        const pos = posiciones.get(id);
+        if (!pos) continue;
+        const edad = ahora - visible.creada;
+        const sinRuta = visible.ausenteDesde == null ? 0 : ahora - visible.ausenteDesde;
+        const alfa = visible.ausenteDesde == null ? Math.min(1, edad / APARICION_RUTA_MS)
+          : Math.max(0, 1 - Math.max(0, sinRuta - visible.retencion) / FUNDIDO_RUTA_MS);
+        if (visible.ausenteDesde != null && alfa <= 0) { rutasVisibles.current.delete(id); continue; }
+        transicionRutas ||= visible.ausenteDesde != null || edad < APARICION_RUTA_MS;
+        const ruta = rutaDesdePosicion(visible, pos);
+        if (!ruta) continue;
+        const pts = polilineaPx(ruta, proy, GROSOR_RUTA);
+        if (pts.length < 2) continue;
+        if (visible.ausenteDesde == null) nuevas.set(id, pts);
+        const esEnfocada = id === enfocado;
+        const color = colorDeVehiculo(id);
+        ctx.save();
+        ctx.globalAlpha = alfaBase * alfa * (enfocado == null ? 0.85 : esEnfocada ? 1 : 0.15);
+        ctx.lineJoin = 'round';
+        ctx.lineCap = 'round';
+        if (esEnfocada) {
+          ctx.strokeStyle = '#ffffff'; ctx.lineWidth = GROSOR_RUTA + 3;
+          trazar(ctx, pts);
+        }
+        ctx.strokeStyle = color;
+        ctx.lineWidth = esEnfocada ? GROSOR_RUTA + 1 : GROSOR_RUTA;
+        trazar(ctx, pts);
+        if (ruta.destino && visible.ausenteDesde == null && vehiculoPorId.get(id)?.pedidoObjetivo != null)
+          dibujarForma(ctx, 'destinoCliente', px(ruta.destino.x), py(ruta.destino.y), color);
+        ctx.restore();
+      }
+      polilineas.current = nuevas;
+
+      // 2. Bloqueos activos (programados desde el archivo mensual).
+      for (const b of op.bloqueos) {
+        if (b.vertices.length < 2) continue;
+        ctx.save();
+        ctx.globalAlpha = alfaBase;
+        ctx.strokeStyle = '#ef4444';
+        ctx.lineWidth = 4;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'miter';
+        ctx.beginPath();
+        // Se respeta la ortogonalidad aunque un vértice llegara mal formado.
+        let previo = b.vertices[0];
+        ctx.moveTo(px(previo.x), py(previo.y));
+        for (let i = 1; i < b.vertices.length; i++) {
+          const v = b.vertices[i];
+          if (v.x !== previo.x && v.y !== previo.y) ctx.lineTo(px(v.x), py(previo.y));
+          ctx.lineTo(px(v.x), py(v.y));
+          previo = v;
+        }
+        ctx.stroke();
+        const a = b.vertices[0];
+        const z = b.vertices[1];
+        dibujarForma(ctx, 'bloqueo', (px(a.x) + px(z.x)) / 2, (py(a.y) + py(z.y)) / 2);
+        ctx.restore();
+      }
+
+      // 4. Almacenes, con la cantidad de unidades que contienen.
+      for (const a of op.almacenes) {
+        const x = px(a.ubicacionX);
+        const y = py(a.ubicacionY);
+        const central = a.tipo === 'CENTRAL';
+        ctx.save();
+        ctx.globalAlpha = alfaBase;
+        dibujarForma(ctx, central ? 'almacenCentral' : 'almacenIntermedio', x, y, undefined, 1.25);
+        etiqueta(ctx, `${a.nombre} (${a.ubicacionX},${a.ubicacionY})`, x, y + 18, '#34d399');
+        ctx.restore();
+      }
       const agrupados = new Map<string, Grupo>();
-      for (const v of op.vehiculos) {
+      for (const v of vehiculos) {
         const pos = posiciones.get(v.idVehiculo)!;
         const clave = `${pos.x.toFixed(4)},${pos.y.toFixed(4)}`;
         let grupo = agrupados.get(clave);
@@ -388,7 +472,7 @@ export function useMapCanvas(op: Opciones) {
         }
         ctx.restore();
       }
-      if (activo && !document.hidden) frame = requestAnimationFrame(dibujar);
+      if ((activo || transicionRutas) && !document.hidden) frame = requestAnimationFrame(dibujar);
     };
     const alCambiarVisibilidad = () => {
       cancelAnimationFrame(frame);
@@ -398,6 +482,8 @@ export function useMapCanvas(op: Opciones) {
         animador.current.actualizar(s?.vehiculos ?? op.vehiculos, s?.idSimulacion ?? op.corridaId,
           performance.now(), false, s?.relojSimulado);
         animacionHabilitada.current = false;
+        rutasVisibles.current.clear();
+        rutasPendientes.current = true;
         frame = requestAnimationFrame(dibujar);
       }
     };
@@ -409,7 +495,7 @@ export function useMapCanvas(op: Opciones) {
       despertar.current = null;
       document.removeEventListener('visibilitychange', alCambiarVisibilidad);
     };
-  }, [op.vehiculos, op.corridaId, op.animar, op.almacenes, op.bloqueos, op.seleccion, op.atenuado, tamano, proy, enfocado, vehiculoPorId]);
+  }, [op.vehiculos, op.corridaId, op.animar, op.almacenes, op.bloqueos, op.seleccion, op.atenuado, tamano, proy, enfocado]);
 
   // ------------------------------------------------------------------------
   // Interacción
@@ -574,10 +660,13 @@ function trazar(ctx: CanvasRenderingContext2D, pts: Array<[number, number]>) {
 
 function dibujarUnidad(ctx: CanvasRenderingContext2D, v: VehiculoSnapshot, x: number, y: number) {
   // Fondo para que el icono se lea sobre las rutas.
-  ctx.fillStyle = 'rgba(10,17,30,0.85)';
+  ctx.save();
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = BORDE;
   ctx.beginPath();
   ctx.arc(x, y, RADIO_MARCA, 0, Math.PI * 2);
   ctx.fill();
+  ctx.restore();
   if (estaAveriado(v.estado)) {
     dibujarForma(ctx, 'averia', x, y);
     return;
