@@ -20,10 +20,12 @@ public enum EscenarioSimulacion {
             Duration.ofMinutes(20)
     ),
 
+    // Referencia de reloj y calibración: 7 días simulados por 45 minutos reales.
+    // El término efectivo sigue dependiendo del primer incumplimiento de SLA.
     COLAPSO_LOGISTICO(
             "COLAPSO_LOGISTICO",
             365,
-            30,
+            7,
             Duration.ofMinutes(45)
     );
 

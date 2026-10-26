@@ -61,7 +61,7 @@ import pe.edu.pucp.sisrap.simulacion.dominio.VehiculoSnapshot;
 @Repository
 public class JdbcSimulacion implements RepositorioSimulacion {
 
-    private static final int INCREMENTO_COLAPSO_POR_DIA = 12;
+    private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(JdbcSimulacion.class);
     private static final long BLOQUE_IDS_SINTETICOS = 1_000_000L;
 
     private final DataSource fuente;
@@ -88,6 +88,14 @@ public class JdbcSimulacion implements RepositorioSimulacion {
     private ConfiguracionSimulacion configuracionDemanda;
     private LocalDate ultimoDiaGenerado;
     private int medianaPedidosDiarios;
+    private Map<LocalDate, Integer> demandaHistoricaPorFecha = Map.of();
+    private Map<LocalDate, Long> paquetesHistoricosPorFecha = Map.of();
+    private pe.edu.pucp.sisrap.simulacion.dominio.ModeloDemandaColapso modeloColapso;
+
+    @Value("${sisrap.colapso.tasa-aumento-respaldo:0.05}")
+    private double tasaAumentoRespaldo = 0.05;
+    @Value("${sisrap.colapso.probabilidad-aumento-respaldo:0.5}")
+    private double probabilidadAumentoRespaldo = 0.5;
     private LocalDateTime turnoAsignado;
 
     private record ResumenCache(LocalDateTime inicio, LocalDateTime fin,
@@ -143,6 +151,7 @@ public class JdbcSimulacion implements RepositorioSimulacion {
                 // Siempre reconstruye la flota DESDE LA PLANTILLA, nunca desde la
                 // tabla vehiculo que pertenece a la corrida anterior.
                 JdbcConfiguracionOperativa.regenerarVehiculos(cn);
+                prepararModeloColapso(cn);
                 prepararProgramadorIncidencias(cn, configuracion);
                 cn.commit();
             } catch (RuntimeException | SQLException e) {
@@ -2195,6 +2204,8 @@ public class JdbcSimulacion implements RepositorioSimulacion {
         }
 
         List<Integer> cantidadesDiarias = new ArrayList<>();
+        Map<LocalDate, Integer> demandaPorFecha = new java.util.TreeMap<>();
+        Map<LocalDate, Long> paquetesPorFecha = new java.util.TreeMap<>();
         try (PreparedStatement ps = cn.prepareStatement(
                 "SELECT anio,mes FROM carga_pedidos_escenario WHERE escenario=? ORDER BY anio,mes")) {
             ps.setString(1, configuracion.escenario().name());
@@ -2202,14 +2213,23 @@ public class JdbcSimulacion implements RepositorioSimulacion {
                 while (rs.next()) {
                     java.time.YearMonth periodo = java.time.YearMonth.of(rs.getInt(1), rs.getInt(2));
                     for (int d = 1; d <= periodo.lengthOfMonth(); d++) {
-                        cantidadesDiarias.add(porDia.getOrDefault(
-                                periodo.atDay(d), List.of()).size());
+                        LocalDate fecha = periodo.atDay(d);
+                        List<PlantillaHistorica> pedidosDia = porDia.getOrDefault(fecha, List.of());
+                        cantidadesDiarias.add(pedidosDia.size());
+                        demandaPorFecha.put(fecha, pedidosDia.size());
+                        paquetesPorFecha.put(fecha,
+                                pedidosDia.stream().mapToLong(PlantillaHistorica::cantidad).sum());
                     }
                 }
             }
         }
         if (cantidadesDiarias.isEmpty()) {
-            porDia.values().forEach(dia -> cantidadesDiarias.add(dia.size()));
+            porDia.forEach((fecha, pedidosDia) -> {
+                cantidadesDiarias.add(pedidosDia.size());
+                demandaPorFecha.put(fecha, pedidosDia.size());
+                paquetesPorFecha.put(fecha,
+                        pedidosDia.stream().mapToLong(PlantillaHistorica::cantidad).sum());
+            });
         }
 
         cantidadesDiarias.sort(Integer::compare);
@@ -2234,6 +2254,72 @@ public class JdbcSimulacion implements RepositorioSimulacion {
         configuracionDemanda = configuracion;
         ultimoDiaGenerado = null;
         medianaPedidosDiarios = mediana;
+        demandaHistoricaPorFecha = Map.copyOf(demandaPorFecha);
+        paquetesHistoricosPorFecha = Map.copyOf(paquetesPorFecha);
+        modeloColapso = null;
+    }
+
+    /** Calibración analítica inicial usando la flota ya aplicada del escenario. */
+    private void prepararModeloColapso(Connection cn) throws SQLException {
+        if (configuracionDemanda.escenario() != EscenarioSimulacion.COLAPSO_LOGISTICO) return;
+        List<int[]> almacenes = new ArrayList<>();
+        try (var ps = cn.prepareStatement("SELECT ubicacion_x,ubicacion_y FROM almacen");
+             var rs = ps.executeQuery()) {
+            while (rs.next()) almacenes.add(new int[]{rs.getInt(1), rs.getInt(2)});
+        }
+        if (almacenes.isEmpty()) throw new IllegalStateException("Se requieren almacenes para estimar la capacidad");
+        double distanciaMedia = 0;
+        double cantidadMedia = 0;
+        for (PlantillaHistorica pedido : plantillasHistoricas) {
+            double distancia = Double.POSITIVE_INFINITY;
+            for (int[] almacen : almacenes) {
+                distancia = Math.min(distancia,
+                        Math.abs(pedido.x() - almacen[0]) + Math.abs(pedido.y() - almacen[1]));
+            }
+            distanciaMedia += distancia / plantillasHistoricas.size();
+            cantidadMedia += (double) pedido.cantidad() / plantillasHistoricas.size();
+        }
+        // Aproximación de viajes de ida y vuelta con una hora por atención.
+        // No representa al GA, bloqueos, mantenimiento, SLA ni rutas multi-entrega.
+        // Solo orienta la intensidad inicial; nunca decide cuándo hubo colapso.
+        double capacidadDiaria = 0;
+        double horasEfectivas = pe.edu.pucp.sisrap.planificador.dominio.modelo.JornadaOperativa.horasEfectivas(
+                configuracionDemanda.fechaInicio().atStartOfDay(),
+                configuracionDemanda.fechaInicio().plusDays(1).atStartOfDay());
+        try (var ps = cn.prepareStatement("SELECT capacidad_paquetes,velocidad_kmh FROM vehiculo");
+             var rs = ps.executeQuery()) {
+            while (rs.next()) {
+                int capacidad = rs.getInt(1);
+                double velocidad = rs.getDouble(2);
+                if (capacidad <= 0 || !Double.isFinite(velocidad) || velocidad <= 0) {
+                    throw new IllegalStateException("La flota contiene capacidad o velocidad inválida");
+                }
+                capacidadDiaria += horasEfectivas * Math.min(capacidad, cantidadMedia)
+                        / (1 + 2 * distanciaMedia / velocidad);
+            }
+        }
+        modeloColapso = new pe.edu.pucp.sisrap.simulacion.dominio.ModeloDemandaColapso(
+                demandaHistoricaPorFecha, paquetesHistoricosPorFecha,
+                configuracionDemanda.fechaInicio(), configuracionDemanda.semilla(),
+                capacidadDiaria, configuracionDemanda.escenario().diasReferenciaTemporal(),
+                tasaAumentoRespaldo, probabilidadAumentoRespaldo);
+        LOG.info("Modelo colapso: capacidad aproximada={} qq/día, probabilidad aumento={}, "
+                        + "intensidad={}, factor objetivo={}, referencia={} días / {} min reales",
+                capacidadDiaria, modeloColapso.probabilidadAumento(), modeloColapso.intensidad(),
+                modeloColapso.factorObjetivo(), configuracionDemanda.escenario().diasReferenciaTemporal(),
+                configuracionDemanda.duracionRealObjetivo().toMinutes());
+        if (!modeloColapso.objetivoAlcanzable()) {
+            LOG.warn("Los aumentos históricos son demasiado infrecuentes para alcanzar la presión objetivo "
+                    + "en el periodo de referencia sin saltos excesivos; la duración puede ser mayor");
+        }
+        if (modeloColapso.usaRespaldo()) {
+            LOG.warn("El histórico no contiene aumentos semanales comparables: se utiliza el respaldo "
+                            + "configurado (tasa={}, probabilidad={}), calibrado como presión de estrés",
+                    tasaAumentoRespaldo, probabilidadAumentoRespaldo);
+        }
+        if (!modeloColapso.usaBloquesCompletos()) {
+            LOG.warn("Sin bloques históricos completos de siete días; se remuestrean días compatibles disponibles");
+        }
     }
 
     private synchronized void limpiarDemandaSimulada() {
@@ -2245,6 +2331,9 @@ public class JdbcSimulacion implements RepositorioSimulacion {
         configuracionDemanda = null;
         ultimoDiaGenerado = null;
         medianaPedidosDiarios = 0;
+        demandaHistoricaPorFecha = Map.of();
+        paquetesHistoricosPorFecha = Map.of();
+        modeloColapso = null;
     }
 
     /** Genera, de forma determinista, los días que el reloj ya alcanzó. */
@@ -2284,7 +2373,8 @@ public class JdbcSimulacion implements RepositorioSimulacion {
      *
      * P50 es la referencia diaria. Para evitar un flujo idéntico todos los días,
      * el volumen varía aleatoriamente alrededor de P50 (semilla reproducible).
-     * En colapso se conserva el incremento progresivo de 12 pedidos/día.
+     * Colapso remuestrea bloques semanales y aplica una presión creciente
+     * probabilística independiente de la estacionalidad histórica.
      */
     private void generarDiaSimulado(LocalDate fecha) {
         long indiceDia = ChronoUnit.DAYS.between(
@@ -2293,15 +2383,19 @@ public class JdbcSimulacion implements RepositorioSimulacion {
                 mezclarSemilla(configuracionDemanda.semilla(), fecha.toEpochDay()));
 
         int cantidadObjetivo;
+        pe.edu.pucp.sisrap.simulacion.dominio.ModeloDemandaColapso.Dia diaColapso = null;
         if (configuracionDemanda.escenario()
                 == EscenarioSimulacion.COLAPSO_LOGISTICO) {
-            long objetivo = Math.addExact(
-                    medianaPedidosDiarios,
-                    Math.multiplyExact(indiceDia, INCREMENTO_COLAPSO_POR_DIA));
-            if (objetivo > Integer.MAX_VALUE) {
-                throw new IllegalStateException("Demanda sintética excede el máximo admitido");
+            if (modeloColapso == null) {
+                throw new IllegalStateException("El modelo histórico de colapso no está preparado");
             }
-            cantidadObjetivo = (int) objetivo;
+            diaColapso = modeloColapso.dia(Math.toIntExact(indiceDia));
+            cantidadObjetivo = diaColapso.pedidos();
+            if (cantidadObjetivo >= BLOQUE_IDS_SINTETICOS) {
+                throw new IllegalStateException("La demanda supera el límite de identificadores diarios de la simulación");
+            }
+            LOG.info("Colapso día {}: fecha histórica={}, pedidos={}, presión={}",
+                    indiceDia + 1, diaColapso.fechaHistorica(), cantidadObjetivo, diaColapso.factorPresion());
         } else {
             // P50 = pronóstico central de pedidos por día, no pedidos precargados.
             // La variación acotada genera jornadas distintas sin perder la referencia P50.
@@ -2317,23 +2411,26 @@ public class JdbcSimulacion implements RepositorioSimulacion {
         // Se respeta la distribución de los días de semana que se hayan cargado.
         // Si no hay precedentes de ese día, se usa la muestra histórica completa.
         List<PlantillaHistorica> candidatas = new ArrayList<>();
-        for (Map.Entry<LocalDate, List<PlantillaHistorica>> entry :
-                plantillasPorDia.entrySet()) {
-            if (entry.getKey().getDayOfWeek() == fecha.getDayOfWeek()) {
-                candidatas.addAll(entry.getValue());
+        if (diaColapso != null) {
+            candidatas.addAll(plantillasPorDia.getOrDefault(diaColapso.fechaHistorica(), List.of()));
+        } else {
+            for (Map.Entry<LocalDate, List<PlantillaHistorica>> entry : plantillasPorDia.entrySet()) {
+                if (entry.getKey().getDayOfWeek() == fecha.getDayOfWeek()) {
+                    candidatas.addAll(entry.getValue());
+                }
             }
-        }
-        if (candidatas.isEmpty()) {
-            candidatas = plantillasHistoricas;
+            if (candidatas.isEmpty()) candidatas = plantillasHistoricas;
         }
 
         for (int i = 0; i < cantidadObjetivo; i++) {
-            PlantillaHistorica muestra = candidatas.get(
-                    random.nextInt(candidatas.size()));
+            // La base del colapso reproduce todos los pedidos del día elegido.
+            // El exceso se remuestrea de ese mismo día con identidades nuevas.
+            PlantillaHistorica muestra = diaColapso != null && i < candidatas.size()
+                    ? candidatas.get(i) : candidatas.get(random.nextInt(candidatas.size()));
 
-            // Aprende la franja del histórico, pero no reproduce la hora exacta
-            // de la venta: distribuye aleatoriamente los pedidos dentro de ella.
-            LocalTime hora = LocalTime.of(
+            // Colapso conserva el horario del día remuestreado; los demás
+            // escenarios distribuyen las llegadas dentro de su franja histórica.
+            LocalTime hora = diaColapso != null ? muestra.horaLlegada() : LocalTime.of(
                     muestra.horaLlegada().getHour(),
                     random.nextInt(60),
                     random.nextInt(60));
