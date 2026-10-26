@@ -32,14 +32,22 @@ public class PedidoCriticoController {
             if (estado.idSimulacion() == null || reloj == null)
                 return new Criticidad(estado.idSimulacion(), reloj, null);
             try (var cn = fuente.getConnection(); var ps = cn.prepareStatement("""
-                    SELECT id_pedido,id_cliente,cantidad_qq,prioridad,horas_limite,
-                           fecha_llegada,estado,ubicacion_x,ubicacion_y
-                    FROM pedido
-                    WHERE fecha_entrega_real IS NULL AND fecha_llegada<=?
-                      AND estado IN ('PENDIENTE','EN_RUTA','REASIGNADO','RETRASADO')
-                    ORDER BY TIMESTAMPADD(HOUR,horas_limite,fecha_llegada),id_pedido LIMIT 1
+                    SELECT p.id_pedido,p.id_cliente,p.cantidad_qq,p.prioridad,p.horas_limite,
+                           p.fecha_llegada,p.estado,p.ubicacion_x,p.ubicacion_y
+                    FROM pedido p
+                    WHERE p.fecha_entrega_real IS NULL AND p.fecha_llegada<=?
+                      AND p.estado IN ('PENDIENTE','EN_RUTA','REASIGNADO','RETRASADO')
+                      AND NOT EXISTS (
+                          SELECT 1 FROM pedido_arribo a
+                          WHERE a.id_pedido=p.id_pedido AND a.fecha_arribo<=?
+                      )
+                    ORDER BY TIMESTAMPADD(HOUR,p.horas_limite,p.fecha_llegada),p.id_pedido LIMIT 1
                     """)) {
+                // El SLA se cumple al completar el arribo, antes de la atención.
+                // Para pedidos fraccionados, el motor registra ese arribo cuando
+                // todas las fracciones llegaron; los parciales siguen participando.
                 ps.setTimestamp(1, Timestamp.valueOf(reloj));
+                ps.setTimestamp(2, Timestamp.valueOf(reloj));
                 try (var rs = ps.executeQuery()) {
                     PedidoOperativo pedido = rs.next() ? new PedidoOperativo(rs.getLong("id_pedido"),
                         rs.getString("id_cliente"), rs.getInt("cantidad_qq"), TipoPrioridad.valueOf(rs.getString("prioridad")),

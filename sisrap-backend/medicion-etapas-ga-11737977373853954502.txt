@@ -1,0 +1,20 @@
+MEDICIÓN LOCAL DE ETAPAS DEL GA
+Interpretación provisional de Sa/Sc indicada por el usuario; confirmar los nombres con el docente.
+Son tiempos de cálculo; no saltos del reloj de simulación.
+Datos: Primeros 25 pedidos de C:\Users\RODRI\OneDrive\Documents\GitHub\PDDS---7G\sisrap-backend\datos\ventas.v20260909\ventas.202609.txt
+Instante: 2026-09-01T03:50
+Mapa 70x50; flota 10 autos, 15 motos, 12 bicicletas; sin bloqueos ni mantenimientos.
+Población=12; generaciones máximas=14; presupuesto cooperativo=5000 ms; semilla GA=42.
+Configuración de prueba: {busqueda.movimientos=DOS_OPT,SWAP,RELOCATE,CROSS_ROUTE,VEHICLE_CHANGE, ga.cruzamiento=0.85, ga.elitismo=1, ga.generaciones=14, ga.mutacion=0.15, ga.poblacion=12, ga.proporcionVoraz=0.3, ga.torneo=2, objetivo.beta1=100, objetivo.beta2=5000, objetivo.beta3=10000, sa.aceptacion=0.8, sa.calibrar=false, sa.enfriamiento=0.95, sa.iteraciones=10, sa.maxNiveles=100, sa.muestras=10, sa.recalentamiento=1.2, sa.temperaturaFinal=1, sa.temperaturaInicial=1000}
+
+Ta (planificar completo, incluida población inicial): 2237.604700 ms
+Sa propuesto (construir y evaluar siguiente población): n=14; media=130.162057 ms; mínimo=105.955200 ms; máximo=179.268900 ms; total=1822.268800 ms
+Generaciones parciales por presupuesto: N/D (sin muestras)
+Sc propuesto (comparar candidato con mejor conservado y actualizarlo): n=166; media=0.015377 ms; mínimo=0.000300 ms; máximo=0.219900 ms; total=2.552600 ms
+
+Sc es trabajo incluido en Ta y en la evolución; no sumar Ta+Sa+Sc.
+Si el presupuesto impide completar una generación se informa N/D en Sa.
+La población inicial está incluida en Ta; se excluye de Sa.
+Milisegundos es la unidad; una etapa puede durar más de 1000 ms.
+Prueba local única: incluye calentamiento de JVM y coste de instrumentación; no mide la VM.
+Rutas resultantes: 37
