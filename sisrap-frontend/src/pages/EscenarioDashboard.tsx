@@ -31,14 +31,13 @@ import {
 } from '../utilitarios/escenarios';
 import {
   diaSimulado,
-  formatoCoordenada,
   formatoDecimal,
   formatoEntero,
   formatoFechaHora,
   formatoHora,
   formatoSoles,
   horaNavegador,
-  NO_DISPONIBLE,
+  NO_DISPONIBLE
 } from '../utilitarios/formato';
 import {
   COLOR_TIPO,
@@ -49,6 +48,8 @@ import {
   tipoDesdeCodigo,
   type TipoVehiculo,
 } from '../utilitarios/vehiculos';
+
+import { ListaAlmacenes } from '../components/panel/ListaAlmacenes';
 
 /** Dimensiones del enunciado; se reemplazan por las de /api/mapa cuando responde. */
 const SIN_VEHICULOS: VehiculoSnapshot[] = [];
@@ -134,24 +135,34 @@ export function EscenarioDashboard() {
   return (
     <div className="flex-1 flex min-h-0 relative">
       {/* Panel izquierdo: parámetros */}
+
+
+      {/* Panel izquierdo: parámetros */}
       <PanelLateral
-        lado="izq"
-        titulo="Parámetros de la corrida"
-        colapsado={izqColapsado}
-        alternar={() => setIzqColapsado((v) => !v)}
+          lado="izq"
+          titulo="Parámetros de la corrida"
+          colapsado={izqColapsado}
+          alternar={() => setIzqColapsado((v) => !v)}
       >
         <PanelParametros
-          snapshot={snapshot}
-          flota={flota.datos}
-          errorFlota={flota.error}
-          recargarFlota={flota.recargar}
-          almacenes={almacenes.datos}
-          errorAlmacenes={almacenes.error}
-          recargarAlmacenes={almacenes.recargar}
-          pedirDetener={() => setConfirmarDetener(true)}
-          seleccionarVehiculo={(id) => setSeleccion({ tipo: 'vehiculo', id })}
+            snapshot={snapshot}
+            flota={flota.datos}
+            errorFlota={flota.error}
+            recargarFlota={flota.recargar}
+            almacenes={almacenes.datos}
+            errorAlmacenes={almacenes.error}
+            recargarAlmacenes={almacenes.recargar}
+            pedirDetener={() => setConfirmarDetener(true)}
+            seleccionarVehiculo={(id) => setSeleccion({ tipo: 'vehiculo', id })}
+            /* AGREGAR ESTAS TRES LÍNEAS */
+            pedidos={pedidosMap.datos?.contenido ?? SIN_PEDIDOS}
+            seleccion={seleccion}
+            alSeleccionar={setSeleccion}
         />
       </PanelLateral>
+
+
+
 
       {/* Mapa */}
       <main className="flex-1 min-w-0 flex flex-col relative">
@@ -426,17 +437,21 @@ function BannerResultado({ tipo, snapshot }: { tipo: NonNullable<ReturnType<type
 // Panel izquierdo
 // ---------------------------------------------------------------------------
 
+
 function PanelParametros({
-  snapshot,
-  flota,
-  errorFlota,
-  recargarFlota,
-  almacenes,
-  errorAlmacenes,
-  recargarAlmacenes,
-  pedirDetener,
-  seleccionarVehiculo,
-}: {
+                           snapshot,
+                           flota,
+                           errorFlota,
+                           recargarFlota,
+                           almacenes,
+                           errorAlmacenes,
+                           recargarAlmacenes,
+                           pedirDetener,
+                           seleccionarVehiculo,
+                           pedidos = [],
+                           seleccion = null,
+                           alSeleccionar,
+                         }: {
   snapshot: SnapshotSimulacion;
   flota: VehiculoOperativo[] | null;
   errorFlota: string | null;
@@ -446,156 +461,159 @@ function PanelParametros({
   recargarAlmacenes: () => void;
   pedirDetener: () => void;
   seleccionarVehiculo: (id: string) => void;
+  pedidos?: PedidoOperativo[];
+  seleccion?: Seleccion;
+  alSeleccionar?: (s: Seleccion) => void;
 }) {
   const { rol, accionEnCurso } = useSimulacion();
   const activa = corridaActiva(snapshot);
   const esc = snapshot.escenario ? ESCENARIOS[snapshot.escenario] : null;
 
   return (
-    <>
-      <Bloque titulo="Control">
-        {rol === 'CONTROLADOR' ? (
-          <div className="space-y-2">
-            <p className="text-texto2 leading-snug">Esta sesión inició la corrida y es la única que puede detenerla.</p>
-            <Boton
-              variant="peligro"
-              icono={<IconoDetener tamano={14} />}
-              onClick={pedirDetener}
-              disabled={accionEnCurso === 'DETENER'}
-              disabledReason="Solicitud de detención en curso."
-              className="w-full"
-            >
-              Detener corrida
-            </Boton>
-          </div>
-        ) : rol === 'OBSERVADOR' ? (
-          <p className="text-texto2 leading-snug">
-            Modo <b className="text-azul">observador</b>: otra sesión controla esta corrida. Usted ve el mismo estado en
-            tiempo real, sin controles.
-          </p>
-        ) : (
-          <p className="text-texto2 leading-snug">
-            No hay una corrida activa. Puede iniciar una desde{' '}
-            <button className="text-azul underline" onClick={() => navegar({ nombre: 'selector' })}>
-              el selector de escenario
-            </button>
-            .
-          </p>
-        )}
-        {snapshot.estado === 'PAUSADA' && (
-          <Nota tono="aviso" className="mt-2">
-            La corrida está pausada. Esta pantalla se mantiene en modo de consulta.
-          </Nota>
-        )}
-      </Bloque>
+      <>
+        <Bloque titulo="Control">
+          {rol === 'CONTROLADOR' ? (
+              <div className="space-y-2">
+                <p className="text-texto2 leading-snug">Esta sesión inició la corrida y es la única que puede detenerla.</p>
+                <Boton
+                    variant="peligro"
+                    icono={<IconoDetener tamano={14} />}
+                    onClick={pedirDetener}
+                    disabled={accionEnCurso === 'DETENER'}
+                    disabledReason="Solicitud de detención en curso."
+                    className="w-full"
+                >
+                  Detener corrida
+                </Boton>
+              </div>
+          ) : rol === 'OBSERVADOR' ? (
+              <p className="text-texto2 leading-snug">
+                Modo <b className="text-azul">observador</b>: otra sesión controla esta corrida. Usted ve el mismo estado en
+                tiempo real, sin controles.
+              </p>
+          ) : (
+              <p className="text-texto2 leading-snug">
+                No hay una corrida activa. Puede iniciar una desde{' '}
+                <button className="text-azul underline" onClick={() => navegar({ nombre: 'selector' })}>
+                  el selector de escenario
+                </button>
+                .
+              </p>
+          )}
+          {snapshot.estado === 'PAUSADA' && (
+              <Nota tono="aviso" className="mt-2">
+                La corrida está pausada. Esta pantalla se mantiene en modo de consulta.
+              </Nota>
+          )}
+        </Bloque>
 
-      <Bloque titulo="Corrida">
-        <Fila k="Escenario" v={esc ? esc.titulo : NO_DISPONIBLE} mono={false} />
-        <Fila k="Término" v={esc ? esc.condicionTermino : NO_DISPONIBLE} mono={false} claseValor="max-w-[170px]" />
-        <Fila k="Inicio" v={formatoFechaHora(snapshot.fechaHoraInicio)} />
-        <Fila
-          k="Fin"
-          v={
-            snapshot.escenario
-              ? formatoFechaHora(snapshot.fechaHoraFin)
-              : NO_DISPONIBLE
-          }
-          mono={!!snapshot.escenario}
-        />
-        {snapshot.mensaje && (
-          <p className="mt-2 pt-2 border-t border-borde text-[11px] text-texto2 leading-snug">
-            <span className="text-texto">Detalle:</span> {snapshot.mensaje}
-          </p>
-        )}
-      </Bloque>
+        <Bloque titulo="Corrida">
+          <Fila k="Escenario" v={esc ? esc.titulo : NO_DISPONIBLE} mono={false} />
+          <Fila k="Término" v={esc ? esc.condicionTermino : NO_DISPONIBLE} mono={false} claseValor="max-w-[170px]" />
+          <Fila k="Inicio" v={formatoFechaHora(snapshot.fechaHoraInicio)} />
+          <Fila
+              k="Fin"
+              v={
+                snapshot.escenario
+                    ? formatoFechaHora(snapshot.fechaHoraFin)
+                    : NO_DISPONIBLE
+              }
+              mono={!!snapshot.escenario}
+          />
+          {snapshot.mensaje && (
+              <p className="mt-2 pt-2 border-t border-borde text-[11px] text-texto2 leading-snug">
+                <span className="text-texto">Detalle:</span> {snapshot.mensaje}
+              </p>
+          )}
+        </Bloque>
 
-      <Bloque
-        titulo="Composición de la flota"
-        aclaracion={activa ? 'Solo lectura durante la corrida.' : 'Estado actual de la flota.'}
-      >
-        {errorFlota && !flota ? (
-          <ErrorCarga titulo="No se pudo leer la flota" error={errorFlota} reintentar={recargarFlota} />
-        ) : !flota ? (
-          <Cargando />
-        ) : (
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="text-texto2 text-right">
-                <th className="text-left font-semibold pb-1">Tipo</th>
-                <th className="font-semibold pb-1">Cant.</th>
-                <th className="font-semibold pb-1">Paq.</th>
-                <th className="font-semibold pb-1">km/h</th>
-                <th className="font-semibold pb-1">S/ km</th>
-              </tr>
-            </thead>
-            <tbody>
-              {ORDEN_TIPOS.map((t) => {
-                const lista = flota.filter((v) => tipoDesdeCodigo(v.idVehiculo) === t);
-                const m = lista[0];
-                return (
-                  <tr key={t} className="text-right">
-                    <td className="text-left py-0.5">
+        <Bloque
+            titulo="Composición de la flota"
+            aclaracion={activa ? 'Solo lectura durante la corrida.' : 'Estado actual de la flota.'}
+        >
+          {errorFlota && !flota ? (
+              <ErrorCarga titulo="No se pudo leer la flota" error={errorFlota} reintentar={recargarFlota} />
+          ) : !flota ? (
+              <Cargando />
+          ) : (
+              <table className="w-full text-xs">
+                <thead>
+                <tr className="text-texto2 text-right">
+                  <th className="text-left font-semibold pb-1">Tipo</th>
+                  <th className="font-semibold pb-1">Cant.</th>
+                  <th className="font-semibold pb-1">Paq.</th>
+                  <th className="font-semibold pb-1">km/h</th>
+                  <th className="font-semibold pb-1">S/ km</th>
+                </tr>
+                </thead>
+                <tbody>
+                {ORDEN_TIPOS.map((t) => {
+                  const lista = flota.filter((v) => tipoDesdeCodigo(v.idVehiculo) === t);
+                  const m = lista[0];
+                  return (
+                      <tr key={t} className="text-right">
+                        <td className="text-left py-0.5">
                       <span className="inline-flex items-center gap-1 text-texto">
                         <IconoMapaSvg forma={t === 'AUTO' ? 'auto' : t === 'MOTO' ? 'moto' : 'bicicleta'} color={COLOR_TIPO[t]} tamano={18} />
                         {ETIQUETA_TIPO_PLURAL[t]}
                       </span>
-                    </td>
-                    <td className="font-mono text-texto">{lista.length}</td>
-                    <td className="font-mono text-texto">{m ? m.capacidadPaquetes : '—'}</td>
-                    <td className="font-mono text-texto">{m ? m.velocidadKmh : '—'}</td>
-                    <td className="font-mono text-texto">{m ? formatoSoles(m.costoPorKm).replace('S/ ', '') : '—'}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-        {snapshot.vehiculos.length > 0 && (
-          <details className="mt-3 border-t border-borde pt-2">
-            <summary className="cursor-pointer text-xs font-semibold text-azul">
-              Ver carga actual por vehículo ({snapshot.vehiculos.length})
-            </summary>
-            <div className="max-h-64 overflow-y-auto mt-2 space-y-1">
-              {snapshot.vehiculos.map((v) => (
-                <button
-                  key={v.idVehiculo}
-                  type="button"
-                  onClick={() => seleccionarVehiculo(v.idVehiculo)}
-                  className="w-full flex items-center justify-between gap-2 rounded border border-borde px-2 py-1.5 hover:border-mint text-xs text-left"
-                  title="Ver unidad en el mapa y detalle de carga"
-                >
-                  <span className="font-mono text-texto">{v.idVehiculo}</span>
-                  <span className="text-texto2 font-mono">{formatoEntero(v.cargaActualPaquetes ?? 0)} / {formatoEntero(v.capacidadPaquetes ?? 0)} paq.</span>
-                </button>
-              ))}
-            </div>
-          </details>
-        )}
-      </Bloque>
+                        </td>
+                        <td className="font-mono text-texto">{lista.length}</td>
+                        <td className="font-mono text-texto">{m ? m.capacidadPaquetes : '—'}</td>
+                        <td className="font-mono text-texto">{m ? m.velocidadKmh : '—'}</td>
+                        <td className="font-mono text-texto">{m ? formatoSoles(m.costoPorKm).replace('S/ ', '') : '—'}</td>
+                      </tr>
+                  );
+                })}
+                </tbody>
+              </table>
+          )}
+          {snapshot.vehiculos.length > 0 && (
+              <details className="mt-3 border-t border-borde pt-2">
+                <summary className="cursor-pointer text-xs font-semibold text-azul">
+                  Ver carga actual por vehículo ({snapshot.vehiculos.length})
+                </summary>
+                <div className="max-h-64 overflow-y-auto mt-2 space-y-1">
+                  {snapshot.vehiculos.map((v) => (
+                      <button
+                          key={v.idVehiculo}
+                          type="button"
+                          onClick={() => seleccionarVehiculo(v.idVehiculo)}
+                          className="w-full flex items-center justify-between gap-2 rounded border border-borde px-2 py-1.5 hover:border-mint text-xs text-left"
+                          title="Ver unidad en el mapa y detalle de carga"
+                      >
+                        <span className="font-mono text-texto">{v.idVehiculo}</span>
+                        <span className="text-texto2 font-mono">{formatoEntero(v.cargaActualPaquetes ?? 0)} / {formatoEntero(v.capacidadPaquetes ?? 0)} paq.</span>
+                      </button>
+                  ))}
+                </div>
+              </details>
+          )}
+        </Bloque>
 
-      <Bloque titulo="Almacenes">
-        {errorAlmacenes && !almacenes ? (
-          <ErrorCarga titulo="No se pudieron leer los almacenes" error={errorAlmacenes} reintentar={recargarAlmacenes} />
-        ) : !almacenes ? (
-          <Cargando />
-        ) : (
-          almacenes.map((a) => (
-            <Fila
-              key={a.idAlmacen}
-              k={
-                <span>
-                  {a.nombre} <span className="font-mono">{formatoCoordenada(a.ubicacionX, a.ubicacionY)}</span>
-                </span>
-              }
-              v={a.stockActual == null ? 'Stock ilimitado' : `${formatoEntero(a.stockActual)} / ${formatoEntero(a.capacidadMaxima)}`}
-              mono={a.stockActual != null}
-            />
-          ))
-        )}
-      </Bloque>
-    </>
+        {/* BLOQUE DE ALMACENES ACTUALIZADO QUE CONSUME pedidos, seleccion Y alSeleccionar */}
+        <Bloque titulo="Almacenes">
+          {errorAlmacenes && !almacenes ? (
+              <ErrorCarga titulo="No se pudieron leer los almacenes" error={errorAlmacenes} reintentar={recargarAlmacenes} />
+          ) : !almacenes ? (
+              <Cargando />
+          ) : (
+              <ListaAlmacenes
+                  almacenes={almacenes}
+                  pedidos={pedidos}
+                  relojSimulado={snapshot.relojSimulado}
+                  seleccion={seleccion}
+                  alSeleccionar={(s) => alSeleccionar?.(s)}
+              />
+          )}
+        </Bloque>
+      </>
   );
 }
+
+
+
+
 
 // ---------------------------------------------------------------------------
 // Panel derecho

@@ -1,13 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as EventoPuntero } from 'react';
 import type { AlmacenOperativo, BloqueoRespuesta, PedidoOperativo, VehiculoSnapshot } from '../types/api';
-import { dibujarForma, BORDE } from '../components/iconos/formas';
-import {
-  distanciaSegmento,
-  type Proyeccion,
-} from '../components/mapa/geometria';
+import { dibujarForma, BORDE, type NombreForma } from '../components/iconos/formas';
+import { distanciaSegmento, type Proyeccion } from '../components/mapa/geometria';
 import { useFlujoVisual } from '../estado/SimulacionContext';
 import { AnimadorVehiculos } from '../components/mapa/animacionVehiculos';
-import { colorDeVehiculo, estaAveriado, estaEnMantenimiento, tipoDesdeCodigo } from '../utilitarios/vehiculos';
+import {
+  colorDeVehiculo,
+  COLOR_TIPO,
+  estaAveriado,
+  estaEnMantenimiento,
+  obtenerFormaAveria,
+  tipoDesdeCodigo,
+} from '../utilitarios/vehiculos';
+import { obtenerColorSemaforoAlmacen, obtenerColorHexAlmacen } from '../utilitarios/almacenes';
 
 export interface Dimensiones {
   anchoKm: number;
@@ -20,7 +25,12 @@ export type Objetivo =
     | { tipo: 'almacen'; id: string }
     | { tipo: 'pedido'; id: number };
 
-export type Seleccion = { tipo: 'vehiculo'; id: string } | { tipo: 'nodo'; x: number; y: number } | { tipo: 'pedido'; id: number } | null;
+export type Seleccion =
+    | { tipo: 'vehiculo'; id: string }
+    | { tipo: 'nodo'; x: number; y: number }
+    | { tipo: 'almacen'; id: string }
+    | { tipo: 'pedido'; id: number }
+    | null;
 
 export interface EstadoHover {
   objetivo: Objetivo;
@@ -131,7 +141,8 @@ export function useMapCanvas(op: Opciones) {
     if (!ctx) return;
 
     const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const ancho = Math.round(tamano.w * dpr), alto = Math.round(tamano.h * dpr);
+    const ancho = Math.round(tamano.w * dpr);
+    const alto = Math.round(tamano.h * dpr);
     if (canvas.width !== ancho) canvas.width = ancho;
     if (canvas.height !== alto) canvas.height = alto;
     canvas.style.width = `${tamano.w}px`;
@@ -177,12 +188,21 @@ export function useMapCanvas(op: Opciones) {
       if (p.estado === 'ENTREGADO') continue;
       const x = px(p.ubicacionX), y = py(p.ubicacionY);
       const color = p.estado === 'RETRASADO' ? '#f87171' : p.estado === 'EN_RUTA' ? '#60a5fa' : '#fbbf24';
-      ctx.save(); ctx.globalAlpha = alfaBase * 0.85;
-      ctx.fillStyle = color; ctx.strokeStyle = '#101827'; ctx.lineWidth = 1.2;
-      ctx.beginPath(); ctx.arc(x, y, 4.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.save();
+      ctx.globalAlpha = alfaBase * 0.85;
+      ctx.fillStyle = color;
+      ctx.strokeStyle = '#101827';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.arc(x, y, 4.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
       if (op.seleccion?.tipo === 'pedido' && op.seleccion.id === p.idPedido) {
-        ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2;
-        ctx.beginPath(); ctx.arc(x, y, 8, 0, Math.PI * 2); ctx.stroke();
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(x, y, 8, 0, Math.PI * 2);
+        ctx.stroke();
       }
       ctx.restore();
     }
@@ -220,7 +240,8 @@ export function useMapCanvas(op: Opciones) {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const ancho = Math.round(tamano.w * dpr), alto = Math.round(tamano.h * dpr);
+    const ancho = Math.round(tamano.w * dpr);
+    const alto = Math.round(tamano.h * dpr);
     if (canvas.width !== ancho) canvas.width = ancho;
     if (canvas.height !== alto) canvas.height = alto;
     canvas.style.width = `${tamano.w}px`;
@@ -244,16 +265,49 @@ export function useMapCanvas(op: Opciones) {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      const { px, py } = proy;
       const vehiculos = vehiculosVisuales.current;
       const vehiculoPorId = new Map(vehiculos.map(v => [v.idVehiculo, v]));
       const posiciones = new Map<string, { x: number; y: number }>();
       const activo = animador.current.enMovimiento(ahora);
 
       for (const v of vehiculos) {
-        posiciones.set(v.idVehiculo, animador.current.posicion(v.idVehiculo, ahora) ?? { x: v.x, y: v.y });
+        const vx = v.xVisual ?? v.x;
+        const vy = v.yVisual ?? v.y;
+        posiciones.set(v.idVehiculo, { x: vx, y: vy });
+
+        const x = px(vx);
+        const y = py(vy);
+
+        const tipo = tipoDesdeCodigo(v.idVehiculo ?? '') ?? 'AUTO';
+        const color = tipo ? COLOR_TIPO[tipo] : '#e8eef7';
+
+        ctx.textAlign = 'center';
+
+        if (estaAveriado(v.estado)) {
+          const formaAveria = obtenerFormaAveria(v.tipoAveria);
+          dibujarForma(ctx, formaAveria, x, y - 12, undefined, 1.2);
+          ctx.font = 'bold 9px monospace';
+          ctx.fillStyle = '#ffffff';
+          ctx.fillText(v.idVehiculo, x, y + 14);
+        } else if (estaEnMantenimiento(v.estado)) {
+          dibujarForma(ctx, 'mantenimiento', x, y - 10, undefined, 1.1);
+          ctx.font = 'bold 9px monospace';
+          ctx.fillStyle = '#38bdf8';
+          ctx.fillText(`${v.idVehiculo} (MANT)`, x, y + 12);
+        } else {
+          // Ahora TypeScript garantiza que 'tipo' es string y permite llamar toLowerCase()
+          const formaVehiculo = tipo.toLowerCase() as NombreForma;
+
+          dibujarForma(ctx, formaVehiculo, x, y, color);
+
+          ctx.font = 'bold 9px monospace';
+          ctx.fillStyle = '#cbd5e1';
+          ctx.fillText(v.idVehiculo, x, y + 12);
+        }
       }
 
-      const { px, py } = proy;
       const alfaBase = op.atenuado ? 0.45 : 1;
       const nuevas = new Map<string, Array<[number, number]>>();
 
@@ -261,19 +315,12 @@ export function useMapCanvas(op: Opciones) {
           a.idVehiculo === enfocado ? 1 : b.idVehiculo === enfocado ? -1 : 0
       );
 
-
-
-
       for (const v of vehiculosOrdenados) {
         if (estaAveriado(v.estado) || estaEnMantenimiento(v.estado)) continue;
-
-        // 1. SE ELIMINÓ: if (!v.caminoActual || v.caminoActual.length === 0) continue;
-        // Al quitar esa línea, ahora SÍ se leen las rutas calculadas por el animador:
 
         const id = v.idVehiculo;
         const esEnfocado = id === enfocado;
 
-        // Se obtienen los tramos calculados
         const { recorrido, pendiente } = animador.current.camino(id, ahora);
         const ptsRecorrido: Array<[number, number]> = (recorrido || []).map(p => [px(p.x), py(p.y)]);
         const ptsPendiente: Array<[number, number]> = (pendiente || []).map(p => [px(p.x), py(p.y)]);
@@ -288,11 +335,6 @@ export function useMapCanvas(op: Opciones) {
         ctx.lineJoin = 'round';
         ctx.lineCap = 'round';
 
-        // -------------------------------------------------------------------
-        // CUMPLIMIENTO B11: DIBUJO DE TRAMO RECORRIDO Y PENDIENTE
-        // -------------------------------------------------------------------
-
-        // A. TRAMO RECORRIDO: Opacidad tenue al 30% (globalAlpha *= 0.3)
         if (ptsRecorrido.length > 1) {
           ctx.save();
           ctx.globalAlpha *= 0.3;
@@ -302,7 +344,6 @@ export function useMapCanvas(op: Opciones) {
           ctx.restore();
         }
 
-        // B. TRAMO PENDIENTE: Trazado continuo brillante
         if (ptsPendiente.length > 1) {
           let colorSem = colorDeVehiculo(id);
           const estadoSemaforo = animador.current.obtenerColorSemaforo(id);
@@ -326,11 +367,6 @@ export function useMapCanvas(op: Opciones) {
         }
         ctx.restore();
       }
-
-
-
-
-
 
       polilineas.current = nuevas;
 
@@ -362,16 +398,21 @@ export function useMapCanvas(op: Opciones) {
         const x = px(a.ubicacionX);
         const y = py(a.ubicacionY);
         const central = a.tipo === 'CENTRAL';
+
+        const semaforo = obtenerColorSemaforoAlmacen(a);
+        const colorSem = obtenerColorHexAlmacen(semaforo);
+
         ctx.save();
         ctx.globalAlpha = alfaBase;
-        dibujarForma(ctx, central ? 'almacenCentral' : 'almacenIntermedio', x, y, undefined, 1.25);
-        etiqueta(ctx, `${a.nombre} (${a.ubicacionX},${a.ubicacionY})`, x, y + 18, '#34d399');
+        dibujarForma(ctx, central ? 'almacenCentral' : 'almacenIntermedio', x, y, colorSem, 1.25);
+        etiqueta(ctx, `${a.nombre} (${a.ubicacionX},${a.ubicacionY})`, x, y + 18, colorSem);
         ctx.restore();
       }
 
       const agrupados = new Map<string, Grupo>();
       for (const v of vehiculos) {
-        const pos = posiciones.get(v.idVehiculo)!;
+        const pos = posiciones.get(v.idVehiculo);
+        if (!pos) continue;
         const clave = `${pos.x.toFixed(4)},${pos.y.toFixed(4)}`;
         let grupo = agrupados.get(clave);
         if (!grupo) {
@@ -384,8 +425,8 @@ export function useMapCanvas(op: Opciones) {
       gruposAnimados.current = [...agrupados.values()];
 
       for (const g of gruposAnimados.current) {
-        const x = proy.px(g.x);
-        const y = proy.py(g.y);
+        const x = px(g.x);
+        const y = py(g.y);
         const contieneEnfocado = enfocado != null && g.ids.includes(enfocado);
         ctx.save();
         ctx.globalAlpha = (op.atenuado ? 0.45 : 1) * (enfocado == null || contieneEnfocado ? 1 : 0.35);
@@ -421,8 +462,15 @@ export function useMapCanvas(op: Opciones) {
           ctx.textBaseline = 'middle';
           ctx.fillText(String(g.ids.length), x, y + 0.5);
           const estados = g.ids.map((id) => vehiculoPorId.get(id)?.estado);
-          if (estados.some(estaAveriado)) dibujarForma(ctx, 'averia', x + 12, y - 11, undefined, 0.8);
-          else if (estados.some(estaEnMantenimiento)) dibujarForma(ctx, 'mantenimiento', x + 12, y - 11, undefined, 0.8);
+          if (estados.some((e) => (e ? estaAveriado(e) : false))) {
+            const tipoAveria = g.ids
+                .map((id) => vehiculoPorId.get(id)?.tipoAveria)
+                .find(Boolean);
+
+            dibujarForma(ctx, obtenerFormaAveria(tipoAveria), x + 12, y - 11, undefined, 0.8);
+          } else if (estados.some((e) => (e ? estaEnMantenimiento(e) : false))) {
+            dibujarForma(ctx, 'mantenimiento', x + 12, y - 11, undefined, 0.8);
+          }
         }
         ctx.restore();
       }
@@ -611,7 +659,7 @@ function dibujarUnidad(ctx: CanvasRenderingContext2D, v: VehiculoSnapshot, x: nu
   ctx.restore();
 
   if (estaAveriado(v.estado)) {
-    dibujarForma(ctx, 'averia', x, y);
+    dibujarForma(ctx, obtenerFormaAveria(v.tipoAveria), x, y);
     return;
   }
   if (estaEnMantenimiento(v.estado)) {
@@ -619,7 +667,7 @@ function dibujarUnidad(ctx: CanvasRenderingContext2D, v: VehiculoSnapshot, x: nu
     return;
   }
 
-  const tipo = tipoDesdeCodigo(v.idVehiculo);
+  const tipo = tipoDesdeCodigo(v.idVehiculo) ?? 'AUTO';
 
   let color = colorDeVehiculo(v.idVehiculo);
   const estadoSemaforo = animador.obtenerColorSemaforo(v.idVehiculo);

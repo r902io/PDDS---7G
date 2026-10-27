@@ -41,6 +41,7 @@ export interface VehiculoSnapshot {
   estado: string;
   x: number;
   y: number;
+  tipoAveria?: string | null; // <--- Agregar este campo opcional
   pedidoObjetivo: number | null;
   caminoActual: PuntoSimulacion[];
   capacidadPaquetes: number;
