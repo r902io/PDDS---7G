@@ -166,9 +166,35 @@ function DetalleVehiculo({
         <Dato k="Camino pendiente" v={formatoKm(km)} mono />
         <Dato k="Tramo ya recorrido" v={NO_DISPONIBLE} />
         <Dato k="Carga actual" v={`${formatoEntero(v.cargaActualPaquetes ?? 0)} / ${formatoEntero(v.capacidadPaquetes || catalogo?.capacidadPaquetes || 0)} paquetes`} mono />
+
+
+
+
         <div className="mt-1 mb-2 h-2 bg-bg border border-borde rounded-full overflow-hidden" aria-label="Porcentaje de ocupación del vehículo">
-          <div className="h-full bg-mint rounded-full" style={{ width: `${Math.min(100, 100 * (v.cargaActualPaquetes ?? 0) / Math.max(1, v.capacidadPaquetes || catalogo?.capacidadPaquetes || 1))}%` }} />
+          {(() => {
+            const stock = v.cargaActualPaquetes ?? 0;
+            const max = v.capacidadPaquetes || catalogo?.capacidadPaquetes || 1;
+            const pct = stock / max;
+
+            let colorBg = 'bg-gray-400'; // VACIO
+            if (stock > 0) {
+              if (pct >= 0.8) colorBg = 'bg-red-500';
+              else if (pct >= 0.5) colorBg = 'bg-amber-500';
+              else colorBg = 'bg-green-500';
+            }
+
+            return (
+                <div
+                    className={`h-full rounded-full ${colorBg}`}
+                    style={{ width: `${Math.min(100, (100 * stock) / max)}%` }}
+                />
+            );
+          })()}
         </div>
+
+
+
+
         <Dato k="Pedidos a bordo" v={formatoEntero(v.cargaActualPaquetes > 0 ? v.entregasPendientes : 0)} mono />
         {v.cargaPorRecogerPaquetes > 0 && <Dato k="Pendiente de recoger" v={`${formatoEntero(v.cargaPorRecogerPaquetes)} paquetes`} mono />}
 
@@ -222,7 +248,25 @@ function DetalleNodo({
   alSeleccionar: (s: Seleccion) => void;
   cerrar: () => void;
 }) {
-  const ordenados = [...vehiculos].sort((a, b) => a.idVehiculo.localeCompare(b.idVehiculo));
+
+
+
+  const ordenados = [...vehiculos].sort((a, b) => {
+    const stockA = a.cargaActualPaquetes ?? 0;
+    const maxA = a.capacidadPaquetes || (a.idVehiculo.startsWith('TA') ? 24 : a.idVehiculo.startsWith('TM') ? 8 : 4);
+    const pctA = stockA / maxA;
+
+    const stockB = b.cargaActualPaquetes ?? 0;
+    const maxB = b.capacidadPaquetes || (b.idVehiculo.startsWith('TA') ? 24 : b.idVehiculo.startsWith('TM') ? 8 : 4);
+    const pctB = stockB / maxB;
+
+    // Orden descendente por nivel de ocupación (de mayor a menor carga)
+    return pctB - pctA;
+  });
+
+
+
+
   return (
     <>
       <Cabecera
@@ -248,13 +292,43 @@ function DetalleNodo({
                   onClick={() => alSeleccionar({ tipo: 'vehiculo', id: v.idVehiculo })}
                   className="w-full flex items-center gap-2 bg-bg border border-borde rounded-md px-2 py-1.5 hover:border-azul text-left"
                 >
+
+
+
                   <IconoMapaSvg
-                    forma={estaAveriado(v.estado) ? 'averia' : estaEnMantenimiento(v.estado) ? 'mantenimiento' : tipo === 'MOTO' ? 'moto' : tipo === 'BICICLETA' ? 'bicicleta' : 'auto'}
-                    color={colorDeVehiculo(v.idVehiculo)}
-                    tamano={20}
+                      forma={estaAveriado(v.estado) ? 'averia' : estaEnMantenimiento(v.estado) ? 'mantenimiento' : tipo === 'MOTO' ? 'moto' : tipo === 'BICICLETA' ? 'bicicleta' : 'auto'}
+                      color={colorDeVehiculo(v.idVehiculo)}
+                      tamano={20}
                   />
-                  <span className="font-mono text-xs text-texto">{v.idVehiculo}</span>
-                  <span className="text-[11px] text-texto2 truncate">{etiquetaEstadoVehiculo(v.estado)}</span>
+                  <div className="flex flex-col flex-1 min-w-0 text-left">
+                    <span className="font-mono text-xs text-texto">{v.idVehiculo}</span>
+                    <span className="text-[11px] text-texto2 truncate">{etiquetaEstadoVehiculo(v.estado)}</span>
+                  </div>
+                  {(() => {
+                    const stock = v.cargaActualPaquetes ?? 0;
+                    const max = v.capacidadPaquetes || (tipo === 'AUTO' ? 24 : tipo === 'MOTO' ? 8 : tipo === 'BICICLETA' ? 4 : 1);
+                    const pct = stock / max;
+
+                    let colorTexto = 'text-gray-400';
+                    let textoStock = 'VACÍO';
+                    if (stock > 0) {
+                      textoStock = `${stock} paq.`;
+                      if (pct >= 0.8) colorTexto = 'text-red-500';
+                      else if (pct >= 0.5) colorTexto = 'text-amber-500';
+                      else colorTexto = 'text-green-500';
+                    }
+
+                    return (
+                        <span className={`text-[11px] font-bold ${colorTexto} whitespace-nowrap`}>
+                        {textoStock}
+                      </span>
+                    );
+                  })()}
+
+
+
+
+
                 </button>
               </li>
             );

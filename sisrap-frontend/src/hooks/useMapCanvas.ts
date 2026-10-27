@@ -2,25 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as
 import type { AlmacenOperativo, BloqueoRespuesta, PedidoOperativo, VehiculoSnapshot } from '../types/api';
 import { dibujarForma, BORDE } from '../components/iconos/formas';
 import {
-  construirRutas,
   distanciaSegmento,
-  polilineaPx,
   type Proyeccion,
-  type RutaKm,
 } from '../components/mapa/geometria';
 import { useFlujoVisual } from '../estado/SimulacionContext';
 import { AnimadorVehiculos } from '../components/mapa/animacionVehiculos';
 import { colorDeVehiculo, estaAveriado, estaEnMantenimiento, tipoDesdeCodigo } from '../utilitarios/vehiculos';
-
-/**
- * Motor de dibujo del mapa de la ciudad.
- *
- * - Retícula como 71 líneas verticales y 51 horizontales (ancho+1, alto+1).
- * - Escala = menor cociente entre espacio disponible y dimensiones de la
- *   ciudad → celdas cuadradas. El zoom solo multiplica esa escala base.
- * - Origen (0,0) abajo a la izquierda: el eje Y se invierte al proyectar.
- * - Resolución interna multiplicada por devicePixelRatio.
- */
 
 export interface Dimensiones {
   anchoKm: number;
@@ -28,16 +15,15 @@ export interface Dimensiones {
 }
 
 export type Objetivo =
-  | { tipo: 'vehiculo'; id: string }
-  | { tipo: 'nodo'; x: number; y: number; ids: string[]; idAlmacen: string | null }
-  | { tipo: 'almacen'; id: string }
-  | { tipo: 'pedido'; id: number };
+    | { tipo: 'vehiculo'; id: string }
+    | { tipo: 'nodo'; x: number; y: number; ids: string[]; idAlmacen: string | null }
+    | { tipo: 'almacen'; id: string }
+    | { tipo: 'pedido'; id: number };
 
 export type Seleccion = { tipo: 'vehiculo'; id: string } | { tipo: 'nodo'; x: number; y: number } | { tipo: 'pedido'; id: number } | null;
 
 export interface EstadoHover {
   objetivo: Objetivo;
-  /** Posición del cursor en píxeles CSS dentro del lienzo. */
   px: number;
   py: number;
 }
@@ -51,7 +37,6 @@ interface Opciones {
   bloqueos: BloqueoRespuesta[];
   seleccion: Seleccion;
   alSeleccionar: (s: Seleccion) => void;
-  /** Atenúa todo el contenido (datos no vigentes). */
   atenuado: boolean;
   animar: boolean;
 }
@@ -59,33 +44,6 @@ interface Opciones {
 const MARGEN = 34;
 const GROSOR_RUTA = 2.4;
 const RADIO_MARCA = 11;
-const RETENCION_RUTA_MS = 1_200;
-const FUNDIDO_RUTA_MS = 320;
-const APARICION_RUTA_MS = 180;
-
-interface RutaVisible {
-  ruta: RutaKm;
-  progreso: number;
-  creada: number;
-  ausenteDesde: number | null;
-  retencion: number;
-}
-
-/** Recorta únicamente el tramo recorrido, sin proyectar el vehículo sobre otra calle. */
-function rutaDesdePosicion(visible: RutaVisible, pos: { x: number; y: number }): RutaKm | null {
-  const aristas = visible.ruta.aristas;
-  for (let i = visible.progreso; i < aristas.length; i++) {
-    const { a, b } = aristas[i];
-    const horizontal = a.y === b.y;
-    const sobreCalle = horizontal ? Math.abs(pos.y - a.y) < 1e-5 : Math.abs(pos.x - a.x) < 1e-5;
-    const coordenada = horizontal ? pos.x : pos.y;
-    const inicio = horizontal ? a.x : a.y, fin = horizontal ? b.x : b.y;
-    if (!sobreCalle || coordenada < Math.min(inicio, fin) - 1e-5 || coordenada > Math.max(inicio, fin) + 1e-5) continue;
-    visible.progreso = i;
-    return { ...visible.ruta, aristas: [{ ...aristas[i], a: pos }, ...aristas.slice(i + 1)] };
-  }
-  return null;
-}
 
 interface Grupo {
   x: number;
@@ -105,20 +63,16 @@ export function useMapCanvas(op: Opciones) {
   const animacionHabilitada = useRef(false);
   const gruposAnimados = useRef<Grupo[]>([]);
   const [tamano, setTamano] = useState({ w: 0, h: 0 });
-  /** zoom multiplica la escala base; x/y desplazan el centro de la ciudad en px. */
   const [vista, setVista] = useState({ zoom: 1, x: 0, y: 0 });
   const [hover, setHover] = useState<EstadoHover | null>(null);
   const [cursorKm, setCursorKm] = useState<{ x: number; y: number } | null>(null);
   const arrastre = useRef<{ x0: number; y0: number; dx0: number; dy0: number; movido: boolean } | null>(null);
   const vehiculosVisuales = useRef(op.vehiculos);
-  const rutasVisibles = useRef(new Map<string, RutaVisible>());
-  const rutasPendientes = useRef(true);
   const corridaVisual = useRef(op.corridaId);
   const polilineas = useRef<Map<string, Array<[number, number]>>>(new Map());
 
   const { anchoKm, altoKm } = op.dimensiones;
 
-  // Tamaño del contenedor.
   useEffect(() => {
     const canvas = canvasRef.current;
     const padre = canvas?.parentElement;
@@ -130,11 +84,10 @@ export function useMapCanvas(op: Opciones) {
     return () => ro.disconnect();
   }, []);
 
-  // Proyección km → px.
   const proy: Proyeccion & { ox: number; oy: number } = useMemo(() => {
     const base = Math.max(
-      0.1,
-      Math.min((tamano.w - 2 * MARGEN) / anchoKm, (tamano.h - 2 * MARGEN) / altoKm)
+        0.1,
+        Math.min((tamano.w - 2 * MARGEN) / anchoKm, (tamano.h - 2 * MARGEN) / altoKm)
     );
     const escala = base * vista.zoom;
     const ox = (tamano.w - escala * anchoKm) / 2 + vista.x;
@@ -148,8 +101,6 @@ export function useMapCanvas(op: Opciones) {
     };
   }, [tamano, vista, anchoKm, altoKm]);
 
-
-  // Vehículos agrupados por nodo. Los que están en un almacén quedan DENTRO de él.
   const grupos: Grupo[] = useMemo(() => {
     const porNodo = new Map<string, Grupo>();
     for (const v of op.vehiculos) {
@@ -166,18 +117,13 @@ export function useMapCanvas(op: Opciones) {
     return [...porNodo.values()];
   }, [op.vehiculos, op.almacenes]);
 
-
-  // Vehículo resaltado: el que está bajo el cursor o, si no, el seleccionado.
   const enfocado: string | null =
-    hover?.objetivo.tipo === 'vehiculo'
-      ? hover.objetivo.id
-      : op.seleccion?.tipo === 'vehiculo'
-        ? op.seleccion.id
-        : null;
+      hover?.objetivo.tipo === 'vehiculo'
+          ? hover.objetivo.id
+          : op.seleccion?.tipo === 'vehiculo'
+              ? op.seleccion.id
+              : null;
 
-  // ------------------------------------------------------------------------
-  // Dibujo
-  // ------------------------------------------------------------------------
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || tamano.w === 0 || tamano.h === 0) return;
@@ -197,7 +143,6 @@ export function useMapCanvas(op: Opciones) {
     ctx.fillStyle = '#0a111e';
     ctx.fillRect(0, 0, tamano.w, tamano.h);
 
-    // 1. Retícula: anchoKm+1 verticales y altoKm+1 horizontales, líneas continuas.
     ctx.lineWidth = 1;
     for (let x = 0; x <= anchoKm; x++) {
       ctx.strokeStyle = x % 10 === 0 ? '#2a3d5e' : '#1a2940';
@@ -228,7 +173,6 @@ export function useMapCanvas(op: Opciones) {
 
     const alfaBase = op.atenuado ? 0.45 : 1;
 
-    // Destinos de pedidos que YA ingresaron. Los históricos no pertenecen a esta lista.
     for (const p of op.pedidos) {
       if (p.estado === 'ENTREGADO') continue;
       const x = px(p.ubicacionX), y = py(p.ubicacionY);
@@ -242,8 +186,6 @@ export function useMapCanvas(op: Opciones) {
       }
       ctx.restore();
     }
-
-
   }, [tamano, proy, op.pedidos, op.seleccion, op.atenuado, anchoKm, altoKm]);
 
   useEffect(() => {
@@ -251,22 +193,20 @@ export function useMapCanvas(op: Opciones) {
       const s = flujo?.actual;
       const reducir = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
       const animar = (s ? s.estado === 'EJECUTANDO' : op.animar)
-        && !op.atenuado && !document.hidden && !reducir;
+          && !op.atenuado && !document.hidden && !reducir;
       const muestra = s ?? op.vehiculos;
       if (ultimaMuestra.current === muestra && animar && animacionHabilitada.current) return;
       const corrida = s?.idSimulacion ?? op.corridaId;
       if (corridaVisual.current !== corrida) {
-        rutasVisibles.current.clear();
         polilineas.current.clear();
         gruposAnimados.current = [];
         corridaVisual.current = corrida;
       }
       vehiculosVisuales.current = s?.vehiculos ?? op.vehiculos;
-      rutasPendientes.current = true;
       animacionHabilitada.current = animar;
       ultimaMuestra.current = muestra;
       animador.current.actualizar(s?.vehiculos ?? op.vehiculos, s?.idSimulacion ?? op.corridaId,
-        performance.now(), animar, s?.relojSimulado);
+          performance.now(), animar, s?.relojSimulado);
       despertar.current?.();
     };
     recibir();
@@ -288,11 +228,9 @@ export function useMapCanvas(op: Opciones) {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     let frame = 0;
     let ultimoDibujo = -Infinity;
-    rutasPendientes.current = true;
 
     const dibujar = (ahora: number) => {
       frame = 0;
-      // La capa estática no se repinta durante el movimiento. Esta capa se limita a 30 FPS.
       if (ahora - ultimoDibujo < 1_000 / 30) {
         frame = requestAnimationFrame(dibujar);
         return;
@@ -310,75 +248,92 @@ export function useMapCanvas(op: Opciones) {
       const vehiculoPorId = new Map(vehiculos.map(v => [v.idVehiculo, v]));
       const posiciones = new Map<string, { x: number; y: number }>();
       const activo = animador.current.enMovimiento(ahora);
+
       for (const v of vehiculos) {
         posiciones.set(v.idVehiculo, animador.current.posicion(v.idVehiculo, ahora) ?? { x: v.x, y: v.y });
       }
 
-      if (rutasPendientes.current) {
-        rutasPendientes.current = false;
-        const confirmadas = construirRutas(vehiculos.flatMap(v => {
-          if (!v.caminoActual.length) return [];
-          const camino = animador.current.camino(v.idVehiculo, ahora);
-          return camino.length > 1 ? [{ ...v, x: camino[0].x, y: camino[0].y, caminoActual: camino.slice(1) }] : [];
-        }));
-        const ids = new Set(confirmadas.map(r => r.idVehiculo));
-        for (const ruta of confirmadas) {
-          const anterior = rutasVisibles.current.get(ruta.idVehiculo);
-          rutasVisibles.current.set(ruta.idVehiculo, { ruta, progreso: 0,
-            creada: anterior?.creada ?? ahora, ausenteDesde: null, retencion: 0 });
-        }
-        for (const [id, anterior] of rutasVisibles.current) {
-          const v = vehiculoPorId.get(id);
-          if (!v || estaAveriado(v.estado) || estaEnMantenimiento(v.estado)) {
-            rutasVisibles.current.delete(id);
-          } else if (!ids.has(id) && anterior.ausenteDesde == null) {
-            anterior.ausenteDesde = ahora;
-            anterior.retencion = v.estado === 'EN_RUTA' || v.estado === 'RETORNANDO_ALMACEN'
-              ? RETENCION_RUTA_MS : 0;
-          }
-        }
-      }
       const { px, py } = proy;
       const alfaBase = op.atenuado ? 0.45 : 1;
       const nuevas = new Map<string, Array<[number, number]>>();
-      let transicionRutas = false;
-      const ordenadas = [...rutasVisibles.current.values()].sort((a, b) =>
-        a.ruta.idVehiculo === enfocado ? 1 : b.ruta.idVehiculo === enfocado ? -1 : 0);
-      for (const visible of ordenadas) {
-        const id = visible.ruta.idVehiculo;
-        const pos = posiciones.get(id);
-        if (!pos) continue;
-        const edad = ahora - visible.creada;
-        const sinRuta = visible.ausenteDesde == null ? 0 : ahora - visible.ausenteDesde;
-        const alfa = visible.ausenteDesde == null ? Math.min(1, edad / APARICION_RUTA_MS)
-          : Math.max(0, 1 - Math.max(0, sinRuta - visible.retencion) / FUNDIDO_RUTA_MS);
-        if (visible.ausenteDesde != null && alfa <= 0) { rutasVisibles.current.delete(id); continue; }
-        transicionRutas ||= visible.ausenteDesde != null || edad < APARICION_RUTA_MS;
-        const ruta = rutaDesdePosicion(visible, pos);
-        if (!ruta) continue;
-        const pts = polilineaPx(ruta, proy, GROSOR_RUTA);
-        if (pts.length < 2) continue;
-        if (visible.ausenteDesde == null) nuevas.set(id, pts);
-        const esEnfocada = id === enfocado;
-        const color = colorDeVehiculo(id);
+
+      const vehiculosOrdenados = [...vehiculos].sort((a, b) =>
+          a.idVehiculo === enfocado ? 1 : b.idVehiculo === enfocado ? -1 : 0
+      );
+
+
+
+
+      for (const v of vehiculosOrdenados) {
+        if (estaAveriado(v.estado) || estaEnMantenimiento(v.estado)) continue;
+
+        // 1. SE ELIMINÓ: if (!v.caminoActual || v.caminoActual.length === 0) continue;
+        // Al quitar esa línea, ahora SÍ se leen las rutas calculadas por el animador:
+
+        const id = v.idVehiculo;
+        const esEnfocado = id === enfocado;
+
+        // Se obtienen los tramos calculados
+        const { recorrido, pendiente } = animador.current.camino(id, ahora);
+        const ptsRecorrido: Array<[number, number]> = (recorrido || []).map(p => [px(p.x), py(p.y)]);
+        const ptsPendiente: Array<[number, number]> = (pendiente || []).map(p => [px(p.x), py(p.y)]);
+        const ptsTotales = [...ptsRecorrido, ...ptsPendiente];
+
+        if (ptsTotales.length < 2) continue;
+        nuevas.set(id, ptsTotales);
+
         ctx.save();
-        ctx.globalAlpha = alfaBase * alfa * (enfocado == null ? 0.85 : esEnfocada ? 1 : 0.15);
+        const alfaRuta = enfocado == null ? 0.85 : (esEnfocado ? 1.0 : 0.2);
+        ctx.globalAlpha = alfaBase * alfaRuta;
         ctx.lineJoin = 'round';
         ctx.lineCap = 'round';
-        if (esEnfocada) {
-          ctx.strokeStyle = '#ffffff'; ctx.lineWidth = GROSOR_RUTA + 3;
-          trazar(ctx, pts);
+
+        // -------------------------------------------------------------------
+        // CUMPLIMIENTO B11: DIBUJO DE TRAMO RECORRIDO Y PENDIENTE
+        // -------------------------------------------------------------------
+
+        // A. TRAMO RECORRIDO: Opacidad tenue al 30% (globalAlpha *= 0.3)
+        if (ptsRecorrido.length > 1) {
+          ctx.save();
+          ctx.globalAlpha *= 0.3;
+          ctx.strokeStyle = colorDeVehiculo(id);
+          ctx.lineWidth = GROSOR_RUTA;
+          trazar(ctx, ptsRecorrido);
+          ctx.restore();
         }
-        ctx.strokeStyle = color;
-        ctx.lineWidth = esEnfocada ? GROSOR_RUTA + 1 : GROSOR_RUTA;
-        trazar(ctx, pts);
-        if (ruta.destino && visible.ausenteDesde == null && vehiculoPorId.get(id)?.pedidoObjetivo != null)
-          dibujarForma(ctx, 'destinoCliente', px(ruta.destino.x), py(ruta.destino.y), color);
+
+        // B. TRAMO PENDIENTE: Trazado continuo brillante
+        if (ptsPendiente.length > 1) {
+          let colorSem = colorDeVehiculo(id);
+          const estadoSemaforo = animador.current.obtenerColorSemaforo(id);
+          if (estadoSemaforo === 'ROJO') colorSem = '#ef4444';
+          else if (estadoSemaforo === 'AMBAR') colorSem = '#f59e0b';
+          else if (estadoSemaforo === 'VERDE') colorSem = '#22c55e';
+
+          if (esEnfocado) {
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = GROSOR_RUTA + 3;
+            trazar(ctx, ptsPendiente);
+          }
+          ctx.strokeStyle = colorSem;
+          ctx.lineWidth = esEnfocado ? GROSOR_RUTA + 1 : GROSOR_RUTA;
+          trazar(ctx, ptsPendiente);
+
+          const ultimoPunto = pendiente[pendiente.length - 1];
+          if (ultimoPunto && v.pedidoObjetivo != null) {
+            dibujarForma(ctx, 'destinoCliente', px(ultimoPunto.x), py(ultimoPunto.y), colorSem);
+          }
+        }
         ctx.restore();
       }
+
+
+
+
+
+
       polilineas.current = nuevas;
 
-      // 2. Bloqueos activos (programados desde el archivo mensual).
       for (const b of op.bloqueos) {
         if (b.vertices.length < 2) continue;
         ctx.save();
@@ -388,7 +343,6 @@ export function useMapCanvas(op: Opciones) {
         ctx.lineCap = 'round';
         ctx.lineJoin = 'miter';
         ctx.beginPath();
-        // Se respeta la ortogonalidad aunque un vértice llegara mal formado.
         let previo = b.vertices[0];
         ctx.moveTo(px(previo.x), py(previo.y));
         for (let i = 1; i < b.vertices.length; i++) {
@@ -404,7 +358,6 @@ export function useMapCanvas(op: Opciones) {
         ctx.restore();
       }
 
-      // 4. Almacenes, con la cantidad de unidades que contienen.
       for (const a of op.almacenes) {
         const x = px(a.ubicacionX);
         const y = py(a.ubicacionY);
@@ -415,6 +368,7 @@ export function useMapCanvas(op: Opciones) {
         etiqueta(ctx, `${a.nombre} (${a.ubicacionX},${a.ubicacionY})`, x, y + 18, '#34d399');
         ctx.restore();
       }
+
       const agrupados = new Map<string, Grupo>();
       for (const v of vehiculos) {
         const pos = posiciones.get(v.idVehiculo)!;
@@ -441,8 +395,8 @@ export function useMapCanvas(op: Opciones) {
           continue;
         }
         const seleccionado =
-          (op.seleccion?.tipo === 'nodo' && op.seleccion.x === g.x && op.seleccion.y === g.y) ||
-          (op.seleccion?.tipo === 'vehiculo' && g.ids.includes(op.seleccion.id));
+            (op.seleccion?.tipo === 'nodo' && op.seleccion.x === g.x && op.seleccion.y === g.y) ||
+            (op.seleccion?.tipo === 'vehiculo' && g.ids.includes(op.seleccion.id));
         if (seleccionado || contieneEnfocado) {
           ctx.strokeStyle = '#ffffff';
           ctx.lineWidth = 2;
@@ -452,7 +406,7 @@ export function useMapCanvas(op: Opciones) {
         }
         if (g.ids.length === 1) {
           const unidad = vehiculoPorId.get(g.ids[0]);
-          if (unidad) dibujarUnidad(ctx, unidad, x, y);
+          if (unidad) dibujarUnidad(ctx, unidad, x, y, animador.current);
         } else {
           ctx.fillStyle = '#16233a';
           ctx.strokeStyle = '#e8eef7';
@@ -472,18 +426,16 @@ export function useMapCanvas(op: Opciones) {
         }
         ctx.restore();
       }
-      if ((activo || transicionRutas) && !document.hidden) frame = requestAnimationFrame(dibujar);
+      if ((activo || true) && !document.hidden) frame = requestAnimationFrame(dibujar);
     };
+
     const alCambiarVisibilidad = () => {
       cancelAnimationFrame(frame);
       if (!document.hidden) {
-        // No reproducir una cola de movimientos acumulados con la pestaña oculta.
         const s = flujo?.actual;
         animador.current.actualizar(s?.vehiculos ?? op.vehiculos, s?.idSimulacion ?? op.corridaId,
-          performance.now(), false, s?.relojSimulado);
+            performance.now(), false, s?.relojSimulado);
         animacionHabilitada.current = false;
-        rutasVisibles.current.clear();
-        rutasPendientes.current = true;
         frame = requestAnimationFrame(dibujar);
       }
     };
@@ -497,58 +449,51 @@ export function useMapCanvas(op: Opciones) {
     };
   }, [op.vehiculos, op.corridaId, op.animar, op.almacenes, op.bloqueos, op.seleccion, op.atenuado, tamano, proy, enfocado]);
 
-  // ------------------------------------------------------------------------
-  // Interacción
-  // ------------------------------------------------------------------------
-
   const aKm = useCallback(
-    (mx: number, my: number) => {
-      const x = Math.round((mx - proy.ox) / proy.escala);
-      const y = Math.round(altoKm - (my - proy.oy) / proy.escala);
-      if (x < 0 || x > anchoKm || y < 0 || y > altoKm) return null;
-      return { x, y };
-    },
-    [proy, anchoKm, altoKm]
+      (mx: number, my: number) => {
+        const x = Math.round((mx - proy.ox) / proy.escala);
+        const y = Math.round(altoKm - (my - proy.oy) / proy.escala);
+        if (x < 0 || x > anchoKm || y < 0 || y > altoKm) return null;
+        return { x, y };
+      },
+      [proy, anchoKm, altoKm]
   );
 
   const buscarObjetivo = useCallback(
-    (mx: number, my: number): Objetivo | null => {
-      // Marcas de unidades y almacenes primero.
-      let mejor: { o: Objetivo; d: number } | null = null;
-      for (const g of gruposAnimados.current.length > 0 ? gruposAnimados.current : grupos) {
-        const d = Math.hypot(mx - proy.px(g.x), my - proy.py(g.y));
-        if (d > RADIO_MARCA + 6 || (mejor && mejor.d <= d)) continue;
-        const o: Objetivo =
-          g.ids.length === 1 && !g.idAlmacen
-            ? { tipo: 'vehiculo', id: g.ids[0] }
-            : { tipo: 'nodo', x: g.x, y: g.y, ids: g.ids, idAlmacen: g.idAlmacen };
-        mejor = { o, d };
-      }
-      for (const a of op.almacenes) {
-        if (grupos.some((g) => g.idAlmacen === a.idAlmacen)) continue;
-        const d = Math.hypot(mx - proy.px(a.ubicacionX), my - proy.py(a.ubicacionY));
-        if (d <= RADIO_MARCA + 6 && (!mejor || d < mejor.d)) mejor = { o: { tipo: 'almacen', id: a.idAlmacen }, d };
-      }
-      if (mejor) return mejor.o;
-
-      // Pedidos activos: sus marcadores son clicables cuando no se superponen con vehículos.
-      for (const p of op.pedidos) {
-        if (p.estado === 'ENTREGADO') continue;
-        const d = Math.hypot(mx - proy.px(p.ubicacionX), my - proy.py(p.ubicacionY));
-        if (d <= 8) return { tipo: 'pedido', id: p.idPedido };
-      }
-
-      // Luego, el trazo de las rutas.
-      let mejorRuta: { id: string; d: number } | null = null;
-      for (const [id, pts] of polilineas.current) {
-        for (let i = 1; i < pts.length; i++) {
-          const d = distanciaSegmento([mx, my], pts[i - 1], pts[i]);
-          if (d <= 5 && (!mejorRuta || d < mejorRuta.d)) mejorRuta = { id, d };
+      (mx: number, my: number): Objetivo | null => {
+        let mejor: { o: Objetivo; d: number } | null = null;
+        for (const g of gruposAnimados.current.length > 0 ? gruposAnimados.current : grupos) {
+          const d = Math.hypot(mx - proy.px(g.x), my - proy.py(g.y));
+          if (d > RADIO_MARCA + 6 || (mejor && mejor.d <= d)) continue;
+          const o: Objetivo =
+              g.ids.length === 1 && !g.idAlmacen
+                  ? { tipo: 'vehiculo', id: g.ids[0] }
+                  : { tipo: 'nodo', x: g.x, y: g.y, ids: g.ids, idAlmacen: g.idAlmacen };
+          mejor = { o, d };
         }
-      }
-      return mejorRuta ? { tipo: 'vehiculo', id: mejorRuta.id } : null;
-    },
-    [grupos, proy, op.almacenes, op.pedidos]
+        for (const a of op.almacenes) {
+          if (grupos.some((g) => g.idAlmacen === a.idAlmacen)) continue;
+          const d = Math.hypot(mx - proy.px(a.ubicacionX), my - proy.py(a.ubicacionY));
+          if (d <= RADIO_MARCA + 6 && (!mejor || d < mejor.d)) mejor = { o: { tipo: 'almacen', id: a.idAlmacen }, d };
+        }
+        if (mejor) return mejor.o;
+
+        for (const p of op.pedidos) {
+          if (p.estado === 'ENTREGADO') continue;
+          const d = Math.hypot(mx - proy.px(p.ubicacionX), my - proy.py(p.ubicacionY));
+          if (d <= 8) return { tipo: 'pedido', id: p.idPedido };
+        }
+
+        let mejorRuta: { id: string; d: number } | null = null;
+        for (const [id, pts] of polilineas.current) {
+          for (let i = 1; i < pts.length; i++) {
+            const d = distanciaSegmento([mx, my], pts[i - 1], pts[i]);
+            if (d <= 5 && (!mejorRuta || d < mejorRuta.d)) mejorRuta = { id, d };
+          }
+        }
+        return mejorRuta ? { tipo: 'vehiculo', id: mejorRuta.id } : null;
+      },
+      [grupos, proy, op.almacenes, op.pedidos]
   );
 
   const posicion = (e: EventoPuntero) => {
@@ -601,7 +546,6 @@ export function useMapCanvas(op: Opciones) {
     setCursorKm(null);
   };
 
-  // Rueda: zoom centrado en el cursor (listener no pasivo para evitar el scroll de la página).
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -614,7 +558,6 @@ export function useMapCanvas(op: Opciones) {
       setVista((v) => {
         const zoom = Math.max(1, Math.min(8, v.zoom * factor));
         if (zoom === 1) return { zoom: 1, x: 0, y: 0 };
-        // Mantener fijo el punto bajo el cursor: el centro de la ciudad está en (w/2 + x, h/2 + y).
         const k = zoom / v.zoom;
         const cx = tamano.w / 2 + v.x;
         const cy = tamano.h / 2 + v.y;
@@ -658,8 +601,7 @@ function trazar(ctx: CanvasRenderingContext2D, pts: Array<[number, number]>) {
   ctx.stroke();
 }
 
-function dibujarUnidad(ctx: CanvasRenderingContext2D, v: VehiculoSnapshot, x: number, y: number) {
-  // Fondo para que el icono se lea sobre las rutas.
+function dibujarUnidad(ctx: CanvasRenderingContext2D, v: VehiculoSnapshot, x: number, y: number, animador: AnimadorVehiculos) {
   ctx.save();
   ctx.globalAlpha = 1;
   ctx.fillStyle = BORDE;
@@ -667,6 +609,7 @@ function dibujarUnidad(ctx: CanvasRenderingContext2D, v: VehiculoSnapshot, x: nu
   ctx.arc(x, y, RADIO_MARCA, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
+
   if (estaAveriado(v.estado)) {
     dibujarForma(ctx, 'averia', x, y);
     return;
@@ -675,8 +618,16 @@ function dibujarUnidad(ctx: CanvasRenderingContext2D, v: VehiculoSnapshot, x: nu
     dibujarForma(ctx, 'mantenimiento', x, y);
     return;
   }
+
   const tipo = tipoDesdeCodigo(v.idVehiculo);
-  const color = colorDeVehiculo(v.idVehiculo);
+
+  let color = colorDeVehiculo(v.idVehiculo);
+  const estadoSemaforo = animador.obtenerColorSemaforo(v.idVehiculo);
+
+  if (estadoSemaforo === 'ROJO') color = '#ef4444';
+  else if (estadoSemaforo === 'AMBAR') color = '#f59e0b';
+  else if (estadoSemaforo === 'VERDE') color = '#22c55e';
+
   if (tipo === 'AUTO') dibujarForma(ctx, 'auto', x, y, color);
   else if (tipo === 'MOTO') dibujarForma(ctx, 'moto', x, y, color);
   else if (tipo === 'BICICLETA') dibujarForma(ctx, 'bicicleta', x, y, color);
