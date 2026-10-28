@@ -177,6 +177,10 @@ interface PropsIconoMapa {
 }
 
 export function IconoMapaSvg({ forma, color = '#e8eef7', tamano = 24, titulo }: PropsIconoMapa) {
+  const capas = Object.prototype.hasOwnProperty.call(FORMAS, forma) && Array.isArray(FORMAS[forma])
+    ? FORMAS[forma] as FormaIcono
+    : FORMAS.auto as FormaIcono;
+
   return (
     <svg
       width={tamano}
@@ -188,7 +192,7 @@ export function IconoMapaSvg({ forma, color = '#e8eef7', tamano = 24, titulo }: 
       strokeLinejoin="round"
     >
       {titulo && <title>{titulo}</title>}
-      {(FORMAS[forma] as FormaIcono).map((c, i) => (
+      {capas.map((c, i) => (
         <path
           key={i}
           d={c.d}
