@@ -143,7 +143,9 @@ export function SelectorEscenario() {
   };
 
   const activa = corridaActiva(snapshot);
-  const configuracionBackend = guardadas[escenario] ?? (consulta.datos?.escenario === escenario ? consulta.datos : null);
+  const configuracionRecibida = guardadas[escenario] ?? (consulta.datos?.escenario === escenario ? consulta.datos : null);
+  const configuracionIncompleta = configuracionRecibida !== null && (!Array.isArray(configuracionRecibida.almacenes) || !Array.isArray(configuracionRecibida.flota));
+  const configuracionBackend = configuracionIncompleta ? null : configuracionRecibida;
   const base = configuracionBackend;
   const editables = Boolean(configuracionBackend) && !activa && !guardando && !calendarioOcupado && !historicosOcupados && !accionEnCurso && !consulta.cargando && !consulta.error;
   const pendientes = Object.keys(ediciones).length > 0;
@@ -250,6 +252,7 @@ export function SelectorEscenario() {
         )}
 
         {sesion.fase === 'ERROR' && <ErrorCarga titulo="No se pudo preparar la sesión" error={sesion.error} reintentar={reintentarSesion} />}
+        {configuracionIncompleta && <ErrorCarga titulo="Configuración operativa incompleta" error="El backend no devolvió las listas de almacenes y flota requeridas. Comprueba la configuración del escenario." reintentar={consulta.recargar} />}
 
         <section>
           <h2 className="text-xs uppercase tracking-wider text-texto2 font-semibold border-b border-borde pb-1.5 mb-3">1 · Escenario</h2>
