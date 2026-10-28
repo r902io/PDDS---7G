@@ -4,7 +4,10 @@ import { estaAveriado, estaEnMantenimiento } from '../../utilitarios/vehiculos';
 type Punto = PuntoSimulacion;
 interface Transicion {
   puntos: Punto[];
-  inicio: number;
+  origen: Punto;           // Atributo: Coordenada de origen del tramo
+  destino: Punto;          // Atributo: Coordenada de destino del tramo
+  inicio: number;          // Atributo: Horario/Timestamp de origen
+  fin: number;             // Atributo: Horario/Timestamp de destino (inicio + duracion)
   duracion: number;
   longitudes: number[];
   distancia: number;
@@ -27,7 +30,20 @@ function crear(puntos: Punto[], inicio: number, duracion: number): Transicion {
     const a = limpios[i - 1], b = limpios[i];
     longitudes.push(longitudes[i - 1] + Math.abs(b.x - a.x) + Math.abs(b.y - a.y));
   }
-  return { puntos: limpios, inicio, duracion, longitudes, distancia: longitudes[longitudes.length - 1] };
+
+  const origen = limpios[0] ?? { x: 0, y: 0 };
+  const destino = limpios[limpios.length - 1] ?? origen;
+
+  return {
+    puntos: limpios,
+    origen,
+    destino,
+    inicio,                // Horario Origen
+    fin: inicio + duracion, // Horario Destino
+    duracion,
+    longitudes,
+    distancia: longitudes[longitudes.length - 1],
+  };
 }
 
 function recorrer(tr: Transicion, ahora: number): { punto: Punto; restantes: Punto[] } {
@@ -149,21 +165,51 @@ export class AnimadorVehiculos {
     return recorrer(unidad.transiciones[0], ahora).punto;
   }
 
+
+
+
+
+
+
   /** Une lo que falta reproducir con la ruta confirmada de la última muestra. */
-  camino(id: string, ahora: number): Punto[] {
+  camino(id: string, ahora: number): { recorrido: Punto[]; pendiente: Punto[] } {
     const unidad = this.unidades.get(id);
-    if (!unidad) return [];
+    if (!unidad) return { recorrido: [], pendiente: [] };
     this.podar(unidad, ahora);
-    const puntos: Punto[] = [];
-    const agregar = (p: Punto) => {
-      if (!puntos.length || !igual(puntos[puntos.length - 1], p)) puntos.push({ x: p.x, y: p.y });
+
+    const recorrido: Punto[] = [];
+    const pendiente: Punto[] = [];
+
+    const agregar = (lista: Punto[], p: Punto) => {
+      if (!lista.length || !igual(lista[lista.length - 1], p)) {
+        lista.push({ x: p.x, y: p.y });
+      }
     };
+
+    // 1. Trazar el movimiento interpolate de la transición actual
     unidad.transiciones.forEach((tr, i) => {
-      for (const p of i === 0 ? recorrer(tr, ahora).restantes : tr.puntos) agregar(p);
+      const data = recorrer(tr, ahora);
+      if (i === 0) {
+        agregar(recorrido, tr.puntos[0]);
+        agregar(recorrido, data.punto);
+
+        for (const p of data.restantes) agregar(pendiente, p);
+      } else {
+        for (const p of tr.puntos) agregar(pendiente, p);
+      }
     });
-    for (const p of unidad.muestra.caminoActual) agregar(p);
-    return puntos;
+
+    // 2. Acoplar la ruta restante (caminoActual) de la muestra
+    if (unidad.muestra.caminoActual && unidad.muestra.caminoActual.length > 0) {
+      for (const p of unidad.muestra.caminoActual) {
+        agregar(pendiente, p);
+      }
+    }
+
+    return { recorrido, pendiente };
   }
+
+
 
   reloj(ahora: number): string | null {
     if (!this.relojes.length) return null;
@@ -184,4 +230,34 @@ export class AnimadorVehiculos {
     // Mantener RAF hasta consumir la reserva, incluso cuando el vehículo está detenido.
     return this.recibido != null && ahora < this.recibido + this.retraso;
   }
+
+
+
+  /** Calcula el color del semáforo según la ocupación actual y capacidad máxima */
+
+// REQUERIMIENTO C27: Lógica del semáforo para el ícono del vehículo
+// REQUERIMIENTO C27: Lógica del semáforo para el ícono del vehículo
+  obtenerColorSemaforo(id: string): 'VERDE' | 'AMBAR' | 'ROJO' | 'VACIO' | null {
+    const unidad = this.unidades.get(id);
+    if (!unidad) return null;
+
+    const stock = unidad.muestra.cargaActualPaquetes ?? 0;
+    if (stock === 0) return 'VACIO';
+
+    let capacidadMax = 0;
+    if (id.includes('TA')) capacidadMax = 24;
+    else if (id.includes('TM')) capacidadMax = 8;
+    else if (id.includes('TB')) capacidadMax = 4;
+    else return 'VERDE';
+
+    const porcentaje = stock / capacidadMax;
+    if (porcentaje >= 0.8) return 'ROJO';
+    if (porcentaje >= 0.5) return 'AMBAR';
+    return 'VERDE';
+  }
+
+
+
+
+
 }
