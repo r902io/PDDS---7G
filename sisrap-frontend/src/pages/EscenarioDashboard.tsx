@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import type { AlmacenOperativo, PaginaPedidos, PedidoOperativo, SnapshotSimulacion, VehiculoOperativo, VehiculoSnapshot } from '../types/api';
+import type { AlmacenOperativo, PedidoOperativo, SnapshotSimulacion, VehiculoOperativo, VehiculoSnapshot } from '../types/api';
 import { useSimulacion } from '../estado/SimulacionContext';
 import { navegar } from '../estado/navegacion';
 import { catalogoService } from '../services/catalogoService';
@@ -60,6 +60,8 @@ const SIN_ALMACENES: AlmacenOperativo[] = [];
 const SIN_PEDIDOS: PedidoOperativo[] = [];
 type Criticidad = { idSimulacion: number | null; relojSimulado: string | null; pedido: PedidoOperativo | null };
 const CIUDAD_ENUNCIADO = { anchoKm: 70, altoKm: 50 };
+/** La mayor ventana que ofrece ListaAlmacenes para los pedidos entregados. */
+const HORAS_ENTREGADOS_ALMACENES = 24;
 
 export function EscenarioDashboard() {
   const sim = useSimulacion();
@@ -87,8 +89,7 @@ export function EscenarioDashboard() {
     activa ? 2_000 : null
   );
   const pedidosMap = useConsulta(
-    (s) => corrida ? catalogoService.pedidos({ pagina: 0, tamanio: 500 }, s)
-      : Promise.resolve({ contenido: [], total: 0, pagina: 0, tamanio: 500 } as PaginaPedidos),
+    (s) => corrida ? catalogoService.pedidosVigentes(HORAS_ENTREGADOS_ALMACENES, s) : Promise.resolve(SIN_PEDIDOS),
     `mapa-pedidos-${snapshot?.idSimulacion}-${snapshot?.estado}`,
     activa ? 8_000 : null
   );
@@ -166,7 +167,7 @@ export function EscenarioDashboard() {
             pedirDetener={() => setConfirmarDetener(true)}
             seleccionarVehiculo={(id) => setSeleccion({ tipo: 'vehiculo', id })}
             /* AGREGAR ESTAS TRES LÍNEAS */
-            pedidos={pedidosMap.datos?.contenido ?? SIN_PEDIDOS}
+            pedidos={pedidosMap.datos ?? SIN_PEDIDOS}
             seleccion={seleccion}
             alSeleccionar={setSeleccion}
             pedidoResaltado={pedidoResaltado}
@@ -192,7 +193,7 @@ export function EscenarioDashboard() {
             almacenes={almacenes.datos ?? SIN_ALMACENES}
             vehiculos={vehiculos}
             corridaId={snapshot.idSimulacion}
-            pedidos={pedidosMap.datos?.contenido ?? SIN_PEDIDOS}
+            pedidos={pedidosMap.datos ?? SIN_PEDIDOS}
             bloqueos={bloqueosActivos}
             seleccion={seleccion}
             alSeleccionar={setSeleccion}
@@ -214,7 +215,7 @@ export function EscenarioDashboard() {
             <PanelDetalle
               seleccion={seleccion}
               vehiculos={vehiculos}
-              pedidos={pedidosMap.datos?.contenido ?? SIN_PEDIDOS}
+              pedidos={pedidosMap.datos ?? SIN_PEDIDOS}
               catalogo={flota.datos}
               almacenes={almacenes.datos ?? SIN_ALMACENES}
               alSeleccionar={setSeleccion}

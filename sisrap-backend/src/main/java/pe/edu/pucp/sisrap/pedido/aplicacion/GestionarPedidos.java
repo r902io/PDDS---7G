@@ -43,6 +43,8 @@ public class GestionarPedidos {
 
     private static final int MAX_ARCHIVOS_POR_CARGA = 60;
 
+    private static final int MAX_HORAS_ENTREGADOS = 720;
+
     /**
      * Formatos admitidos, alineados con los archivos mensuales del curso:
      * ventas202601.txt
@@ -164,6 +166,20 @@ public class GestionarPedidos {
                 pagina,
                 tamanio
         );
+    }
+
+    /**
+     * Lo que muestran el mapa y los almacenes durante una corrida: no depende
+     * de cuántos pedidos se hayan acumulado, a diferencia de una página.
+     */
+    public List<PedidoOperativo> listarVigentes(int horasEntregados) {
+        if (horasEntregados < 0 || horasEntregados > MAX_HORAS_ENTREGADOS) {
+            throw new IllegalArgumentException(
+                    "Las horas deben estar entre 0 y " + MAX_HORAS_ENTREGADOS);
+        }
+        LocalDateTime reloj = motorSimulacion.estadoActual().relojSimulado();
+        if (reloj == null) return List.of();
+        return repositorio.listarVigentes(reloj.minusHours(horasEntregados));
     }
 
     public PedidoOperativo registrarManual(

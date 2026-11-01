@@ -113,6 +113,27 @@ public class JdbcPedidos implements RepositorioPedidos {
     }
 
     @Override
+    public List<PedidoOperativo> listarVigentes(LocalDateTime entregadosDesde) {
+        List<PedidoOperativo> salida = new ArrayList<>();
+        try (Connection cn = fuente.getConnection();
+             PreparedStatement ps = cn.prepareStatement("""
+                     SELECT id_pedido, id_cliente, cantidad_qq, prioridad, horas_limite,
+                            fecha_llegada, fecha_entrega_real, estado, ubicacion_x, ubicacion_y
+                     FROM pedido
+                     WHERE estado <> 'ENTREGADO' OR fecha_entrega_real >= ?
+                     ORDER BY fecha_llegada DESC, id_pedido DESC
+                     """)) {
+            ps.setTimestamp(1, Timestamp.valueOf(entregadosDesde));
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) salida.add(mapear(rs));
+            }
+            return List.copyOf(salida);
+        } catch (SQLException e) {
+            throw new IllegalStateException("No se pudieron consultar los pedidos vigentes", e);
+        }
+    }
+
+    @Override
     public long contar(
             LocalDateTime desde,
             LocalDateTime hasta,
