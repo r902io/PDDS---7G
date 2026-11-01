@@ -29,9 +29,10 @@ interface Props {
 interface Filtros {
   ventana: VentanaEnvios;
   horasEntregados: number;
+  horasPorEntregar: number;
 }
 
-const FILTROS_INICIALES: Filtros = { ventana: 'TODOS', horasEntregados: 4 };
+const FILTROS_INICIALES: Filtros = { ventana: 'TODOS', horasEntregados: 4, horasPorEntregar: 4 };
 const HORAS_MAXIMAS = 720;
 const TAMANIO_PAGINA = 50;
 const REFRESCO_MS = 4_000;
@@ -40,10 +41,11 @@ const horasValidas = (n: unknown) => Number.isInteger(n) && (n as number) >= 1 &
 
 function filtrosValidos(valor: unknown): boolean {
   const f = valor as Partial<Filtros> | null;
-  return !!f && ['TODOS', 'ENTREGADOS'].includes(f.ventana as string) && horasValidas(f.horasEntregados);
+  return !!f && ['TODOS', 'ENTREGADOS', 'POR_ENTREGAR'].includes(f.ventana as string)
+    && horasValidas(f.horasEntregados) && horasValidas(f.horasPorEntregar);
 }
 
-/** E31 y E32: una línea por asignación, con filtro por ventana de tiempo. */
+/** E31 a E33: una línea por asignación, con filtros por ventana de tiempo. */
 export const ListaEnvios = memo(function ListaEnvios({
   idSimulacion,
   estadoCorrida,
@@ -66,7 +68,7 @@ export const ListaEnvios = memo(function ListaEnvios({
     return () => clearTimeout(id);
   }, [textoBusqueda]);
 
-  const horas = filtros.horasEntregados;
+  const horas = filtros.ventana === 'POR_ENTREGAR' ? filtros.horasPorEntregar : filtros.horasEntregados;
   const consulta = useConsulta(
     (s) => simulacionService.envios({ ventana: filtros.ventana, horas, buscar: busqueda, pagina, tamanio: TAMANIO_PAGINA }, s),
     `envios-${idSimulacion}-${estadoCorrida}-${filtros.ventana}-${horas}-${busqueda}-${pagina}`,
@@ -101,6 +103,13 @@ export const ListaEnvios = memo(function ListaEnvios({
           texto="Entregados en las últimas"
           horas={filtros.horasEntregados}
           alCambiarHoras={(h) => cambiarFiltros({ ventana: 'ENTREGADOS', horasEntregados: h })}
+        />
+        <OpcionFiltro
+          activa={filtros.ventana === 'POR_ENTREGAR'}
+          alElegir={() => cambiarFiltros({ ventana: 'POR_ENTREGAR' })}
+          texto="Por entregar en las siguientes"
+          horas={filtros.horasPorEntregar}
+          alCambiarHoras={(h) => cambiarFiltros({ ventana: 'POR_ENTREGAR', horasPorEntregar: h })}
         />
       </fieldset>
 
