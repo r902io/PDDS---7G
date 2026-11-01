@@ -68,6 +68,7 @@ public class MotorSimulacion {
     private static final String ALGORITMO_OPERATIVO = "GENETICO";
     private static final int INTERVALO_PLANIFICACION_MIN = 5;
     private static final int MAX_PEDIDOS_ANTICIPADOS = 60;
+    private static final double HORAS_TRASVASE = 0.5;
 
     private final RepositorioSimulacion repositorio;
     private final GestionarControlSimulacion control;
@@ -1514,6 +1515,7 @@ public class MotorSimulacion {
                 if(!plan.salidasCamino.isEmpty()) plan.salidasCamino.removeFirst();
                 plan.posicionAnterior = plan.posicion;
                 plan.posicion = siguiente;
+                registrarAvanceDesdeSalida(plan);
                 if (plan.reoptimizarEnSiguienteNodo) {
                     plan.reoptimizarEnSiguienteNodo = false; programarPlanificacionInmediata();
                 }
@@ -1601,6 +1603,7 @@ public class MotorSimulacion {
                     plan.stockTomado = true;
                 }
                 plan.fase = FaseUnidad.IR_PEDIDO;
+                marcarSalida(plan, instanteEvento(plan));
             }
             case IR_RECOGER -> {
                 CargaAveriada carga = plan.origenRescate;
@@ -1616,9 +1619,10 @@ public class MotorSimulacion {
                         new ArrayList<>(plan.pedidosPendientes), plan.idVehiculo);
                 plan.pedidosPendientes.clear();
                 plan.pedidosPendientes.addAll(recogidos);
-                plan.trasvaseRestanteHoras = 0.5;
+                plan.trasvaseRestanteHoras = HORAS_TRASVASE;
                 plan.stockTomado = true;
                 plan.fase = FaseUnidad.IR_PEDIDO;
+                marcarSalida(plan, JornadaOperativa.avanzar(instanteEvento(plan), HORAS_TRASVASE));
             }
             case IR_PEDIDO -> {
                 // Varias fracciones del mismo cliente se descargan en una sola parada.
@@ -1632,8 +1636,9 @@ public class MotorSimulacion {
                                     plan.pedidoObjetivo.getIdCliente())) break;
                     plan.entregasEnParada.add(plan.pedidosPendientes.removeFirst());
                 }
+                plan.arriboParada = instanteEvento(plan);
                 for (Pedido entrega : plan.entregasEnParada) {
-                    repositorio.registrarArribo(entrega.getIdPedido(), instanteEvento(plan));
+                    repositorio.registrarArribo(entrega.getIdPedido(), plan.arriboParada);
                 }
                 plan.fase = FaseUnidad.ATENDIENDO;
                 plan.servicioRestanteHoras = plan.servicioHoras;
@@ -1955,16 +1960,18 @@ public class MotorSimulacion {
             int capacidad = persistido == null ? 0 : persistido.capacidadPaquetes();
             // El crédito solo expresa avance sobre el próximo tramo ya calculado.
             double xVisual = plan.posicion.getX(), yVisual = plan.posicion.getY();
+            double fraccion = 0;
             Nodo siguiente = plan.camino.peekFirst();
             if (siguiente != null && plan.fase != FaseUnidad.ATENDIENDO
                     && plan.trasvaseRestanteHoras <= 0 && plan.creditoHoras > 0
                     && ArcoReticula.transitableComoExtremo(plan.posicion.getX(), plan.posicion.getY(),
                             siguiente.getX(), siguiente.getY(), bloqueados, true,
                             plan.destinoActual != null && mismaPosicion(siguiente, plan.destinoActual))) {
-                double fraccion = Math.min(1, plan.creditoHoras * plan.velocidadKmh / plan.distanciaNodoKm);
+                fraccion = Math.min(1, plan.creditoHoras * plan.velocidadKmh / plan.distanciaNodoKm);
                 xVisual += (siguiente.getX() - plan.posicion.getX()) * fraccion;
                 yVisual += (siguiente.getY() - plan.posicion.getY()) * fraccion;
             }
+            AvanceRuta avance = medirAvance(plan, fraccion);
             porId.put(
                     plan.idVehiculo,
                     new VehiculoSnapshot(
@@ -1982,7 +1989,9 @@ public class MotorSimulacion {
                             porRecoger,
                             plan.idsNoEntregados().size(), xVisual, yVisual,
                             secuenciasVisuales.getOrDefault(plan.idVehiculo, 0L),
-                            List.copyOf(pasosVisuales.getOrDefault(plan.idVehiculo, new ArrayDeque<>()))));
+                            List.copyOf(pasosVisuales.getOrDefault(plan.idVehiculo, new ArrayDeque<>())),
+                            plan.horaSalida, avance.horaLlegada(),
+                            avance.recorridaKm(), avance.porRecorrerKm()));
         }
 
         for (CargaAveriada carga : cargasAveriadas.values()) {
@@ -2026,6 +2035,58 @@ public class MotorSimulacion {
 
         sse.publicar(snapshotActual);
         nanoUltimaPublicacion = ahora;
+    }
+
+    /** Lo que se publica de la ruta de una unidad: siempre hacia su destino inmediato. */
+    private record AvanceRuta(LocalDateTime horaLlegada, Double recorridaKm, Double porRecorrerKm) { }
+
+    /**
+     * Mide la ruta con el reloj simulado y la velocidad de la unidad. Mientras
+     * descarga, la unidad ya llegó: se informa su arribo real.
+     *
+     * @param fraccion avance sobre el tramo en curso, entre 0 y 1
+     */
+    private AvanceRuta medirAvance(PlanUnidad plan, double fraccion) {
+        Double recorrida = plan.horaSalida == null ? null
+                : EstimadorRuta.redondearKm(plan.kmDesdeSalida + fraccion * plan.distanciaNodoKm);
+        if (plan.fase == FaseUnidad.ATENDIENDO) {
+            return new AvanceRuta(plan.arriboParada, recorrida, 0.0);
+        }
+        Nodo destino = destinoPrevisto(plan);
+        if (destino == null) return new AvanceRuta(null, recorrida, null);
+
+        double pendiente = plan.camino.isEmpty()
+                ? EstimadorRuta.kmManhattan(plan.posicion, destino, plan.distanciaNodoKm)
+                : (plan.camino.size() - fraccion) * plan.distanciaNodoKm;
+        LocalDateTime llegada = EstimadorRuta.llegadaAlDestino(
+                reloj, plan.salidasCamino.peekLast(), plan.distanciaNodoKm / plan.velocidadKmh,
+                plan.trasvaseRestanteHoras, pendiente, plan.velocidadKmh);
+        return new AvanceRuta(llegada, recorrida, EstimadorRuta.redondearKm(pendiente));
+    }
+
+    /** Destino inmediato, también en el instante en que aún no se calculó el tramo. */
+    private Nodo destinoPrevisto(PlanUnidad plan) {
+        if (plan.destinoActual != null) return plan.destinoActual;
+        return switch (plan.fase) {
+            case IR_ALMACEN -> plan.almacenOrigen.getUbicacion();
+            case IR_RECOGER -> plan.origenRescate == null ? null : plan.origenRescate.ubicacionCarga;
+            case RETORNANDO -> plan.almacenRetorno.getUbicacion();
+            case ATENDIENDO -> plan.posicion;
+            case IR_PEDIDO -> {
+                Pedido siguiente = plan.pedidoObjetivo != null
+                        ? plan.pedidoObjetivo : plan.pedidosPendientes.peekFirst();
+                yield siguiente == null ? null : siguiente.getUbicacion();
+            }
+        };
+    }
+
+    private void marcarSalida(PlanUnidad plan, LocalDateTime instante) {
+        plan.horaSalida = instante;
+        plan.kmDesdeSalida = 0;
+    }
+
+    private void registrarAvanceDesdeSalida(PlanUnidad plan) {
+        if (plan.horaSalida != null) plan.kmDesdeSalida += plan.distanciaNodoKm;
     }
 
     private void exigirEstado(EstadoSimulacion requerido, String mensaje) {
@@ -2111,6 +2172,9 @@ public class MotorSimulacion {
         private boolean reoptimizarEnSiguienteNodo;
         private double servicioRestanteHoras;
         private boolean stockTomado;
+        private LocalDateTime horaSalida;
+        private double kmDesdeSalida;
+        private LocalDateTime arriboParada;
 
         private PlanUnidad(
                 String idVehiculo,
