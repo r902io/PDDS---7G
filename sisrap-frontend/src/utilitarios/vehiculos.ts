@@ -2,7 +2,7 @@
  * Tipo de vehículo deducido del código TTNN.
  *   TA = auto, TM = moto, TB = bicicleta.  Ej.: TA01, TM03, TB10.
  */
-import type { TipoAveria } from '../types/api';
+import type { TipoAveria, VehiculoSnapshot } from '../types/api';
 import type { NombreForma } from '../components/iconos/formas';
 
 export type TipoVehiculo = 'AUTO' | 'MOTO' | 'BICICLETA';
@@ -62,6 +62,36 @@ const ETIQUETA_ESTADO: Record<string, string> = {
 export function etiquetaEstadoVehiculo(estado: string | null | undefined): string {
   if (!estado) return 'No disponible';
   return ETIQUETA_ESTADO[estado] ?? estado;
+}
+
+export const CAMPOS_ORDEN_UNIDADES = [
+  'horaSalida',
+  'horaLlegadaEstimada',
+  'distanciaPorRecorrerKm',
+  'distanciaRecorridaKm',
+] as const;
+
+export type CampoOrdenUnidad = (typeof CAMPOS_ORDEN_UNIDADES)[number];
+export type SentidoOrden = 'asc' | 'desc';
+
+/**
+ * Las unidades sin dato van al final en ambos sentidos. El código desempata
+ * para que el orden no salte entre un snapshot y el siguiente.
+ */
+export function ordenarUnidades(
+  vehiculos: VehiculoSnapshot[],
+  campo: CampoOrdenUnidad,
+  sentido: SentidoOrden
+): VehiculoSnapshot[] {
+  const factor = sentido === 'asc' ? 1 : -1;
+  return [...vehiculos].sort((a, b) => {
+    const va = a[campo] ?? null;
+    const vb = b[campo] ?? null;
+    if (va == null && vb != null) return 1;
+    if (vb == null && va != null) return -1;
+    if (va != null && vb != null && va !== vb) return (va < vb ? -1 : 1) * factor;
+    return a.idVehiculo.localeCompare(b.idVehiculo);
+  });
 }
 
 export function estaAveriado(estado: string | null | undefined): boolean {

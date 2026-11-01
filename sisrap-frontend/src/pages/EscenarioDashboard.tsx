@@ -50,6 +50,7 @@ import {
 } from '../utilitarios/vehiculos';
 
 import { ListaAlmacenes } from '../components/panel/ListaAlmacenes';
+import { ListaVehiculos } from '../components/panel/ListaVehiculos';
 
 /** Dimensiones del enunciado; se reemplazan por las de /api/mapa cuando responde. */
 const SIN_VEHICULOS: VehiculoSnapshot[] = [];
@@ -466,6 +467,7 @@ function PanelParametros({
   alSeleccionar?: (s: Seleccion) => void;
 }) {
   const { rol, accionEnCurso } = useSimulacion();
+  const fechaReloj = snapshot.relojSimulado?.slice(0, 10) ?? null;
   const activa = corridaActiva(snapshot);
   const esc = snapshot.escenario ? ESCENARIOS[snapshot.escenario] : null;
 
@@ -568,28 +570,18 @@ function PanelParametros({
                 </tbody>
               </table>
           )}
-          {snapshot.vehiculos.length > 0 && (
-              <details className="mt-3 border-t border-borde pt-2">
-                <summary className="cursor-pointer text-xs font-semibold text-azul">
-                  Ver carga actual por vehículo ({snapshot.vehiculos.length})
-                </summary>
-                <div className="max-h-64 overflow-y-auto mt-2 space-y-1">
-                  {snapshot.vehiculos.map((v) => (
-                      <button
-                          key={v.idVehiculo}
-                          type="button"
-                          onClick={() => seleccionarVehiculo(v.idVehiculo)}
-                          className="w-full flex items-center justify-between gap-2 rounded border border-borde px-2 py-1.5 hover:border-mint text-xs text-left"
-                          title="Ver unidad en el mapa y detalle de carga"
-                      >
-                        <span className="font-mono text-texto">{v.idVehiculo}</span>
-                        <span className="text-texto2 font-mono">{formatoEntero(v.cargaActualPaquetes ?? 0)} / {formatoEntero(v.capacidadPaquetes ?? 0)} paq.</span>
-                      </button>
-                  ))}
-                </div>
-              </details>
-          )}
         </Bloque>
+
+        {snapshot.vehiculos.length > 0 && (
+            <Bloque titulo="Unidades de transporte" aclaracion="Clic en una columna para ordenar; clic en una fila para ubicarla en el mapa.">
+              <ListaVehiculos
+                  vehiculos={snapshot.vehiculos}
+                  fechaReloj={fechaReloj}
+                  idSeleccionado={seleccion?.tipo === 'vehiculo' ? seleccion.id : null}
+                  alSeleccionar={seleccionarVehiculo}
+              />
+            </Bloque>
+        )}
 
         {/* BLOQUE DE ALMACENES ACTUALIZADO QUE CONSUME pedidos, seleccion Y alSeleccionar */}
         <Bloque titulo="Almacenes">

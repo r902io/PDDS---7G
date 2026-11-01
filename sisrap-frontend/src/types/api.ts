@@ -53,6 +53,14 @@ export interface VehiculoSnapshot {
   yVisual?: number;
   secuenciaMovimiento?: number;
   movimientosRecientes?: Array<{ secuencia: number; x: number; y: number }>;
+  /** Salida del último almacén; null si la unidad no tiene plan o aún no sale. */
+  horaSalida?: FechaHoraLocal | null;
+  /** Llegada a su destino inmediato, cliente o almacén. */
+  horaLlegadaEstimada?: FechaHoraLocal | null;
+  /** Kilómetros desde la salida. */
+  distanciaRecorridaKm?: number | null;
+  /** Kilómetros hasta el destino inmediato. */
+  distanciaPorRecorrerKm?: number | null;
 }
 
 /** ResumenPedidosSimulacion */
