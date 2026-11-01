@@ -13,6 +13,7 @@ import {
   tipoDesdeCodigo,
 } from '../utilitarios/vehiculos';
 import { obtenerColorSemaforoAlmacen, obtenerColorHexAlmacen } from '../utilitarios/almacenes';
+import type { RutaDestacada } from '../utilitarios/envios';
 
 export interface Dimensiones {
   anchoKm: number;
@@ -49,6 +50,7 @@ interface Opciones {
   alSeleccionar: (s: Seleccion) => void;
   atenuado: boolean;
   animar: boolean;
+  rutasDestacadas: RutaDestacada[];
 }
 
 const MARGEN = 34;
@@ -80,6 +82,9 @@ export function useMapCanvas(op: Opciones) {
   const vehiculosVisuales = useRef(op.vehiculos);
   const corridaVisual = useRef(op.corridaId);
   const polilineas = useRef<Map<string, Array<[number, number]>>>(new Map());
+  // Se lee en cada cuadro: resaltar un envío no reinicia el dibujo del mapa.
+  const rutasDestacadas = useRef(op.rutasDestacadas);
+  rutasDestacadas.current = op.rutasDestacadas;
 
   const { anchoKm, altoKm } = op.dimensiones;
 
@@ -310,6 +315,9 @@ export function useMapCanvas(op: Opciones) {
 
       const alfaBase = op.atenuado ? 0.45 : 1;
       const nuevas = new Map<string, Array<[number, number]>>();
+      const destacadas = rutasDestacadas.current;
+      const idsDestacados = new Set(destacadas.map((r) => r.idVehiculo));
+      const hayResalte = enfocado != null || destacadas.length > 0;
 
       const vehiculosOrdenados = [...vehiculos].sort((a, b) =>
           a.idVehiculo === enfocado ? 1 : b.idVehiculo === enfocado ? -1 : 0
@@ -330,7 +338,7 @@ export function useMapCanvas(op: Opciones) {
         nuevas.set(id, ptsTotales);
 
         ctx.save();
-        const alfaRuta = enfocado == null ? 0.85 : (esEnfocado ? 1.0 : 0.2);
+        const alfaRuta = !hayResalte ? 0.85 : (esEnfocado ? 1.0 : 0.2);
         ctx.globalAlpha = alfaBase * alfaRuta;
         ctx.lineJoin = 'round';
         ctx.lineCap = 'round';
@@ -369,6 +377,8 @@ export function useMapCanvas(op: Opciones) {
       }
 
       polilineas.current = nuevas;
+
+      for (const ruta of destacadas) dibujarRutaDestacada(ctx, ruta, proy, alfaBase);
 
       for (const b of op.bloqueos) {
         if (b.vertices.length < 2) continue;
@@ -429,7 +439,8 @@ export function useMapCanvas(op: Opciones) {
         const y = py(g.y);
         const contieneEnfocado = enfocado != null && g.ids.includes(enfocado);
         ctx.save();
-        ctx.globalAlpha = (op.atenuado ? 0.45 : 1) * (enfocado == null || contieneEnfocado ? 1 : 0.35);
+        const contieneDestacada = g.ids.some((id) => idsDestacados.has(id));
+        ctx.globalAlpha = (op.atenuado ? 0.45 : 1) * (!hayResalte || contieneEnfocado || contieneDestacada ? 1 : 0.35);
         if (g.idAlmacen) {
           insignia(ctx, x + 22, y - 2, String(g.ids.length), contieneEnfocado);
           ctx.restore();
@@ -640,6 +651,40 @@ function mismoObjetivo(a: Objetivo, b: Objetivo): boolean {
   if (a.tipo === 'pedido' && b.tipo === 'pedido') return a.id === b.id;
   if (a.tipo === 'nodo' && b.tipo === 'nodo') return a.x === b.x && a.y === b.y && a.ids.length === b.ids.length;
   return false;
+}
+
+/** Lo real va en línea continua y lo estimado, discontinuo: nunca se confunden. */
+function dibujarRutaDestacada(
+    ctx: CanvasRenderingContext2D,
+    ruta: RutaDestacada,
+    proy: Proyeccion,
+    alfa: number
+) {
+  const color = colorDeVehiculo(ruta.idVehiculo);
+  const aPixeles = (p: { x: number; y: number }): [number, number] => [proy.px(p.x), proy.py(p.y)];
+  ctx.save();
+  ctx.globalAlpha = alfa;
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  if (ruta.real.length > 1) {
+    const pts = ruta.real.map(aPixeles);
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = GROSOR_RUTA + 3;
+    trazar(ctx, pts);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = GROSOR_RUTA + 1;
+    trazar(ctx, pts);
+  }
+  if (ruta.estimada.length > 1) {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = GROSOR_RUTA + 0.5;
+    ctx.lineCap = 'butt';
+    ctx.setLineDash([7, 6]);
+    trazar(ctx, ruta.estimada.map(aPixeles));
+    ctx.setLineDash([]);
+  }
+  dibujarForma(ctx, 'destinoCliente', proy.px(ruta.destino.x), proy.py(ruta.destino.y), color);
+  ctx.restore();
 }
 
 function trazar(ctx: CanvasRenderingContext2D, pts: Array<[number, number]>) {

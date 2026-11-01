@@ -15,6 +15,7 @@ import {
     etiquetaEstadoVehiculo,
     tipoDesdeCodigo,
 } from '../../utilitarios/vehiculos';
+import type { RutaDestacada } from '../../utilitarios/envios';
 
 interface Props {
     dimensiones: Dimensiones;
@@ -27,6 +28,7 @@ interface Props {
     alSeleccionar: (s: Seleccion) => void;
     atenuado: boolean;
     animar: boolean;
+    rutasDestacadas: RutaDestacada[];
 }
 
 /** Longitudes "redondas" para la escala gráfica. */
@@ -81,6 +83,8 @@ export function MapaCiudad(props: Props) {
                             <ItemLeyenda forma="averiaTipo1" texto="Unidad averiada" />
                             <ItemLeyenda forma="bloqueo" texto="Tramo bloqueado" />
                             <ItemLeyenda forma="mantenimiento" texto="En mantenimiento" />
+                            <LineaLeyenda texto="Ruta real del envío" />
+                            <LineaLeyenda texto="Ruta estimada" discontinua />
                             <div className="flex items-center gap-1.5 text-texto2 whitespace-nowrap">
                 <span className="w-6 h-5 flex items-center justify-center">
                   <span className="w-[18px] h-[18px] rounded-full border border-texto bg-panel2 text-[10px] font-mono text-texto flex items-center justify-center">
@@ -129,6 +133,17 @@ export function MapaCiudad(props: Props) {
                     pedidos={props.pedidos}
                 />
             )}
+        </div>
+    );
+}
+
+function LineaLeyenda({ texto, discontinua = false }: { texto: string; discontinua?: boolean }) {
+    return (
+        <div className="flex items-center gap-1.5 text-texto2 whitespace-nowrap">
+            <svg width={22} height={10} aria-hidden="true">
+                <line x1={1} y1={5} x2={21} y2={5} stroke="currentColor" strokeWidth={2.4} strokeDasharray={discontinua ? '5 4' : undefined} />
+            </svg>
+            {texto}
         </div>
     );
 }

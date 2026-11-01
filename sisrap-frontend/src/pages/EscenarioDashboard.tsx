@@ -5,6 +5,7 @@ import { navegar } from '../estado/navegacion';
 import { catalogoService } from '../services/catalogoService';
 import { apiFetch } from '../services/apiClient';
 import { useConsulta } from '../hooks/useConsulta';
+import { useRutasEnvio } from '../hooks/useRutasEnvio';
 import type { Seleccion } from '../hooks/useMapCanvas';
 import { MapaCiudad } from '../components/mapa/MapaCiudad';
 import { PanelDetalle } from '../components/mapa/PanelDetalle';
@@ -50,6 +51,7 @@ import {
 } from '../utilitarios/vehiculos';
 
 import { ListaAlmacenes } from '../components/panel/ListaAlmacenes';
+import { ListaEnvios } from '../components/panel/ListaEnvios';
 import { ListaVehiculos } from '../components/panel/ListaVehiculos';
 
 /** Dimensiones del enunciado; se reemplazan por las de /api/mapa cuando responde. */
@@ -69,6 +71,8 @@ export function EscenarioDashboard() {
   const [izqColapsado, setIzqColapsado] = useState(angosta);
   const [derColapsado, setDerColapsado] = useState(angosta);
   const [seleccion, setSeleccion] = useState<Seleccion>(null);
+  const [pedidoResaltado, setPedidoResaltado] = useState<number | null>(null);
+  const rutasDestacadas = useRutasEnvio(pedidoResaltado, snapshot?.idSimulacion ?? null, activa);
   const [confirmarDetener, setConfirmarDetener] = useState(false);
 
   // Datos complementarios del backend.
@@ -100,12 +104,18 @@ export function EscenarioDashboard() {
     );
   }, [bloqueos.datos, corrida, snapshot?.relojSimulado]);
 
-  // Esc cancela la selección.
+  // Esc cancela la selección y el resaltado del envío.
   useEffect(() => {
-    const alTeclear = (e: KeyboardEvent) => e.key === 'Escape' && setSeleccion(null);
+    const alTeclear = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      setSeleccion(null);
+      setPedidoResaltado(null);
+    };
     window.addEventListener('keydown', alTeclear);
     return () => window.removeEventListener('keydown', alTeclear);
   }, []);
+
+  useEffect(() => setPedidoResaltado(null), [snapshot?.idSimulacion]);
 
   // Si la unidad seleccionada desaparece del snapshot, se mantiene: el panel lo explica.
   const vehiculos: VehiculoSnapshot[] = snapshot?.vehiculos ?? SIN_VEHICULOS;
@@ -159,6 +169,8 @@ export function EscenarioDashboard() {
             pedidos={pedidosMap.datos?.contenido ?? SIN_PEDIDOS}
             seleccion={seleccion}
             alSeleccionar={setSeleccion}
+            pedidoResaltado={pedidoResaltado}
+            alResaltarPedido={setPedidoResaltado}
         />
       </PanelLateral>
 
@@ -186,7 +198,18 @@ export function EscenarioDashboard() {
             alSeleccionar={setSeleccion}
             atenuado={corrida && !datosVigentes}
             animar={snapshot.estado === 'EJECUTANDO' && datosVigentes}
+            rutasDestacadas={rutasDestacadas}
           />
+          {pedidoResaltado != null && (
+            <button
+              onClick={() => setPedidoResaltado(null)}
+              className="absolute left-1/2 -translate-x-1/2 bottom-2.5 z-10 bg-panel/95 border border-mint rounded px-2.5 py-1 text-xs text-texto"
+            >
+              {rutasDestacadas.length > 0
+                ? `Envío #${pedidoResaltado} resaltado. Clic para quitar`
+                : `Envío #${pedidoResaltado} sin ruta todavía. Clic para quitar`}
+            </button>
+          )}
           {seleccion && (
             <PanelDetalle
               seleccion={seleccion}
@@ -452,6 +475,8 @@ function PanelParametros({
                            pedidos = [],
                            seleccion = null,
                            alSeleccionar,
+                           pedidoResaltado,
+                           alResaltarPedido,
                          }: {
   snapshot: SnapshotSimulacion;
   flota: VehiculoOperativo[] | null;
@@ -465,6 +490,8 @@ function PanelParametros({
   pedidos?: PedidoOperativo[];
   seleccion?: Seleccion;
   alSeleccionar?: (s: Seleccion) => void;
+  pedidoResaltado: number | null;
+  alResaltarPedido: (idPedido: number | null) => void;
 }) {
   const { rol, accionEnCurso } = useSimulacion();
   const fechaReloj = snapshot.relojSimulado?.slice(0, 10) ?? null;
@@ -582,6 +609,17 @@ function PanelParametros({
               />
             </Bloque>
         )}
+
+        <Bloque titulo="Envíos" aclaracion="Clic en un envío para resaltar en el mapa la ruta de cada unidad.">
+          <ListaEnvios
+              idSimulacion={snapshot.idSimulacion}
+              estadoCorrida={snapshot.estado}
+              activa={activa}
+              fechaReloj={fechaReloj}
+              pedidoResaltado={pedidoResaltado}
+              alResaltar={alResaltarPedido}
+          />
+        </Bloque>
 
         {/* BLOQUE DE ALMACENES ACTUALIZADO QUE CONSUME pedidos, seleccion Y alSeleccionar */}
         <Bloque titulo="Almacenes">
