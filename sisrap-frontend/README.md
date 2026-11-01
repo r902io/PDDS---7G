@@ -76,6 +76,24 @@ docs/referencia/           Prototipo de diseño v03
 BRECHAS_BACKEND.md         Datos que la interfaz necesita y el backend aún no entrega
 ```
 
+## Unidades y envíos en la operación
+
+- **Unidades de transporte (E14 a E17):** salen de los campos `horaSalida`, `horaLlegadaEstimada`,
+  `distanciaRecorridaKm` y `distanciaPorRecorrerKm` del snapshot. La llegada y la distancia por recorrer se miden
+  hasta el destino inmediato. Las unidades sin dato van al final en ambos sentidos.
+- **Envíos (E31 a E33):** `GET /api/simulacion/envios?ventana=TODOS|ENTREGADOS|POR_ENTREGAR&horas=4&buscar=&pagina=0&tamanio=50`.
+  Con `idPedido=` devuelve un envío completo, que es lo que usa el resaltado del mapa.
+- **Entregados en las últimas x horas:** cuenta un pedido si tiene al menos una asignación entregada en la ventana,
+  lo marca "Entrega parcial" si le faltan fracciones y suma solo los productos entregados en la ventana.
+- **Por entregar en las siguientes x horas:** usa la llegada estimada. Si los paquetes no tienen unidad, usa el plazo
+  y los muestra "Sin asignar".
+- **Ruta real y estimada:** la ruta real es lo recorrido más el tramo en curso. Las paradas siguientes aún no tienen
+  camino calculado: se estiman por distancia Manhattan, sin bloqueos, y se dibujan con línea discontinua.
+- **Identificadores de producto:** el caso no los define. Cada paquete recibe un número estable entre 1 y la cantidad
+  del pedido, con formato `idPedido-n`, y lo conserva si cambia de unidad.
+- **Alcance:** las asignaciones viven en memoria (`RegistroEnvios`), por corrida. Se conservan al terminar la corrida
+  hasta iniciar otra, pero no sobreviven a un reinicio del backend.
+
 ## Reglas que respeta la interfaz
 
 - Ningún control de reproducción (pausa, reanudar, velocidad, barras de tiempo). Solo iniciar y detener.
