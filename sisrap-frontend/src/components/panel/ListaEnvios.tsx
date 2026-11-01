@@ -1,7 +1,8 @@
 import { memo, useEffect, useState, type ReactNode } from 'react';
-import type { AsignacionEnvio, EnvioSimulacion } from '../../types/api';
+import type { AsignacionEnvio, EnvioSimulacion, VentanaEnvios } from '../../types/api';
 import { simulacionService } from '../../services/simulacionService';
 import { useConsulta } from '../../hooks/useConsulta';
+import { usePreferencia } from '../../hooks/usePreferencia';
 import { Cargando, ErrorCarga } from '../ui/Avisos';
 import { formatoCoordenada, formatoEntero } from '../../utilitarios/formato';
 import {
@@ -25,11 +26,24 @@ interface Props {
   alResaltar: (idPedido: number | null) => void;
 }
 
-const HORAS_SIN_VENTANA = 4;
+interface Filtros {
+  ventana: VentanaEnvios;
+  horasEntregados: number;
+}
+
+const FILTROS_INICIALES: Filtros = { ventana: 'TODOS', horasEntregados: 4 };
+const HORAS_MAXIMAS = 720;
 const TAMANIO_PAGINA = 50;
 const REFRESCO_MS = 4_000;
 
-/** E31: una línea por asignación, con sus rutas, productos y horarios. */
+const horasValidas = (n: unknown) => Number.isInteger(n) && (n as number) >= 1 && (n as number) <= HORAS_MAXIMAS;
+
+function filtrosValidos(valor: unknown): boolean {
+  const f = valor as Partial<Filtros> | null;
+  return !!f && ['TODOS', 'ENTREGADOS'].includes(f.ventana as string) && horasValidas(f.horasEntregados);
+}
+
+/** E31 y E32: una línea por asignación, con filtro por ventana de tiempo. */
 export const ListaEnvios = memo(function ListaEnvios({
   idSimulacion,
   estadoCorrida,
@@ -38,11 +52,12 @@ export const ListaEnvios = memo(function ListaEnvios({
   pedidoResaltado,
   alResaltar,
 }: Props) {
+  const [filtros, setFiltros] = usePreferencia<Filtros>('sisrap.lista-envios.filtros', FILTROS_INICIALES, filtrosValidos);
   const [textoBusqueda, setTextoBusqueda] = useState('');
   const [busqueda, setBusqueda] = useState('');
   const [pagina, setPagina] = useState(0);
 
-  // La búsqueda se aplica al dejar de escribir.
+  // La búsqueda se aplica al dejar de escribir y es independiente de los filtros.
   useEffect(() => {
     const id = setTimeout(() => {
       setBusqueda(textoBusqueda.trim());
@@ -51,22 +66,44 @@ export const ListaEnvios = memo(function ListaEnvios({
     return () => clearTimeout(id);
   }, [textoBusqueda]);
 
+  const horas = filtros.horasEntregados;
   const consulta = useConsulta(
-    (s) => simulacionService.envios({ ventana: 'TODOS', horas: HORAS_SIN_VENTANA, buscar: busqueda, pagina, tamanio: TAMANIO_PAGINA }, s),
-    `envios-${idSimulacion}-${estadoCorrida}-${busqueda}-${pagina}`,
+    (s) => simulacionService.envios({ ventana: filtros.ventana, horas, buscar: busqueda, pagina, tamanio: TAMANIO_PAGINA }, s),
+    `envios-${idSimulacion}-${estadoCorrida}-${filtros.ventana}-${horas}-${busqueda}-${pagina}`,
     activa ? REFRESCO_MS : null
   );
 
   const datos = consulta.datos;
   const totalPaginas = datos ? Math.max(1, Math.ceil(datos.totalPedidos / TAMANIO_PAGINA)) : 1;
 
-  // Una página puede quedar vacía si la búsqueda deja menos resultados.
+  // Una página puede quedar vacía si el filtro deja menos resultados.
   useEffect(() => {
     if (datos && pagina > 0 && pagina >= totalPaginas) setPagina(totalPaginas - 1);
   }, [datos, pagina, totalPaginas]);
 
+  const cambiarFiltros = (cambio: Partial<Filtros>) => {
+    setFiltros({ ...filtros, ...cambio });
+    setPagina(0);
+  };
+
   return (
     <div className="space-y-2">
+      <fieldset className="space-y-1">
+        <legend className="sr-only">Filtrar envíos por tiempo</legend>
+        <OpcionFiltro
+          activa={filtros.ventana === 'TODOS'}
+          alElegir={() => cambiarFiltros({ ventana: 'TODOS' })}
+          texto="Todos los envíos"
+        />
+        <OpcionFiltro
+          activa={filtros.ventana === 'ENTREGADOS'}
+          alElegir={() => cambiarFiltros({ ventana: 'ENTREGADOS' })}
+          texto="Entregados en las últimas"
+          horas={filtros.horasEntregados}
+          alCambiarHoras={(h) => cambiarFiltros({ ventana: 'ENTREGADOS', horasEntregados: h })}
+        />
+      </fieldset>
+
       <input
         type="search"
         value={textoBusqueda}
@@ -124,6 +161,69 @@ export const ListaEnvios = memo(function ListaEnvios({
     </div>
   );
 });
+
+function OpcionFiltro({
+  activa,
+  alElegir,
+  texto,
+  horas,
+  alCambiarHoras,
+}: {
+  activa: boolean;
+  alElegir: () => void;
+  texto: string;
+  horas?: number;
+  alCambiarHoras?: (horas: number) => void;
+}) {
+  return (
+    <div className={`flex items-center gap-1.5 rounded border px-1.5 py-1 ${activa ? 'border-mint bg-mint/10' : 'border-borde'}`}>
+      <label className="flex items-center gap-1.5 cursor-pointer text-texto">
+        <input type="radio" name="ventana-envios" checked={activa} onChange={alElegir} className="accent-mint" />
+        {texto}
+      </label>
+      {horas != null && alCambiarHoras && (
+        <span className="ml-auto flex items-center gap-1 text-texto">
+          <CampoHoras valor={horas} etiqueta={`${texto} horas`} alCambiar={alCambiarHoras} alEnfocar={alElegir} />
+          horas
+        </span>
+      )}
+    </div>
+  );
+}
+
+/** Conserva lo que se escribe; solo aplica valores válidos para no consultar con un campo a medias. */
+function CampoHoras({
+  valor,
+  etiqueta,
+  alCambiar,
+  alEnfocar,
+}: {
+  valor: number;
+  etiqueta: string;
+  alCambiar: (horas: number) => void;
+  alEnfocar: () => void;
+}) {
+  const [texto, setTexto] = useState(String(valor));
+  useEffect(() => setTexto(String(valor)), [valor]);
+
+  return (
+    <input
+      type="number"
+      min={1}
+      max={HORAS_MAXIMAS}
+      value={texto}
+      aria-label={etiqueta}
+      onFocus={alEnfocar}
+      onChange={(e) => {
+        setTexto(e.target.value);
+        const n = Number(e.target.value);
+        if (horasValidas(n)) alCambiar(n);
+      }}
+      onBlur={() => setTexto(String(valor))}
+      className="w-11 rounded border border-borde bg-bg px-1 py-0.5 font-mono text-xs text-texto text-right focus:outline-none focus:border-mint"
+    />
+  );
+}
 
 function BotonPagina({ etiqueta, deshabilitado, alPulsar }: { etiqueta: string; deshabilitado: boolean; alPulsar: () => void }) {
   return (
