@@ -56,6 +56,10 @@ interface Opciones {
 const MARGEN = 34;
 const GROSOR_RUTA = 2.4;
 const RADIO_MARCA = 11;
+const ZOOM_MINIMO = 1;
+export const ZOOM_MAXIMO = 8;
+const PASO_ZOOM_RUEDA = 1.15;
+const PASO_ZOOM_BOTON = 1.3;
 
 interface Grupo {
   x: number;
@@ -605,31 +609,39 @@ export function useMapCanvas(op: Opciones) {
     setCursorKm(null);
   };
 
+  /** Cambia el zoom dejando fijo el punto (mx, my) del lienzo. */
+  const aplicarZoom = useCallback(
+      (factor: number, mx: number, my: number) => {
+        setVista((v) => {
+          const zoom = Math.max(ZOOM_MINIMO, Math.min(ZOOM_MAXIMO, v.zoom * factor));
+          if (zoom === ZOOM_MINIMO) return { zoom: ZOOM_MINIMO, x: 0, y: 0 };
+          const k = zoom / v.zoom;
+          const cx = tamano.w / 2 + v.x;
+          const cy = tamano.h / 2 + v.y;
+          return { zoom, x: v.x + (mx - cx) * (1 - k), y: v.y + (my - cy) * (1 - k) };
+        });
+      },
+      [tamano]
+  );
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const alGirar = (e: WheelEvent) => {
       e.preventDefault();
       const r = canvas.getBoundingClientRect();
-      const mx = e.clientX - r.left;
-      const my = e.clientY - r.top;
-      const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
-      setVista((v) => {
-        const zoom = Math.max(1, Math.min(8, v.zoom * factor));
-        if (zoom === 1) return { zoom: 1, x: 0, y: 0 };
-        const k = zoom / v.zoom;
-        const cx = tamano.w / 2 + v.x;
-        const cy = tamano.h / 2 + v.y;
-        return { zoom, x: v.x + (mx - cx) * (1 - k), y: v.y + (my - cy) * (1 - k) };
-      });
+      aplicarZoom(e.deltaY < 0 ? PASO_ZOOM_RUEDA : 1 / PASO_ZOOM_RUEDA, e.clientX - r.left, e.clientY - r.top);
     };
     canvas.addEventListener('wheel', alGirar, { passive: false });
     return () => canvas.removeEventListener('wheel', alGirar);
-  }, [tamano]);
+  }, [aplicarZoom]);
 
   const encuadrar = useCallback(() => {
-    setVista({ zoom: 1, x: 0, y: 0 });
+    setVista({ zoom: ZOOM_MINIMO, x: 0, y: 0 });
   }, []);
+
+  const acercar = () => aplicarZoom(PASO_ZOOM_BOTON, tamano.w / 2, tamano.h / 2);
+  const alejar = () => aplicarZoom(1 / PASO_ZOOM_BOTON, tamano.w / 2, tamano.h / 2);
 
   return {
     canvasRef,
@@ -640,6 +652,8 @@ export function useMapCanvas(op: Opciones) {
     escalaPx: proy.escala,
     zoom: vista.zoom,
     encuadrar,
+    acercar,
+    alejar,
     manejadores: { onPointerDown, onPointerMove, onPointerUp, onPointerLeave },
   };
 }

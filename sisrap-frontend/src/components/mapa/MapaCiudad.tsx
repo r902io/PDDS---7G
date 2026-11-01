@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { AlmacenOperativo, BloqueoRespuesta, PedidoOperativo, VehiculoSnapshot } from '../../types/api';
-import { useMapCanvas, type Dimensiones, type Objetivo, type Seleccion } from '../../hooks/useMapCanvas';
+import { useMapCanvas, ZOOM_MAXIMO, type Dimensiones, type Objetivo, type Seleccion } from '../../hooks/useMapCanvas';
 import { IconoEncuadrar, IconoMapaSvg } from '../iconos';
 import {
     formatoCoordenada,
@@ -37,7 +37,7 @@ const LARGOS_ESCALA = [1, 2, 5, 10, 20];
 let preferenciaLeyendaAbierta = true;
 
 export function MapaCiudad(props: Props) {
-    const { canvasRef, relojVisualRef, vehiculosCanvasRef, hover, cursorKm, escalaPx, zoom, encuadrar, manejadores } = useMapCanvas(props);
+    const { canvasRef, relojVisualRef, vehiculosCanvasRef, hover, cursorKm, escalaPx, zoom, encuadrar, acercar, alejar, manejadores } = useMapCanvas(props);
     const [leyendaAbierta, setLeyendaAbierta] = useState(preferenciaLeyendaAbierta);
 
     // Escala gráfica: el mayor largo redondo que quepa en ~120 px.
@@ -104,7 +104,8 @@ export function MapaCiudad(props: Props) {
 
             {/* Escala gráfica y encuadre */}
             <div className="absolute left-2.5 bottom-2.5 z-10 flex items-end gap-2">
-                <div className="bg-panel/95 border border-borde rounded px-2 py-1">
+                {/* Ancho fijo: la barra cambia con el zoom y no debe mover los botones. */}
+                <div className="min-w-[148px] bg-panel/95 border border-borde rounded px-2 py-1">
                     <div className="h-2 border-x-2 border-b-2 border-texto2" style={{ width: kmEscala * escalaPx }} />
                     <div className="font-mono text-[11px] text-texto mt-0.5">{kmEscala} km</div>
                 </div>
@@ -116,6 +117,20 @@ export function MapaCiudad(props: Props) {
                 >
                     <IconoEncuadrar tamano={14} /> Ciudad completa
                 </button>
+                <div className="flex gap-1">
+                    <BotonZoom
+                        etiqueta="Acercar"
+                        simbolo="+"
+                        alPulsar={acercar}
+                        motivoBloqueo={zoom >= ZOOM_MAXIMO ? 'El mapa ya está en el zoom máximo' : null}
+                    />
+                    <BotonZoom
+                        etiqueta="Alejar"
+                        simbolo="−"
+                        alPulsar={alejar}
+                        motivoBloqueo={zoom === 1 ? 'El mapa ya muestra la ciudad completa' : null}
+                    />
+                </div>
             </div>
 
             {/* Coordenadas del cursor */}
@@ -134,6 +149,25 @@ export function MapaCiudad(props: Props) {
                 />
             )}
         </div>
+    );
+}
+
+function BotonZoom({ etiqueta, simbolo, alPulsar, motivoBloqueo }: {
+    etiqueta: string;
+    simbolo: string;
+    alPulsar: () => void;
+    motivoBloqueo: string | null;
+}) {
+    return (
+        <button
+            onClick={alPulsar}
+            disabled={motivoBloqueo != null}
+            aria-label={etiqueta}
+            title={motivoBloqueo ?? etiqueta}
+            className="w-7 bg-panel/95 border border-borde rounded py-1.5 text-xs font-bold text-texto disabled:text-texto2 disabled:cursor-not-allowed"
+        >
+            {simbolo}
+        </button>
     );
 }
 
