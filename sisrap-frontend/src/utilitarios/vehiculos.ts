@@ -107,4 +107,50 @@ export function obtenerColorAveriaHex(tipoAveria?: string | null): string {  con
   if (num === 2) return '#f97316'; // Naranja
   return '#f59e0b';               // Ámbar
 }
+import { TipoFlota, SemaforoFiltro, VehiculoSnapshot, VehiculoOperativo } from '../types/api';
 
+/**
+ * Calcula el estado de semáforo/ocupación de un vehículo según su carga actual y capacidad.
+ * D06: Clasificación por semáforo (Vacío, Verde <=30%, Amarillo 31-70%, Rojo >70%).
+ */
+export function obtenerEstadoSemaforoVehiculo(
+    cargaActual: number,
+    capacidadMax: number
+): SemaforoFiltro {
+  if (cargaActual === 0) return 'VACIO';
+  if (capacidadMax <= 0) return 'VERDE';
+
+  const porcentaje = (cargaActual / capacidadMax) * 100;
+  if (porcentaje > 70) return 'ROJO';
+  if (porcentaje > 30) return 'AMARILLO';
+  return 'VERDE';
+}
+
+/**
+ * D05 & D06: Determina si un VehiculoSnapshot o VehiculoOperativo debe renderizarse en el mapa.
+ */
+export function esVehiculoVisible(
+    vehiculo: VehiculoSnapshot | VehiculoOperativo,
+    tiposSeleccionados: TipoFlota[],
+    semaforosSeleccionados: SemaforoFiltro[]
+): boolean {
+  // Normalizar el tipo de vehículo a TipoFlota ('AUTO' | 'MOTO' | 'BICICLETA')
+  const tipoStr = ('tipo' in vehiculo ? vehiculo.tipo : (vehiculo as any).tipo || '').toUpperCase();
+
+  let tipoFlota: TipoFlota = 'AUTO';
+  if (tipoStr.includes('MOTO')) tipoFlota = 'MOTO';
+  else if (tipoStr.includes('BICI')) tipoFlota = 'BICICLETA';
+
+  // 1. Filtro D05: Tipo de transporte
+  if (!tiposSeleccionados.includes(tipoFlota)) {
+    return false;
+  }
+
+  // Obtenemos la carga y capacidad según la interfaz recibida
+  const carga = 'cargaActualPaquetes' in vehiculo ? vehiculo.cargaActualPaquetes : 0;
+  const capacidad = vehiculo.capacidadPaquetes || 0;
+
+  // 2. Filtro D06: Semáforo + Vacío
+  const estadoSemaforo = obtenerEstadoSemaforoVehiculo(carga, capacidad);
+  return semaforosSeleccionados.includes(estadoSemaforo);
+}

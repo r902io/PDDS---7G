@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import type { AlmacenOperativo, PaginaPedidos, PedidoOperativo, SnapshotSimulacion, VehiculoOperativo, VehiculoSnapshot } from '../types/api';
+import type {
+  AlmacenOperativo, PaginaPedidos, PedidoOperativo, SnapshotSimulacion,
+  VehiculoOperativo, VehiculoSnapshot, TipoFlota, SemaforoFiltro, FiltrosOperacion
+} from '../types/api';
 import { useSimulacion } from '../estado/SimulacionContext';
 import { navegar } from '../estado/navegacion';
 import { catalogoService } from '../services/catalogoService';
@@ -47,9 +50,12 @@ import {
   estaEnMantenimiento,
   tipoDesdeCodigo,
   type TipoVehiculo,
+  esVehiculoVisible,
 } from '../utilitarios/vehiculos';
+import { esAlmacenVisible } from '../utilitarios/almacenes';
 
 import { ListaAlmacenes } from '../components/panel/ListaAlmacenes';
+import { useFiltrosOperacion } from '../estado/filtros';
 
 /** Dimensiones del enunciado; se reemplazan por las de /api/mapa cuando responde. */
 const SIN_VEHICULOS: VehiculoSnapshot[] = [];
@@ -70,6 +76,9 @@ export function EscenarioDashboard() {
   const [seleccion, setSeleccion] = useState<Seleccion>(null);
   const [confirmarDetener, setConfirmarDetener] = useState(false);
 
+  // Hook global de filtros (D05, D06, D07)
+  const filtrosOperacion = useFiltrosOperacion();
+
   // Datos complementarios del backend.
   const mapa = useConsulta((s) => catalogoService.mapa(s), `mapa-${snapshot?.idSimulacion}`);
   const almacenes = useConsulta((s) => catalogoService.almacenes(s), `almacenes-${snapshot?.idSimulacion}-${snapshot?.estado}`, activa ? 15_000 : null);
@@ -77,25 +86,25 @@ export function EscenarioDashboard() {
   const reloj = useRef<string | null>(null);
   reloj.current = snapshot?.relojSimulado ?? null;
   const bloqueos = useConsulta(
-    (s) => catalogoService.bloqueos(reloj.current ? reloj.current.slice(0, 19) : null, s),
-    `bloqueos-${snapshot?.idSimulacion}-${snapshot?.estado}-${snapshot?.bloqueosActivos}`,
-    activa ? 2_000 : null
+      (s) => catalogoService.bloqueos(reloj.current ? reloj.current.slice(0, 19) : null, s),
+      `bloqueos-${snapshot?.idSimulacion}-${snapshot?.estado}-${snapshot?.bloqueosActivos}`,
+      activa ? 2_000 : null
   );
   const pedidosMap = useConsulta(
-    (s) => corrida ? catalogoService.pedidos({ pagina: 0, tamanio: 500 }, s)
-      : Promise.resolve({ contenido: [], total: 0, pagina: 0, tamanio: 500 } as PaginaPedidos),
-    `mapa-pedidos-${snapshot?.idSimulacion}-${snapshot?.estado}`,
-    activa ? 8_000 : null
+      (s) => corrida ? catalogoService.pedidos({ pagina: 0, tamanio: 500 }, s)
+          : Promise.resolve({ contenido: [], total: 0, pagina: 0, tamanio: 500 } as PaginaPedidos),
+      `mapa-pedidos-${snapshot?.idSimulacion}-${snapshot?.estado}`,
+      activa ? 8_000 : null
   );
   const criticidad = useConsulta(s => corrida
-    ? apiFetch<Criticidad>('/api/pedidos/criticidad', { autenticar: false, senal: s })
-    : Promise.resolve({ idSimulacion: null, relojSimulado: null, pedido: null }),
-    `criticidad-${snapshot?.idSimulacion}-${snapshot?.estado}`, activa ? 8_000 : null);
+          ? apiFetch<Criticidad>('/api/pedidos/criticidad', { autenticar: false, senal: s })
+          : Promise.resolve({ idSimulacion: null, relojSimulado: null, pedido: null }),
+      `criticidad-${snapshot?.idSimulacion}-${snapshot?.estado}`, activa ? 8_000 : null);
   const bloqueosActivos = useMemo(() => {
     if (!corrida || !snapshot?.relojSimulado) return [];
     const instante = snapshot.relojSimulado.slice(0, 19);
     return (bloqueos.datos ?? []).filter((b) =>
-      b.estado !== 'CANCELADO' && b.inicio.slice(0, 19) <= instante && instante < b.fin.slice(0, 19)
+        b.estado !== 'CANCELADO' && b.inicio.slice(0, 19) <= instante && instante < b.fin.slice(0, 19)
     );
   }, [bloqueos.datos, corrida, snapshot?.relojSimulado]);
 
@@ -106,148 +115,161 @@ export function EscenarioDashboard() {
     return () => window.removeEventListener('keydown', alTeclear);
   }, []);
 
-  // Si la unidad seleccionada desaparece del snapshot, se mantiene: el panel lo explica.
   const vehiculos: VehiculoSnapshot[] = snapshot?.vehiculos ?? SIN_VEHICULOS;
+
+  // Filtrado reactivo de elementos para renderizar marcadores en el Mapa
+  const vehiculosVisiblesMapa = useMemo(() => {
+    return vehiculos.filter((v) =>
+        esVehiculoVisible(
+            v,
+            filtrosOperacion.filtros.tiposVehiculo,
+            filtrosOperacion.filtros.semaforoVehiculos
+        )
+    );
+  }, [vehiculos, filtrosOperacion.filtros.tiposVehiculo, filtrosOperacion.filtros.semaforoVehiculos]);
+
+  const almacenesVisiblesMapa = useMemo(() => {
+    return (almacenes.datos ?? SIN_ALMACENES).filter((a) =>
+        esAlmacenVisible(a, filtrosOperacion.filtros.semaforoAlmacenes)
+    );
+  }, [almacenes.datos, filtrosOperacion.filtros.semaforoAlmacenes]);
 
   if (!snapshot) {
     return (
-      <div className="flex-1 flex items-center justify-center p-6">
-        {errorEstado ? (
-          <div className="max-w-lg w-full space-y-3">
-            <ErrorCarga
-              titulo="No se pudo obtener el estado de la simulación"
-              error={errorEstado}
-              reintentar={() => window.location.reload()}
-            />
-            <Nota>
-              No hay datos de simulación disponibles todavía. El mapa se mostrará cuando se recupere la conexión.
-            </Nota>
-          </div>
-        ) : (
-          <Cargando texto="Conectando con SisRap…" />
-        )}
-      </div>
+        <div className="flex-1 flex items-center justify-center p-6">
+          {errorEstado ? (
+              <div className="max-w-lg w-full space-y-3">
+                <ErrorCarga
+                    titulo="No se pudo obtener el estado de la simulación"
+                    error={errorEstado}
+                    reintentar={() => window.location.reload()}
+                />
+                <Nota>
+                  No hay datos de simulación disponibles todavía. El mapa se mostrará cuando se recupere la conexión.
+                </Nota>
+              </div>
+          ) : (
+              <Cargando texto="Conectando con SisRap…" />
+          )}
+        </div>
     );
   }
 
   const dimensiones = mapa.datos ? { anchoKm: mapa.datos.anchoKm, altoKm: mapa.datos.altoKm } : CIUDAD_ENUNCIADO;
 
   return (
-    <div className="flex-1 flex min-h-0 relative">
-      {/* Panel izquierdo: parámetros */}
-
-
-      {/* Panel izquierdo: parámetros */}
-      <PanelLateral
-          lado="izq"
-          titulo="Parámetros de la corrida"
-          colapsado={izqColapsado}
-          alternar={() => setIzqColapsado((v) => !v)}
-      >
-        <PanelParametros
-            snapshot={snapshot}
-            flota={flota.datos}
-            errorFlota={flota.error}
-            recargarFlota={flota.recargar}
-            almacenes={almacenes.datos}
-            errorAlmacenes={almacenes.error}
-            recargarAlmacenes={almacenes.recargar}
-            pedirDetener={() => setConfirmarDetener(true)}
-            seleccionarVehiculo={(id) => setSeleccion({ tipo: 'vehiculo', id })}
-            /* AGREGAR ESTAS TRES LÍNEAS */
-            pedidos={pedidosMap.datos?.contenido ?? SIN_PEDIDOS}
-            seleccion={seleccion}
-            alSeleccionar={setSeleccion}
-        />
-      </PanelLateral>
-
-
-
-
-      {/* Mapa */}
-      <main className="flex-1 min-w-0 flex flex-col relative">
-        <Banners
-          snapshot={snapshot}
-          datosVigentes={datosVigentes}
-          recibidoEn={recibidoEn}
-          errorMapa={mapa.error}
-          errorBloqueos={bloqueos.error}
-        />
-        <div className="relative flex-1 min-h-0">
-          <MapaCiudad
-            dimensiones={dimensiones}
-            almacenes={almacenes.datos ?? SIN_ALMACENES}
-            vehiculos={vehiculos}
-            corridaId={snapshot.idSimulacion}
-            pedidos={pedidosMap.datos?.contenido ?? SIN_PEDIDOS}
-            bloqueos={bloqueosActivos}
-            seleccion={seleccion}
-            alSeleccionar={setSeleccion}
-            atenuado={corrida && !datosVigentes}
-            animar={snapshot.estado === 'EJECUTANDO' && datosVigentes}
-          />
-          {seleccion && (
-            <PanelDetalle
-              seleccion={seleccion}
-              vehiculos={vehiculos}
+      <div className="flex-1 flex min-h-0 relative">
+        {/* Panel izquierdo: parámetros */}
+        <PanelLateral
+            lado="izq"
+            titulo="Parámetros de la corrida"
+            colapsado={izqColapsado}
+            alternar={() => setIzqColapsado((v) => !v)}
+        >
+          <PanelParametros
+              snapshot={snapshot}
+              flota={flota.datos}
+              errorFlota={flota.error}
+              recargarFlota={flota.recargar}
+              almacenes={almacenes.datos}
+              errorAlmacenes={almacenes.error}
+              recargarAlmacenes={almacenes.recargar}
+              pedirDetener={() => setConfirmarDetener(true)}
+              seleccionarVehiculo={(id) => setSeleccion({ tipo: 'vehiculo', id })}
               pedidos={pedidosMap.datos?.contenido ?? SIN_PEDIDOS}
-              catalogo={flota.datos}
-              almacenes={almacenes.datos ?? SIN_ALMACENES}
+              seleccion={seleccion}
               alSeleccionar={setSeleccion}
+              filtros={filtrosOperacion.filtros}
+              onToggleTipoVehiculo={filtrosOperacion.toggleTipoVehiculo}
+              onToggleSemaforoVehiculo={filtrosOperacion.toggleSemaforoVehiculo}
+              onToggleSemaforoAlmacen={filtrosOperacion.toggleSemaforoAlmacen}
+          />
+        </PanelLateral>
+
+        {/* Mapa Central con capas filtradas */}
+        <main className="flex-1 min-w-0 flex flex-col relative">
+          <Banners
+              snapshot={snapshot}
+              datosVigentes={datosVigentes}
+              recibidoEn={recibidoEn}
+              errorMapa={mapa.error}
+              errorBloqueos={bloqueos.error}
+          />
+          <div className="relative flex-1 min-h-0">
+            <MapaCiudad
+                dimensiones={dimensiones}
+                almacenes={almacenesVisiblesMapa}
+                vehiculos={vehiculosVisiblesMapa}
+                corridaId={snapshot.idSimulacion}
+                pedidos={pedidosMap.datos?.contenido ?? SIN_PEDIDOS}
+                bloqueos={bloqueosActivos}
+                seleccion={seleccion}
+                alSeleccionar={setSeleccion}
+                atenuado={corrida && !datosVigentes}
+                animar={snapshot.estado === 'EJECUTANDO' && datosVigentes}
             />
-          )}
-        </div>
-      </main>
+            {seleccion && (
+                <PanelDetalle
+                    seleccion={seleccion}
+                    vehiculos={vehiculos}
+                    pedidos={pedidosMap.datos?.contenido ?? SIN_PEDIDOS}
+                    catalogo={flota.datos}
+                    almacenes={almacenes.datos ?? SIN_ALMACENES}
+                    alSeleccionar={setSeleccion}
+                />
+            )}
+          </div>
+        </main>
 
-      {/* Panel derecho: indicadores */}
-      <PanelLateral
-        lado="der"
-        titulo="Indicadores"
-        colapsado={derColapsado}
-        alternar={() => setDerColapsado((v) => !v)}
-      >
-        <PanelIndicadores snapshot={snapshot} bloqueosCargados={bloqueos.datos != null}
-          criticidad={criticidad.datos?.idSimulacion === snapshot.idSimulacion ? criticidad.datos : null}
-          errorCriticidad={criticidad.error} recargarCriticidad={criticidad.recargar} />
-      </PanelLateral>
+        {/* Panel derecho: indicadores */}
+        <PanelLateral
+            lado="der"
+            titulo="Indicadores"
+            colapsado={derColapsado}
+            alternar={() => setDerColapsado((v) => !v)}
+        >
+          <PanelIndicadores snapshot={snapshot} bloqueosCargados={bloqueos.datos != null}
+                            criticidad={criticidad.datos?.idSimulacion === snapshot.idSimulacion ? criticidad.datos : null}
+                            errorCriticidad={criticidad.error} recargarCriticidad={criticidad.recargar} />
+        </PanelLateral>
 
-      <Modal isOpen={confirmarDetener} onClose={() => setConfirmarDetener(false)} titulo="Detener la corrida">
-        <p className="text-sm text-texto">
-          La corrida terminará para todos los dispositivos que la están viendo. Esta acción no se puede deshacer.
-        </p>
-        <div className="flex justify-end gap-2">
-          <Boton variant="secundario" onClick={() => setConfirmarDetener(false)}>
-            Cancelar
-          </Boton>
-          <Boton
-            variant="peligro"
-            icono={<IconoDetener tamano={14} />}
-            disabled={sim.accionEnCurso === 'DETENER'}
-            disabledReason="Solicitud de detención en curso."
-            onClick={async () => {
-              await sim.detener();
-              setConfirmarDetener(false);
-            }}
-          >
-            Detener corrida
-          </Boton>
-        </div>
-      </Modal>
-    </div>
+        <Modal isOpen={confirmarDetener} onClose={() => setConfirmarDetener(false)} titulo="Detener la corrida">
+          <p className="text-sm text-texto">
+            La corrida terminará para todos los dispositivos que la están viendo. Esta acción no se puede deshacer.
+          </p>
+          <div className="flex justify-end gap-2">
+            <Boton variant="secundario" onClick={() => setConfirmarDetener(false)}>
+              Cancelar
+            </Boton>
+            <Boton
+                variant="peligro"
+                icono={<IconoDetener tamano={14} />}
+                disabled={sim.accionEnCurso === 'DETENER'}
+                disabledReason="Solicitud de detención en curso."
+                onClick={async () => {
+                  await sim.detener();
+                  setConfirmarDetener(false);
+                }}
+            >
+              Detener corrida
+            </Boton>
+          </div>
+        </Modal>
+      </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Estructura
+// Estructura Auxiliar
 // ---------------------------------------------------------------------------
 
 function PanelLateral({
-  lado,
-  titulo,
-  colapsado,
-  alternar,
-  children,
-}: {
+                        lado,
+                        titulo,
+                        colapsado,
+                        alternar,
+                        children,
+                      }: {
   lado: 'izq' | 'der';
   titulo: string;
   colapsado: boolean;
@@ -258,60 +280,56 @@ function PanelLateral({
   const ancho = lado === 'izq' ? 'w-[314px]' : 'w-[338px]';
   const Flecha = (lado === 'izq') !== colapsado ? IconoChevronIzq : IconoChevronDer;
   return (
-    <aside
-      className={`bg-panel border-borde ${borde} flex flex-col min-h-0 shrink-0 ${colapsado ? 'w-[34px]' : `${ancho} max-w-[85vw]`}`}
-      aria-label={titulo}
-    >
-      <div className={`flex items-center px-2 py-2 border-b border-borde ${colapsado ? 'justify-center border-b-0' : 'justify-between'}`}>
-        {!colapsado && <h2 className="text-xs uppercase tracking-wider text-texto2 font-semibold pl-1">{titulo}</h2>}
-        <button
-          onClick={alternar}
-          className={`w-6 h-6 flex items-center justify-center rounded border ${colapsado ? 'border-mint text-mint' : 'border-borde text-texto2 hover:text-texto'}`}
-          aria-label={colapsado ? `Mostrar ${titulo.toLowerCase()}` : `Ocultar ${titulo.toLowerCase()}`}
-          aria-expanded={!colapsado}
-          title={colapsado ? `Mostrar ${titulo.toLowerCase()}` : `Ocultar ${titulo.toLowerCase()}`}
-        >
-          <Flecha tamano={14} />
-        </button>
-      </div>
-      {!colapsado && <div className="flex-1 overflow-y-auto p-3 space-y-3 text-xs">{children}</div>}
-    </aside>
+      <aside
+          className={`bg-panel border-borde ${borde} flex flex-col min-h-0 shrink-0 ${colapsado ? 'w-[34px]' : `${ancho} max-w-[85vw]`}`}
+          aria-label={titulo}
+      >
+        <div className={`flex items-center px-2 py-2 border-b border-borde ${colapsado ? 'justify-center border-b-0' : 'justify-between'}`}>
+          {!colapsado && <h2 className="text-xs uppercase tracking-wider text-texto2 font-semibold pl-1">{titulo}</h2>}
+          <button
+              onClick={alternar}
+              className={`w-6 h-6 flex items-center justify-center rounded border ${colapsado ? 'border-mint text-mint' : 'border-borde text-texto2 hover:text-texto'}`}
+              aria-label={colapsado ? `Mostrar ${titulo.toLowerCase()}` : `Ocultar ${titulo.toLowerCase()}`}
+              aria-expanded={!colapsado}
+              title={colapsado ? `Mostrar ${titulo.toLowerCase()}` : `Ocultar ${titulo.toLowerCase()}`}
+          >
+            <Flecha tamano={14} />
+          </button>
+        </div>
+        {!colapsado && <div className="flex-1 overflow-y-auto p-3 space-y-3 text-xs">{children}</div>}
+      </aside>
   );
 }
 
 function Bloque({ titulo, children, aclaracion }: { titulo: string; children: ReactNode; aclaracion?: string }) {
   return (
-    <section className="bg-panel2 border border-borde rounded-lg p-3">
-      <h3 className="text-[11px] uppercase tracking-wider text-texto2 font-semibold mb-2">{titulo}</h3>
-      {aclaracion && <p className="text-[11px] text-texto2 -mt-1 mb-2 leading-snug">{aclaracion}</p>}
-      {children}
-    </section>
+      <section className="bg-panel2 border border-borde rounded-lg p-3">
+        <h3 className="text-[11px] uppercase tracking-wider text-texto2 font-semibold mb-2">{titulo}</h3>
+        {aclaracion && <p className="text-[11px] text-texto2 -mt-1 mb-2 leading-snug">{aclaracion}</p>}
+        {children}
+      </section>
   );
 }
 
 function Fila({ k, v, mono = true, claseValor = '' }: { k: ReactNode; v: ReactNode; mono?: boolean; claseValor?: string }) {
   const noDisp = v === NO_DISPONIBLE;
   return (
-    <div className="flex justify-between items-baseline gap-3 py-0.5">
-      <span className="text-texto2">{k}</span>
-      <span className={`${mono && !noDisp ? 'font-mono' : ''} ${noDisp ? 'text-texto2 italic' : 'text-texto'} text-[13px] text-right ${claseValor}`}>
+      <div className="flex justify-between items-baseline gap-3 py-0.5">
+        <span className="text-texto2">{k}</span>
+        <span className={`${mono && !noDisp ? 'font-mono' : ''} ${noDisp ? 'text-texto2 italic' : 'text-texto'} text-[13px] text-right ${claseValor}`}>
         {v}
       </span>
-    </div>
+      </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Banners sobre el mapa
-// ---------------------------------------------------------------------------
-
 function Banners({
-  snapshot,
-  datosVigentes,
-  recibidoEn,
-  errorMapa,
-  errorBloqueos,
-}: {
+                   snapshot,
+                   datosVigentes,
+                   recibidoEn,
+                   errorMapa,
+                   errorBloqueos,
+                 }: {
   snapshot: SnapshotSimulacion;
   datosVigentes: boolean;
   recibidoEn: number | null;
@@ -323,66 +341,66 @@ function Banners({
   const corrida = hayCorrida(snapshot);
 
   return (
-    <div className="shrink-0 flex flex-col">
-      {aviso && (
-        <div
-          role="status"
-          className={`flex items-start gap-2 px-4 py-2 text-xs border-b ${
-            aviso.tipo === 'error' ? 'bg-rojo/10 border-rojo/60 text-texto' : 'bg-azul/10 border-azul/60 text-texto'
-          }`}
-        >
+      <div className="shrink-0 flex flex-col">
+        {aviso && (
+            <div
+                role="status"
+                className={`flex items-start gap-2 px-4 py-2 text-xs border-b ${
+                    aviso.tipo === 'error' ? 'bg-rojo/10 border-rojo/60 text-texto' : 'bg-azul/10 border-azul/60 text-texto'
+                }`}
+            >
           <span className={aviso.tipo === 'error' ? 'text-rojo' : 'text-azul'}>
             <IconoInfo tamano={16} />
           </span>
-          <p className="flex-1">{aviso.texto}</p>
-          <button onClick={cerrarAviso} aria-label="Cerrar aviso" className="text-texto2 hover:text-texto">
-            <IconoCerrar tamano={14} />
-          </button>
-        </div>
-      )}
+              <p className="flex-1">{aviso.texto}</p>
+              <button onClick={cerrarAviso} aria-label="Cerrar aviso" className="text-texto2 hover:text-texto">
+                <IconoCerrar tamano={14} />
+              </button>
+            </div>
+        )}
 
-      {corrida && !datosVigentes && (
-        <div role="alert" className="flex items-center gap-2 px-4 py-2 text-xs bg-ambar/10 border-b border-ambar text-texto">
+        {corrida && !datosVigentes && (
+            <div role="alert" className="flex items-center gap-2 px-4 py-2 text-xs bg-ambar/10 border-b border-ambar text-texto">
           <span className="text-ambar">
             <IconoAlerta tamano={16} />
           </span>
-          <p>
-            <b className="text-ambar">Conexión en tiempo real perdida.</b> Se muestra el último estado recibido a las{' '}
-            <span className="font-mono">{horaNavegador(recibidoEn)}</span> (hora de este dispositivo); puede no estar
-            vigente. Reconectando automáticamente…
-          </p>
-        </div>
-      )}
+              <p>
+                <b className="text-ambar">Conexión en tiempo real perdida.</b> Se muestra el último estado recibido a las{' '}
+                <span className="font-mono">{horaNavegador(recibidoEn)}</span> (hora de este dispositivo); puede no estar
+                vigente. Reconectando automáticamente…
+              </p>
+            </div>
+        )}
 
-      {!corrida && (
-        <div className="flex flex-wrap items-center gap-3 px-4 py-2 text-xs bg-panel2 border-b border-borde text-texto">
+        {!corrida && (
+            <div className="flex flex-wrap items-center gap-3 px-4 py-2 text-xs bg-panel2 border-b border-borde text-texto">
           <span className="text-texto2">
             <IconoInfo tamano={16} />
           </span>
-          <p className="flex-1">No hay una corrida en curso. El mapa muestra la ciudad y los almacenes.</p>
-          <Boton variant="secundario" className="text-xs py-1" onClick={() => navegar({ nombre: 'selector' })}>
-            Elegir escenario
-          </Boton>
-        </div>
-      )}
+              <p className="flex-1">No hay una corrida en curso. El mapa muestra la ciudad y los almacenes.</p>
+              <Boton variant="secundario" className="text-xs py-1" onClick={() => navegar({ nombre: 'selector' })}>
+                Elegir escenario
+              </Boton>
+            </div>
+        )}
 
-      {resultado && <BannerResultado tipo={resultado} snapshot={snapshot} />}
+        {resultado && <BannerResultado tipo={resultado} snapshot={snapshot} />}
 
-      {(errorMapa || errorBloqueos) && (
-        <div className="px-4 py-1.5 text-[11px] bg-panel border-b border-borde text-texto2 flex flex-col gap-0.5">
-          {errorMapa && (
-            <span>
+        {(errorMapa || errorBloqueos) && (
+            <div className="px-4 py-1.5 text-[11px] bg-panel border-b border-borde text-texto2 flex flex-col gap-0.5">
+              {errorMapa && (
+                  <span>
               <b className="text-ambar">No se pudo cargar el mapa:</b> se muestra temporalmente la retícula de 70 × 50 km. {errorMapa}
             </span>
-          )}
-          {errorBloqueos && (
-            <span>
+              )}
+              {errorBloqueos && (
+                  <span>
               <b className="text-ambar">Bloqueos no disponibles:</b> {errorBloqueos}
             </span>
-          )}
-        </div>
-      )}
-    </div>
+              )}
+            </div>
+        )}
+      </div>
   );
 }
 
@@ -420,23 +438,22 @@ function BannerResultado({ tipo, snapshot }: { tipo: NonNullable<ReturnType<type
     },
   }[tipo];
   return (
-    <div className={`flex flex-wrap items-center gap-3 px-4 py-2 border-b ${conf.clase}`} role="status">
-      {conf.icono}
-      <p className="text-sm font-bold tracking-wide">{conf.titulo}</p>
-      <p className="text-xs text-texto flex-1 min-w-[200px]">
-        {conf.texto} Reloj al detenerse: <span className="font-mono">{formatoFechaHora(snapshot.relojSimulado)}</span>.
-      </p>
-      <Boton variant="secundario" className="text-xs py-1" onClick={() => navegar({ nombre: 'resultado' })}>
-        Ver resultado
-      </Boton>
-    </div>
+      <div className={`flex flex-wrap items-center gap-3 px-4 py-2 border-b ${conf.clase}`} role="status">
+        {conf.icono}
+        <p className="text-sm font-bold tracking-wide">{conf.titulo}</p>
+        <p className="text-xs text-texto flex-1 min-w-[200px]">
+          {conf.texto} Reloj al detenerse: <span className="font-mono">{formatoFechaHora(snapshot.relojSimulado)}</span>.
+        </p>
+        <Boton variant="secundario" className="text-xs py-1" onClick={() => navegar({ nombre: 'resultado' })}>
+          Ver resultado
+        </Boton>
+      </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Panel izquierdo
+// Panel Izquierdo
 // ---------------------------------------------------------------------------
-
 
 function PanelParametros({
                            snapshot,
@@ -451,6 +468,10 @@ function PanelParametros({
                            pedidos = [],
                            seleccion = null,
                            alSeleccionar,
+                           filtros,
+                           onToggleTipoVehiculo,
+                           onToggleSemaforoVehiculo,
+                           onToggleSemaforoAlmacen,
                          }: {
   snapshot: SnapshotSimulacion;
   flota: VehiculoOperativo[] | null;
@@ -464,6 +485,10 @@ function PanelParametros({
   pedidos?: PedidoOperativo[];
   seleccion?: Seleccion;
   alSeleccionar?: (s: Seleccion) => void;
+  filtros?: FiltrosOperacion;
+  onToggleTipoVehiculo?: (tipo: TipoFlota) => void;
+  onToggleSemaforoVehiculo?: (estado: SemaforoFiltro) => void;
+  onToggleSemaforoAlmacen?: (estado: SemaforoFiltro) => void;
 }) {
   const { rol, accionEnCurso } = useSimulacion();
   const activa = corridaActiva(snapshot);
@@ -568,6 +593,62 @@ function PanelParametros({
                 </tbody>
               </table>
           )}
+
+          {/* BOTONERAS DE FILTRADO D05 Y D06 */}
+          {filtros && (
+              <div className="mt-3 bg-panel2/80 border border-borde p-2 rounded-md space-y-2 text-xs">
+                {/* D05: Tipo de vehículo */}
+                <div>
+                  <span className="text-[10px] font-bold text-texto2 block mb-1">FILTRAR POR TIPO (D05):</span>
+                  <div className="flex gap-1">
+                    {(['AUTO', 'MOTO', 'BICICLETA'] as TipoFlota[]).map((tipo) => {
+                      const activo = filtros.tiposVehiculo.includes(tipo);
+                      return (
+                          <button
+                              key={tipo}
+                              type="button"
+                              onClick={() => onToggleTipoVehiculo?.(tipo)}
+                              className={`flex-1 py-1 rounded text-[10px] font-semibold border transition-colors ${
+                                  activo ? 'bg-azul border-azul text-white' : 'bg-panel border-borde text-texto2 hover:bg-panel2'
+                              }`}
+                          >
+                            {tipo === 'AUTO' ? '🚗 Auto' : tipo === 'MOTO' ? '🏍️ Moto' : '🚲 Bici'}
+                          </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* D06: Estado de Carga */}
+                <div>
+                  <span className="text-[10px] font-bold text-texto2 block mb-1">ESTADO DE CARGA (D06):</span>
+                  <div className="flex gap-1">
+                    {[
+                      { id: 'VERDE', label: 'Baja', color: 'bg-mint' },
+                      { id: 'AMARILLO', label: 'Media', color: 'bg-ambar' },
+                      { id: 'ROJO', label: 'Alta', color: 'bg-rojo' },
+                      { id: 'VACIO', label: 'Vacío', color: 'bg-texto2' },
+                    ].map((item) => {
+                      const activo = filtros.semaforoVehiculos.includes(item.id as SemaforoFiltro);
+                      return (
+                          <button
+                              key={item.id}
+                              type="button"
+                              onClick={() => onToggleSemaforoVehiculo?.(item.id as SemaforoFiltro)}
+                              className={`flex-1 flex items-center justify-center gap-1 py-1 rounded text-[10px] font-semibold border transition-colors ${
+                                  activo ? 'bg-panel border-texto text-texto shadow-sm' : 'bg-panel border-borde text-texto2 opacity-50'
+                              }`}
+                          >
+                            <span className={`w-1.5 h-1.5 rounded-full ${item.color}`} />
+                            {item.label}
+                          </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+          )}
+
           {snapshot.vehiculos.length > 0 && (
               <details className="mt-3 border-t border-borde pt-2">
                 <summary className="cursor-pointer text-xs font-semibold text-azul">
@@ -591,7 +672,7 @@ function PanelParametros({
           )}
         </Bloque>
 
-        {/* BLOQUE DE ALMACENES ACTUALIZADO QUE CONSUME pedidos, seleccion Y alSeleccionar */}
+        {/* BLOQUE DE ALMACENES */}
         <Bloque titulo="Almacenes">
           {errorAlmacenes && !almacenes ? (
               <ErrorCarga titulo="No se pudieron leer los almacenes" error={errorAlmacenes} reintentar={recargarAlmacenes} />
@@ -604,6 +685,8 @@ function PanelParametros({
                   relojSimulado={snapshot.relojSimulado}
                   seleccion={seleccion}
                   alSeleccionar={(s) => alSeleccionar?.(s)}
+                  semaforoAlmacenes={filtros?.semaforoAlmacenes}
+                  onToggleSemaforoAlmacen={onToggleSemaforoAlmacen}
               />
           )}
         </Bloque>
@@ -611,12 +694,8 @@ function PanelParametros({
   );
 }
 
-
-
-
-
 // ---------------------------------------------------------------------------
-// Panel derecho
+// Panel Derecho
 // ---------------------------------------------------------------------------
 
 function PanelIndicadores({ snapshot, bloqueosCargados, criticidad, errorCriticidad, recargarCriticidad }: {
@@ -629,8 +708,12 @@ function PanelIndicadores({ snapshot, bloqueosCargados, criticidad, errorCritici
   const p = snapshot.pedidos;
   const relojMs = criticidad?.relojSimulado ? Date.parse(criticidad.relojSimulado) : NaN;
   const pedido = criticidad?.pedido;
-  const critico = pedido ? { id: pedido.idPedido,
-    restante: (Date.parse(pedido.fechaLlegada) + pedido.horasLimite * 3_600_000 - relojMs) / 60_000 } : null;
+
+  const critico = pedido ? {
+    id: pedido.idPedido,
+    restante: (Date.parse(pedido.fechaLlegada) + (pedido.horasLimite * 3_600_000) - relojMs) / 60_000
+  } : null;
+
   const colapso = enColapso(snapshot);
   const corrida = hayCorrida(snapshot);
   const dia = diaSimulado(snapshot.fechaHoraInicio, snapshot.relojSimulado);
@@ -647,112 +730,111 @@ function PanelIndicadores({ snapshot, bloqueosCargados, criticidad, errorCritici
   });
 
   return (
-    <>
-      <section
-        className={`rounded-lg border p-3 ${colapso ? 'border-rojo bg-rojo/10' : 'border-borde bg-panel2'}`}
-        aria-live="polite"
-      >
-        <h3 className="text-[11px] uppercase tracking-wider text-texto2 font-semibold mb-1">Situación</h3>
-        {!corrida ? (
-          <p className="text-texto2">Sin corrida.</p>
-        ) : colapso ? (
-          <div className="flex items-start gap-2 text-rojo">
-            <IconoColapso tamano={22} />
-            <div>
-              <p className="font-bold text-sm">{snapshot.escenario === 'COLAPSO_LOGISTICO' ? 'Colapso logístico' : 'Incumplimiento de plazo registrado'}</p>
-              <p className="text-texto text-xs">
-                <span className="font-mono">{p.retrasados}</span> incumplimiento(s) acumulado(s), de los cuales <span className="font-mono">{p.retrasadosSinEntregar ?? p.retrasados}</span> todavía no se entregaron.
-                {snapshot.escenario !== 'COLAPSO_LOGISTICO' ? ' La corrida continúa hasta el final del período.' : ' Este escenario termina al primer incumplimiento.'}
-              </p>
-            </div>
+      <>
+        <section
+            className={`rounded-lg border p-3 ${colapso ? 'border-rojo bg-rojo/10' : 'border-borde bg-panel2'}`}
+            aria-live="polite"
+        >
+          <h3 className="text-[11px] uppercase tracking-wider text-texto2 font-semibold mb-1">Situación</h3>
+          {!corrida ? (
+              <p className="text-texto2">Sin corrida.</p>
+          ) : colapso ? (
+              <div className="flex items-start gap-2 text-rojo">
+                <IconoColapso tamano={22} />
+                <div>
+                  <p className="font-bold text-sm">{snapshot.escenario === 'COLAPSO_LOGISTICO' ? 'Colapso logístico' : 'Incumplimiento de plazo registrado'}</p>
+                  <p className="text-texto text-xs">
+                    <span className="font-mono">{p.retrasados}</span> incumplimiento(s) acumulado(s), de los cuales <span className="font-mono">{p.retrasadosSinEntregar ?? p.retrasados}</span> todavía no se entregaron.
+                    {snapshot.escenario !== 'COLAPSO_LOGISTICO' ? ' La corrida continúa hasta el final del período.' : ' Este escenario termina al primer incumplimiento.'}
+                  </p>
+                </div>
+              </div>
+          ) : (
+              <div className="flex items-start gap-2 text-mint">
+                <IconoCorrecto tamano={22} />
+                <div>
+                  <p className="font-bold text-sm">Sin incumplimientos</p>
+                  <p className="text-texto text-xs">
+                    Ningún pedido ha vencido su plazo{dia != null ? <> hasta el día <span className="font-mono">{dia}</span>, <span className="font-mono">{formatoHora(snapshot.relojSimulado)}</span></> : null}.
+                  </p>
+                </div>
+              </div>
+          )}
+        </section>
+
+        <Bloque titulo="Pedidos del periodo" aclaracion="Resumen actualizado de la corrida.">
+          <div className="grid grid-cols-2 gap-2 mb-2">
+            <Cifra etiqueta="Entregados" valor={p.entregados} clase="text-mint" />
+            <Cifra etiqueta="En ruta" valor={p.enRuta} clase="text-azul" />
           </div>
-        ) : (
-          <div className="flex items-start gap-2 text-mint">
-            <IconoCorrecto tamano={22} />
-            <div>
-              <p className="font-bold text-sm">Sin incumplimientos</p>
-              <p className="text-texto text-xs">
-                Ningún pedido ha vencido su plazo{dia != null ? <> hasta el día <span className="font-mono">{dia}</span>, <span className="font-mono">{formatoHora(snapshot.relojSimulado)}</span></> : null}.
-              </p>
-            </div>
+          <Fila k="Pendientes" v={formatoEntero(p.pendientes)} />
+          <Fila k="Reasignados" v={formatoEntero(p.reasignados)} />
+          <Fila k="Ingresados hasta ahora" v={formatoEntero(Math.max(0, p.total - p.futuros))} />
+          <Fila k="Futuros estimados (aún no llegan)" v={formatoEntero(p.futuros)} />
+          <div className="border-t border-borde mt-1.5 pt-1.5">
+            <Fila k="Total previsto del periodo" v={formatoEntero(p.total)} />
           </div>
-        )}
-      </section>
+        </Bloque>
 
-      <Bloque titulo="Pedidos del periodo" aclaracion="Resumen actualizado de la corrida.">
-        <div className="grid grid-cols-2 gap-2 mb-2">
-          <Cifra etiqueta="Entregados" valor={p.entregados} clase="text-mint" />
-          <Cifra etiqueta="En ruta" valor={p.enRuta} clase="text-azul" />
-        </div>
-        <Fila k="Pendientes" v={formatoEntero(p.pendientes)} />
-        <Fila k="Reasignados" v={formatoEntero(p.reasignados)} />
-        <Fila k="Ingresados hasta ahora" v={formatoEntero(Math.max(0, p.total - p.futuros))} />
-        <Fila k="Futuros estimados (aún no llegan)" v={formatoEntero(p.futuros)} />
-        <div className="border-t border-borde mt-1.5 pt-1.5">
-          <Fila k="Total previsto del periodo" v={formatoEntero(p.total)} />
-        </div>
-      </Bloque>
+        <Bloque titulo="Pedido de mayor criticidad">
+          {errorCriticidad ? <ErrorCarga titulo="No se pudo consultar la criticidad" error={errorCriticidad} reintentar={recargarCriticidad} /> :
+              !criticidad && corrida ? <Cargando texto="Consultando pedidos activos…" /> :
+                  critico ? <>
+                    <Fila k="Pedido" v={`#${critico.id}`} />
+                    <Fila k="Tiempo hasta su plazo" v={`${Math.round(critico.restante)} min`} claseValor={critico.restante < 0 ? '!text-rojo' : critico.restante < 120 ? '!text-ambar' : '!text-mint'} />
+                    <button className="text-xs text-azul underline mt-2" onClick={() => navegar({ nombre: 'mantenimiento', pestana: 'pedidos' })}>Ver todos los pedidos</button>
+                  </> : <p className="text-xs text-texto2">No hay pedidos activos con plazo pendiente.</p>}
+        </Bloque>
 
-
-      <Bloque titulo="Pedido de mayor criticidad">
-        {errorCriticidad ? <ErrorCarga titulo="No se pudo consultar la criticidad" error={errorCriticidad} reintentar={recargarCriticidad} /> :
-          !criticidad && corrida ? <Cargando texto="Consultando pedidos activos…" /> :
-          critico ? <>
-            <Fila k="Pedido" v={`#${critico.id}`} />
-            <Fila k="Tiempo hasta su plazo" v={`${Math.round(critico.restante)} min`} claseValor={critico.restante < 0 ? '!text-rojo' : critico.restante < 120 ? '!text-ambar' : '!text-mint'} />
-            <button className="text-xs text-azul underline mt-2" onClick={() => navegar({ nombre: 'mantenimiento', pestana: 'pedidos' })}>Ver todos los pedidos</button>
-          </> : <p className="text-xs text-texto2">No hay pedidos activos con plazo pendiente.</p>}
-      </Bloque>
-
-      <Bloque titulo="Flota" aclaracion="Estados informados en el snapshot.">
-        <table className="w-full text-xs">
-          <thead>
+        <Bloque titulo="Flota" aclaracion="Estados informados en el snapshot.">
+          <table className="w-full text-xs">
+            <thead>
             <tr className="text-texto2 text-right">
               <th className="text-left font-semibold pb-1">Tipo</th>
               <th className="font-semibold pb-1">En ruta</th>
               <th className="font-semibold pb-1" title="Averiadas">Aver.</th>
               <th className="font-semibold pb-1" title="En mantenimiento">Mant.</th>
             </tr>
-          </thead>
-          <tbody>
+            </thead>
+            <tbody>
             {porTipo.map((f) => (
-              <tr key={f.tipo} className="text-right">
-                <td className="text-left py-0.5 text-texto">{ETIQUETA_TIPO_PLURAL[f.tipo as TipoVehiculo]}</td>
-                <td className="font-mono text-texto">
-                  {f.enRuta} / {f.total}
-                </td>
-                <td className={`font-mono ${f.averiadas ? 'text-ambar' : 'text-texto'}`}>{f.averiadas}</td>
-                <td className={`font-mono ${f.mantenimiento ? 'text-[#38bdf8]' : 'text-texto'}`}>{f.mantenimiento}</td>
-              </tr>
+                <tr key={f.tipo} className="text-right">
+                  <td className="text-left py-0.5 text-texto">{ETIQUETA_TIPO_PLURAL[f.tipo as TipoVehiculo]}</td>
+                  <td className="font-mono text-texto">
+                    {f.enRuta} / {f.total}
+                  </td>
+                  <td className={`font-mono ${f.averiadas ? 'text-ambar' : 'text-texto'}`}>{f.averiadas}</td>
+                  <td className={`font-mono ${f.mantenimiento ? 'text-[#38bdf8]' : 'text-texto'}`}>{f.mantenimiento}</td>
+                </tr>
             ))}
-          </tbody>
-        </table>
-        <div className="border-t border-borde mt-2 pt-1.5">
-          <Fila k="Distancia recorrida" v={snapshot.indicadores ? `${formatoDecimal(snapshot.indicadores.distanciaRecorridaKm)} km` : NO_DISPONIBLE} />
-          <Fila k="Costo acumulado" v={snapshot.indicadores ? `S/ ${formatoDecimal(snapshot.indicadores.costoTransporteAcumuladoSoles)}` : NO_DISPONIBLE} />
-        </div>
-      </Bloque>
+            </tbody>
+          </table>
+          <div className="border-t border-borde mt-2 pt-1.5">
+            <Fila k="Distancia recorrida" v={snapshot.indicadores ? `${formatoDecimal(snapshot.indicadores.distanciaRecorridaKm)} km` : NO_DISPONIBLE} />
+            <Fila k="Costo acumulado" v={snapshot.indicadores ? `S/ ${formatoDecimal(snapshot.indicadores.costoTransporteAcumuladoSoles)}` : NO_DISPONIBLE} />
+          </div>
+        </Bloque>
 
-      <Bloque titulo="Incidencias">
-        <Fila k="Bloqueos activos" v={formatoEntero(snapshot.bloqueosActivos)} />
-        {!bloqueosCargados && corrida && <p className="text-[11px] text-texto2">Cargando el trazado de los bloqueos…</p>}
-        <Nota className="mt-1.5">
-          Los bloqueos y mantenimientos del calendario se activan en sus fechas programadas. También puedes registrar incidencias manualmente desde las secciones correspondientes.
-        </Nota>
-        <div className="flex flex-wrap gap-2 mt-2">
-          <button className="text-azul underline text-xs" onClick={() => navegar({ nombre: 'mantenimiento', pestana: 'bloqueos' })}>Gestionar bloqueos</button>
-          <button className="text-azul underline text-xs" onClick={() => navegar({ nombre: 'mantenimiento', pestana: 'vehiculos' })}>Averías y mantenimientos</button>
-        </div>
-      </Bloque>
-    </>
+        <Bloque titulo="Incidencias">
+          <Fila k="Bloqueos activos" v={formatoEntero(snapshot.bloqueosActivos)} />
+          {!bloqueosCargados && corrida && <p className="text-[11px] text-texto2">Cargando el trazado de los bloqueos…</p>}
+          <Nota className="mt-1.5">
+            Los bloqueos y mantenimientos del calendario se activan en sus fechas programadas. También puedes registrar incidencias manualmente desde las secciones correspondientes.
+          </Nota>
+          <div className="flex flex-wrap gap-2 mt-2">
+            <button className="text-azul underline text-xs" onClick={() => navegar({ nombre: 'mantenimiento', pestana: 'bloqueos' })}>Gestionar bloqueos</button>
+            <button className="text-azul underline text-xs" onClick={() => navegar({ nombre: 'mantenimiento', pestana: 'vehiculos' })}>Averías y mantenimientos</button>
+          </div>
+        </Bloque>
+      </>
   );
 }
 
 function Cifra({ etiqueta, valor, clase }: { etiqueta: string; valor: number; clase: string }) {
   return (
-    <div className="bg-bg border border-borde rounded-md px-2 py-1.5">
-      <div className="text-[11px] text-texto2">{etiqueta}</div>
-      <div className={`font-mono text-2xl font-bold ${clase}`}>{formatoEntero(valor)}</div>
-    </div>
+      <div className="bg-bg border border-borde rounded-md px-2 py-1.5">
+        <div className="text-[11px] text-texto2">{etiqueta}</div>
+        <div className={`font-mono text-2xl font-bold ${clase}`}>{formatoEntero(valor)}</div>
+      </div>
   );
 }

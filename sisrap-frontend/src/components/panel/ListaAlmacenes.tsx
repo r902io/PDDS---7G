@@ -1,8 +1,7 @@
 import { useMemo, useState } from 'react';
-import type { AlmacenOperativo, PedidoOperativo } from '../../types/api';
-import { obtenerColorSemaforoAlmacen, obtenerColorHexAlmacen } from '../../utilitarios/almacenes';
-import type { Seleccion } from '../../hooks/useMapCanvas'; // Importación unificada desde useMapCanvas
-
+import type { AlmacenOperativo, PedidoOperativo, SemaforoFiltro } from '../../types/api';
+import { obtenerColorSemaforoAlmacen, obtenerColorHexAlmacen, esAlmacenVisible } from '../../utilitarios/almacenes';
+import type { Seleccion } from '../../hooks/useMapCanvas';
 
 interface Props {
     almacenes: AlmacenOperativo[];
@@ -10,13 +9,39 @@ interface Props {
     relojSimulado?: string | null;
     seleccion: Seleccion;
     alSeleccionar: (s: Seleccion) => void;
+    // D07: Props opcionales para integración global de filtros
+    semaforoAlmacenes?: SemaforoFiltro[];
+    onToggleSemaforoAlmacen?: (estado: SemaforoFiltro) => void;
 }
 
-export function ListaAlmacenes({ almacenes, pedidos = [], relojSimulado, seleccion, alSeleccionar }: Props) {    const [busqueda, setBusqueda] = useState('');
+export function ListaAlmacenes({
+                                   almacenes,
+                                   pedidos = [],
+                                   relojSimulado,
+                                   seleccion,
+                                   alSeleccionar,
+                                   semaforoAlmacenes: semaforoProp,
+                                   onToggleSemaforoAlmacen,
+                               }: Props) {
+    const [busqueda, setBusqueda] = useState('');
     const [filtroTipo, setFiltroTipo] = useState<'TODOS' | 'CENTRAL' | 'INTERMEDIO'>('TODOS');
     const [horasVentana, setHorasVentana] = useState<number>(12);
     const [almacenExpandido, setAlmacenExpandido] = useState<string | null>(null);
     const [categoriaActiva, setCategoriaActiva] = useState<'POR_SALIR' | 'ENTREGADOS' | 'TRANSITO'>('POR_SALIR');
+
+    // D07: Estado local fallback si no viene desde un context/hook superior
+    const [semaforoLocal, setSemaforoLocal] = useState<SemaforoFiltro[]>(['VERDE', 'AMARILLO', 'ROJO', 'VACIO']);
+
+    const semaforosActivos = semaforoProp ?? semaforoLocal;
+    const toggleSemaforo = (estado: SemaforoFiltro) => {
+        if (onToggleSemaforoAlmacen) {
+            onToggleSemaforoAlmacen(estado);
+        } else {
+            setSemaforoLocal(prev =>
+                prev.includes(estado) ? prev.filter(s => s !== estado) : [...prev, estado]
+            );
+        }
+    };
 
     // Convierte fecha ISO/Local a Timestamp
     const ahoraMs = useMemo(() => {
@@ -29,9 +54,11 @@ export function ListaAlmacenes({ almacenes, pedidos = [], relojSimulado, selecci
         return almacenes.filter((a) => {
             const coincideNombre = a.nombre.toLowerCase().includes(busqueda.toLowerCase());
             const coincideTipo = filtroTipo === 'TODOS' || a.tipo === filtroTipo;
-            return coincideNombre && coincideTipo;
+            // D07: Validación del semáforo de capacidad del almacén
+            const coincideSemaforo = esAlmacenVisible(a, semaforosActivos);
+            return coincideNombre && coincideTipo && coincideSemaforo;
         });
-    }, [almacenes, busqueda, filtroTipo]);
+    }, [almacenes, busqueda, filtroTipo, semaforosActivos]);
 
     return (
         <div className="flex flex-col gap-3 p-3">
@@ -56,6 +83,35 @@ export function ListaAlmacenes({ almacenes, pedidos = [], relojSimulado, selecci
                     </select>
                 </div>
 
+                {/* D07: Botonera interactiva de filtro por Semáforo de Almacén */}
+                <div className="flex flex-col gap-1.5 text-xs bg-slate-900/80 p-2 rounded border border-slate-800 text-slate-300">
+                    <span className="text-[11px] font-semibold text-slate-400">Estado Capacidad:</span>
+                    <div className="flex justify-between gap-1">
+                        {[
+                            { id: 'VERDE', label: 'Verde', color: 'bg-emerald-500' },
+                            { id: 'AMARILLO', label: 'Amarillo', color: 'bg-amber-500' },
+                            { id: 'ROJO', label: 'Rojo', color: 'bg-rose-500' },
+                        ].map((item) => {
+                            const activo = semaforosActivos.includes(item.id as SemaforoFiltro);
+                            return (
+                                <button
+                                    key={item.id}
+                                    type="button"
+                                    onClick={() => toggleSemaforo(item.id as SemaforoFiltro)}
+                                    className={`flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded text-[10px] font-semibold border transition-colors ${
+                                        activo
+                                            ? 'bg-slate-800 border-slate-600 text-slate-100 shadow-sm'
+                                            : 'bg-slate-950 border-slate-800 text-slate-500 opacity-50 hover:opacity-80'
+                                    }`}
+                                >
+                                    <span className={`w-1.5 h-1.5 rounded-full ${item.color}`} />
+                                    {item.label}
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
+
                 {/* Requerimiento 1 y 2: Selector de Ventana de X Horas */}
                 <div className="flex items-center justify-between text-xs bg-slate-900/80 p-2 rounded border border-slate-800 text-slate-300">
                     <span>Horizonte de análisis (hrs):</span>
@@ -73,7 +129,7 @@ export function ListaAlmacenes({ almacenes, pedidos = [], relojSimulado, selecci
             </div>
 
             {/* Lista de Almacenes con métricas y acceso desplegable */}
-            <div className="flex flex-col gap-2 max-h-[520px] overflow-y-auto pr-1">
+            <div className="flex flex-col gap-2 max-h-130 overflow-y-auto pr-1">
                 {almacenesFiltrados.map((almacen) => {
                     const semaforo = obtenerColorSemaforoAlmacen(almacen);
                     const colorHex = obtenerColorHexAlmacen(semaforo);
@@ -82,7 +138,7 @@ export function ListaAlmacenes({ almacenes, pedidos = [], relojSimulado, selecci
 
                     const ventanaMs = horasVentana * 3_600_000;
 
-                    // Asignación de pedidos al almacén (Central gestiona catálogo global de despacho)
+                    // Asignación de pedidos al almacén
                     const pedidosDelAlmacen = pedidos.filter(p =>
                         almacen.tipo === 'CENTRAL' ||
                         (p.ubicacionX === almacen.ubicacionX && p.ubicacionY === almacen.ubicacionY)
