@@ -1,7 +1,14 @@
 import { useMemo, useState } from 'react';
-import type { AlmacenOperativo, PedidoOperativo, SemaforoFiltro } from '../../types/api';
-import { obtenerColorSemaforoAlmacen, obtenerColorHexAlmacen, esAlmacenVisible } from '../../utilitarios/almacenes';
+import type { AlmacenOperativo, PedidoOperativo } from '../../types/api';
+import { obtenerColorSemaforoAlmacen, obtenerColorHexAlmacen } from '../../utilitarios/almacenes';
 import type { Seleccion } from '../../hooks/useMapCanvas';
+
+export type SemaforoFiltro = 'VERDE' | 'AMARILLO' | 'ROJO' | 'VACIO';
+
+export function esAlmacenVisible(almacen: AlmacenOperativo, semaforos: SemaforoFiltro[]): boolean {
+    const color = obtenerColorSemaforoAlmacen(almacen);
+    return semaforos.includes(color === 'AMBAR' ? 'AMARILLO' : color);
+}
 
 interface Props {
     almacenes: AlmacenOperativo[];
@@ -91,6 +98,7 @@ export function ListaAlmacenes({
                             { id: 'VERDE', label: 'Verde', color: 'bg-emerald-500' },
                             { id: 'AMARILLO', label: 'Amarillo', color: 'bg-amber-500' },
                             { id: 'ROJO', label: 'Rojo', color: 'bg-rose-500' },
+                            { id: 'VACIO', label: 'Vacío', color: 'bg-slate-400' },
                         ].map((item) => {
                             const activo = semaforosActivos.includes(item.id as SemaforoFiltro);
                             return (
@@ -98,6 +106,7 @@ export function ListaAlmacenes({
                                     key={item.id}
                                     type="button"
                                     onClick={() => toggleSemaforo(item.id as SemaforoFiltro)}
+                                    aria-pressed={activo}
                                     className={`flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded text-[10px] font-semibold border transition-colors ${
                                         activo
                                             ? 'bg-slate-800 border-slate-600 text-slate-100 shadow-sm'
@@ -129,7 +138,7 @@ export function ListaAlmacenes({
             </div>
 
             {/* Lista de Almacenes con métricas y acceso desplegable */}
-            <div className="flex flex-col gap-2 max-h-130 overflow-y-auto pr-1">
+            <div className="flex flex-col gap-2 max-h-[520px] overflow-y-auto pr-1">
                 {almacenesFiltrados.map((almacen) => {
                     const semaforo = obtenerColorSemaforoAlmacen(almacen);
                     const colorHex = obtenerColorHexAlmacen(semaforo);

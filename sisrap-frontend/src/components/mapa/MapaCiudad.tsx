@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { FiltroFlujoVisual } from '../../estado/SimulacionContext';
 import type { AlmacenOperativo, BloqueoRespuesta, PedidoOperativo, VehiculoSnapshot } from '../../types/api';
 import { useMapCanvas, ZOOM_MAXIMO, type Dimensiones, type Objetivo, type Seleccion } from '../../hooks/useMapCanvas';
 import { IconoEncuadrar, IconoMapaSvg } from '../iconos';
@@ -28,7 +29,8 @@ interface Props {
     alSeleccionar: (s: Seleccion) => void;
     atenuado: boolean;
     animar: boolean;
-    rutasDestacadas: RutaDestacada[];
+    rutasDestacadas?: RutaDestacada[];
+    vehiculoVisible?: (vehiculo: VehiculoSnapshot) => boolean;
 }
 
 /** Longitudes "redondas" para la escala gráfica. */
@@ -36,8 +38,16 @@ const LARGOS_ESCALA = [1, 2, 5, 10, 20];
 
 let preferenciaLeyendaAbierta = true;
 
+const SIN_RUTAS: RutaDestacada[] = [];
+
 export function MapaCiudad(props: Props) {
-    const { canvasRef, relojVisualRef, vehiculosCanvasRef, hover, cursorKm, escalaPx, zoom, encuadrar, acercar, alejar, manejadores } = useMapCanvas(props);
+    return <FiltroFlujoVisual visible={props.vehiculoVisible}>
+        <MapaCiudadCanvas {...props} />
+    </FiltroFlujoVisual>;
+}
+
+function MapaCiudadCanvas(props: Props) {
+    const { canvasRef, relojVisualRef, vehiculosCanvasRef, hover, cursorKm, escalaPx, zoom, encuadrar, acercar, alejar, manejadores } = useMapCanvas({ ...props, rutasDestacadas: props.rutasDestacadas ?? SIN_RUTAS });
     const [leyendaAbierta, setLeyendaAbierta] = useState(preferenciaLeyendaAbierta);
 
     // Escala gráfica: el mayor largo redondo que quepa en ~120 px.
@@ -80,7 +90,7 @@ export function MapaCiudad(props: Props) {
                             <ItemLeyenda forma="destinoCliente" color={COLOR_TIPO.AUTO} texto="Destino de ruta" />
                             <span className="text-ambar">● Pedido pendiente</span>
                             <span className="text-azul">● Pedido en ruta</span>
-                            <ItemLeyenda forma="mantenimiento" texto="Unidad averiada" />
+                            <ItemLeyenda forma="averiaTipo1" texto="Unidad averiada" />
                             <ItemLeyenda forma="bloqueo" texto="Tramo bloqueado" />
                             <ItemLeyenda forma="mantenimiento" texto="En mantenimiento" />
                             <LineaLeyenda texto="Ruta real del envío" />

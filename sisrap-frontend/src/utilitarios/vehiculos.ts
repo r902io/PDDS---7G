@@ -2,7 +2,7 @@
  * Tipo de vehículo deducido del código TTNN.
  *   TA = auto, TM = moto, TB = bicicleta.  Ej.: TA01, TM03, TB10.
  */
-import type { TipoAveria, VehiculoSnapshot } from '../types/api';
+import type { TipoAveria, VehiculoSnapshot, TipoFlota, SemaforoFiltro, VehiculoOperativo } from '../types/api';
 import type { NombreForma } from '../components/iconos/formas';
 
 export type TipoVehiculo = 'AUTO' | 'MOTO' | 'BICICLETA';
@@ -137,11 +137,11 @@ export function obtenerColorAveriaHex(tipoAveria?: string | null): string {  con
   if (num === 2) return '#f97316'; // Naranja
   return '#f59e0b';               // Ámbar
 }
-import { TipoFlota, SemaforoFiltro, VehiculoSnapshot, VehiculoOperativo } from '../types/api';
+
 
 /**
  * Calcula el estado de semáforo/ocupación de un vehículo según su carga actual y capacidad.
- * D06: Clasificación por semáforo (Vacío, Verde <=30%, Amarillo 31-70%, Rojo >70%).
+ * D06: Clasificación por semáforo (Vacío, Verde <50%, Amarillo 50-79%, Rojo >=80%).
  */
 export function obtenerEstadoSemaforoVehiculo(
     cargaActual: number,
@@ -151,8 +151,8 @@ export function obtenerEstadoSemaforoVehiculo(
   if (capacidadMax <= 0) return 'VERDE';
 
   const porcentaje = (cargaActual / capacidadMax) * 100;
-  if (porcentaje > 70) return 'ROJO';
-  if (porcentaje > 30) return 'AMARILLO';
+  if (porcentaje >= 80) return 'ROJO';
+  if (porcentaje >= 50) return 'AMARILLO';
   return 'VERDE';
 }
 
@@ -165,7 +165,7 @@ export function esVehiculoVisible(
     semaforosSeleccionados: SemaforoFiltro[]
 ): boolean {
   // Normalizar el tipo de vehículo a TipoFlota ('AUTO' | 'MOTO' | 'BICICLETA')
-  const tipoStr = ('tipo' in vehiculo ? vehiculo.tipo : (vehiculo as any).tipo || '').toUpperCase();
+  const tipoStr = ('tipo' in vehiculo ? vehiculo.tipo : tipoDesdeCodigo(vehiculo.idVehiculo) ?? '').toUpperCase();
 
   let tipoFlota: TipoFlota = 'AUTO';
   if (tipoStr.includes('MOTO')) tipoFlota = 'MOTO';

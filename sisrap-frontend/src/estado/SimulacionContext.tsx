@@ -8,7 +8,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import type { EscenarioSimulacion, SnapshotSimulacion } from '../types/api';
+import type { EscenarioSimulacion, SnapshotSimulacion, VehiculoSnapshot } from '../types/api';
 import { ApiError, textoError } from '../services/apiClient';
 import { asegurarSesion } from '../services/sessionService';
 import { simulacionService, suscribirEventos, type EstadoConexion } from '../services/simulacionService';
@@ -171,6 +171,38 @@ interface FlujoVisual {
 }
 const ContextoVisual = createContext<FlujoVisual | null>(null);
 export function useFlujoVisual() { return useContext(ContextoVisual); }
+
+export function FiltroFlujoVisual({ visible, children }: {
+  visible?: (vehiculo: VehiculoSnapshot) => boolean;
+  children: React.ReactNode;
+}) {
+  const origen = useFlujoVisual();
+  const filtrado = useMemo<FlujoVisual | null>(() => {
+    if (!origen || !visible) return origen;
+    let anterior: SnapshotSimulacion | null = null;
+    let actual: SnapshotSimulacion | null = null;
+    return {
+      get actual() {
+        if (origen.actual !== anterior) {
+          anterior = origen.actual;
+          actual = anterior ? { ...anterior, vehiculos: anterior.vehiculos.filter(visible) } : null;
+        }
+        return actual;
+      },
+      oyentes: new Set(),
+    };
+  }, [origen, visible]);
+  useEffect(() => {
+    if (!origen || !filtrado || filtrado === origen) return;
+    const recibir = () => {
+      const s = filtrado.actual;
+      if (s) for (const oyente of filtrado.oyentes) oyente(s);
+    };
+    origen.oyentes.add(recibir);
+    return () => { origen.oyentes.delete(recibir); };
+  }, [origen, filtrado]);
+  return <ContextoVisual.Provider value={filtrado}>{children}</ContextoVisual.Provider>;
+}
 
 export function SimulacionProvider({ children }: { children: React.ReactNode }) {
   const [estado, despachar] = useReducer(reductor, estadoInicial);
