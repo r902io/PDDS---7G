@@ -8,6 +8,8 @@ import { navegar } from '../estado/navegacion';
 import { catalogoService } from '../services/catalogoService';
 import { apiFetch } from '../services/apiClient';
 import { useConsulta } from '../hooks/useConsulta';
+import { usePreferencia } from '../hooks/usePreferencia';
+import { useRutasEnvio } from '../hooks/useRutasEnvio';
 import type { Seleccion } from '../hooks/useMapCanvas';
 import { MapaCiudad } from '../components/mapa/MapaCiudad';
 import { PanelDetalle } from '../components/mapa/PanelDetalle';
@@ -63,6 +65,12 @@ const SIN_ALMACENES: AlmacenOperativo[] = [];
 const SIN_PEDIDOS: PedidoOperativo[] = [];
 type Criticidad = { idSimulacion: number | null; relojSimulado: string | null; pedido: PedidoOperativo | null };
 const CIUDAD_ENUNCIADO = { anchoKm: 70, altoKm: 50 };
+const ANCHO_PANEL_INICIAL = { izq: 314, der: 338 };
+const ANCHO_PANEL_MINIMO = 300;
+/** Cada panel llega hasta este porcentaje de la ventana: el mapa siempre conserva espacio. */
+const ANCHO_PANEL_MAXIMO_VW = 40;
+/** La mayor ventana que ofrece ListaAlmacenes para los pedidos entregados. */
+const HORAS_ENTREGADOS_ALMACENES = 24;
 
 export function EscenarioDashboard() {
   const sim = useSimulacion();
@@ -74,6 +82,8 @@ export function EscenarioDashboard() {
   const [izqColapsado, setIzqColapsado] = useState(angosta);
   const [derColapsado, setDerColapsado] = useState(angosta);
   const [seleccion, setSeleccion] = useState<Seleccion>(null);
+  const [pedidoResaltado, setPedidoResaltado] = useState<number | null>(null);
+  const rutasDestacadas = useRutasEnvio(pedidoResaltado, snapshot?.idSimulacion ?? null, activa);
   const [confirmarDetener, setConfirmarDetener] = useState(false);
 
   // Hook global de filtros (D05, D06, D07)
@@ -108,9 +118,13 @@ export function EscenarioDashboard() {
     );
   }, [bloqueos.datos, corrida, snapshot?.relojSimulado]);
 
-  // Esc cancela la selección.
+  // Esc cancela la selección y el resaltado del envío.
   useEffect(() => {
-    const alTeclear = (e: KeyboardEvent) => e.key === 'Escape' && setSeleccion(null);
+    const alTeclear = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      setSeleccion(null);
+      setPedidoResaltado(null);
+    };
     window.addEventListener('keydown', alTeclear);
     return () => window.removeEventListener('keydown', alTeclear);
   }, []);
@@ -277,7 +291,7 @@ function PanelLateral({
   children: ReactNode;
 }) {
   const borde = lado === 'izq' ? 'border-r' : 'border-l';
-  const ancho = lado === 'izq' ? 'w-[314px]' : 'w-[338px]';
+  const [ancho, setAncho] = usePreferencia(`sisrap.panel-${lado}.ancho`, ANCHO_PANEL_INICIAL[lado], anchoPanelValido);
   const Flecha = (lado === 'izq') !== colapsado ? IconoChevronIzq : IconoChevronDer;
   return (
       <aside
@@ -298,6 +312,47 @@ function PanelLateral({
         </div>
         {!colapsado && <div className="flex-1 overflow-y-auto p-3 space-y-3 text-xs">{children}</div>}
       </aside>
+  );
+}
+
+function anchoPanelValido(valor: unknown): boolean {
+  return typeof valor === 'number' && valor >= ANCHO_PANEL_MINIMO;
+}
+
+/** Borde interior del panel: arrastrarlo cambia su ancho y el mapa ocupa lo que queda. */
+function BordePanel({ lado, titulo, ancho, alCambiar }: {
+  lado: 'izq' | 'der';
+  titulo: string;
+  ancho: number;
+  alCambiar: (ancho: number) => void;
+}) {
+  const arrastre = useRef<{ x: number; ancho: number } | null>(null);
+
+  const alMover = (e: PointerEvent<HTMLDivElement>) => {
+    if (!arrastre.current) return;
+    const delta = e.clientX - arrastre.current.x;
+    const deseado = arrastre.current.ancho + (lado === 'izq' ? delta : -delta);
+    const maximo = Math.max(ANCHO_PANEL_MINIMO, (window.innerWidth * ANCHO_PANEL_MAXIMO_VW) / 100);
+    alCambiar(Math.round(Math.min(maximo, Math.max(ANCHO_PANEL_MINIMO, deseado))));
+  };
+
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={`Cambiar el ancho de ${titulo.toLowerCase()}`}
+      title="Arrastrar para cambiar el ancho"
+      onPointerDown={(e) => {
+        e.preventDefault();
+        e.currentTarget.setPointerCapture(e.pointerId);
+        arrastre.current = { x: e.clientX, ancho };
+      }}
+      onPointerMove={alMover}
+      onLostPointerCapture={() => { arrastre.current = null; }}
+      className={`absolute top-0 bottom-0 z-30 w-2 cursor-col-resize touch-none hover:bg-mint/40 active:bg-mint/60 ${
+        lado === 'izq' ? '-right-1' : '-left-1'
+      }`}
+    />
   );
 }
 
@@ -491,6 +546,7 @@ function PanelParametros({
   onToggleSemaforoAlmacen?: (estado: SemaforoFiltro) => void;
 }) {
   const { rol, accionEnCurso } = useSimulacion();
+  const fechaReloj = snapshot.relojSimulado?.slice(0, 10) ?? null;
   const activa = corridaActiva(snapshot);
   const esc = snapshot.escenario ? ESCENARIOS[snapshot.escenario] : null;
 

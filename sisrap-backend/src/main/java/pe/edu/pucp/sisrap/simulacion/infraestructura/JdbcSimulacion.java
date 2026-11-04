@@ -56,6 +56,7 @@ import pe.edu.pucp.sisrap.simulacion.dominio.DiagnosticoPlanificacion;
 import pe.edu.pucp.sisrap.simulacion.dominio.RecorridoVehiculo;
 import pe.edu.pucp.sisrap.simulacion.dominio.ResumenPedidosSimulacion;
 import pe.edu.pucp.sisrap.simulacion.dominio.VehiculoPersistido;
+import pe.edu.pucp.sisrap.simulacion.dominio.PedidoCorrida;
 import pe.edu.pucp.sisrap.simulacion.dominio.VehiculoSnapshot;
 
 @Repository
@@ -622,6 +623,17 @@ public class JdbcSimulacion implements RepositorioSimulacion {
         } catch (SQLException e) {
             throw new IllegalStateException("No se pudieron registrar los pedidos sintéticos", e);
         }
+    }
+
+    @Override
+    public synchronized List<PedidoCorrida> listarPedidosCorrida() {
+        List<PedidoCorrida> pedidos = new ArrayList<>();
+        for (PedidoSimulado p : pedidosSimulados.values()) {
+            if (p.id < 0) continue;
+            pedidos.add(new PedidoCorrida(p.id, p.cliente, p.cantidad, p.horasLimite,
+                    p.fechaLlegada, p.fechaLimite(), p.x, p.y, p.estado, p.fechaEntregaReal));
+        }
+        return pedidos;
     }
 
     @Override

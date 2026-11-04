@@ -66,9 +66,11 @@ Revisado contra el código de `sisrap-backend` (rama `dev`, 06/10/2026) y contra
 ## 7. Tramo ya recorrido de cada ruta
 
 - **Pantalla:** mapa (el prototipo dibuja lo recorrido punteado y lo pendiente en línea llena).
-- **Situación actual:** `VehiculoSnapshot.caminoActual` contiene solo lo pendiente.
-- **Propuesta:** en `VehiculoSnapshot`, `caminoRecorrido: PuntoSimulacion[]` desde el inicio del viaje actual, o
-  `rutaCompleta` más el índice del nodo actual.
+- **Situación actual:** resuelto para los envíos. `GET /api/simulacion/envios` entrega por asignación la ruta
+  recorrida, el tramo en curso y las paradas estimadas, y `VehiculoSnapshot` trae `distanciaRecorridaKm`.
+  Las rutas generales del mapa siguen usando `caminoActual`, que contiene solo lo pendiente.
+- **Limitación:** el camino de las paradas que siguen a la actual aún no existe: el motor lo calcula al llegar a
+  cada tramo. Esas paradas se estiman por distancia Manhattan, sin considerar bloqueos.
 
 ## 8. Pedido que originó el colapso y su instante
 

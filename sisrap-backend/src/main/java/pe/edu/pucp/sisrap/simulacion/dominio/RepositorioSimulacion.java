@@ -18,6 +18,9 @@ public interface RepositorioSimulacion {
 
     void publicarPedidosHasta(LocalDateTime reloj);
 
+    /** Pedidos ya registrados en la corrida, sin consultar la base de datos. */
+    List<PedidoCorrida> listarPedidosCorrida();
+
     List<Pedido> cargarPrevisionDiaria(LocalDate fecha, LocalDateTime disponibleDesde);
 
 

@@ -47,6 +47,7 @@ import pe.edu.pucp.sisrap.planificador.dominio.modelo.Solucion;
 import pe.edu.pucp.sisrap.planificador.dominio.objetivo.FuncionObjetivo;
 import pe.edu.pucp.sisrap.simulacion.dominio.ConfiguracionSimulacion;
 import pe.edu.pucp.sisrap.simulacion.dominio.ContextoOperativo;
+import pe.edu.pucp.sisrap.simulacion.dominio.VistaEnvios;
 import pe.edu.pucp.sisrap.simulacion.dominio.EstadoSimulacion;
 import pe.edu.pucp.sisrap.simulacion.dominio.EscenarioSimulacion;
 import pe.edu.pucp.sisrap.simulacion.dominio.PuntoSimulacion;
@@ -68,6 +69,8 @@ public class MotorSimulacion {
     private static final String ALGORITMO_OPERATIVO = "GENETICO";
     private static final int INTERVALO_PLANIFICACION_MIN = 5;
     private static final int MAX_PEDIDOS_ANTICIPADOS = 60;
+    private static final double HORAS_TRASVASE = 0.5;
+    private static final long CONSULTA_ENVIOS_RECIENTE_NS = TimeUnit.SECONDS.toNanos(30);
 
     private final RepositorioSimulacion repositorio;
     private final GestionarControlSimulacion control;
@@ -90,6 +93,7 @@ public class MotorSimulacion {
     private final Map<String, CargaAveriada> cargasAveriadas = new LinkedHashMap<>();
     private final List<EntregaEnCliente> entregasEnCliente = new ArrayList<>();
     private final AcumuladorIndicadores indicadores = new AcumuladorIndicadores();
+    private final RegistroEnvios envios = new RegistroEnvios();
     private static final int MAX_LOTE_RECORRIDO = 500;
     private static final int MAX_RECORRIDOS_PENDIENTES = 30_000;
     private static final long REINTENTO_RECORRIDO_NS = TimeUnit.SECONDS.toNanos(5);
@@ -104,6 +108,9 @@ public class MotorSimulacion {
     private String advertenciaRecorrido;
 
     private volatile SnapshotSimulacion snapshotActual;
+    private volatile VistaEnvios vistaEnvios;
+    private volatile long nanoUltimaConsultaEnvios;
+    private long nanoUltimaVistaEnvios;
     private EstadoSimulacion estado = EstadoSimulacion.DETENIDA;
     private ConfiguracionSimulacion configuracion;
     private Long idSimulacion;
@@ -183,6 +190,8 @@ public class MotorSimulacion {
                 perfil);
 
         planes.clear();
+        envios.reiniciar();
+        vistaEnvios = null;
         pasosVisuales.clear();
         secuenciasVisuales.clear();
         posicionesPersistidas.clear();
@@ -278,6 +287,21 @@ public class MotorSimulacion {
 
     public SnapshotSimulacion estadoActual() {
         return snapshotActual;
+    }
+
+    /**
+     * Envíos de la corrida actual o de la última terminada. Mientras alguien
+     * los consulte, la vista se renueva al publicar el estado: así la lectura
+     * no espera a que termine un ciclo de planificación.
+     */
+    public VistaEnvios consultarEnvios() {
+        nanoUltimaConsultaEnvios = System.nanoTime();
+        VistaEnvios vista = vistaEnvios;
+        if (vista != null) return vista;
+        synchronized (this) {
+            if (vistaEnvios == null) vistaEnvios = construirVistaEnvios();
+            return vistaEnvios;
+        }
     }
 
     /** Registra la avería bajo el mismo bloqueo del motor que avanza el reloj. */
@@ -1021,6 +1045,7 @@ public class MotorSimulacion {
         for (PlanUnidad plan : nuevos) {
             repositorio.actualizarEstadoVehiculo(plan.idVehiculo, "EN_RUTA");
             planes.put(plan.idVehiculo, plan);
+            registrarAsignaciones(plan);
         }
 
         mensajeEstado = "Planificación generada: " + nuevos.size() + " rutas nuevas";
@@ -1115,6 +1140,7 @@ public class MotorSimulacion {
             PlanUnidad plan = PlanUnidad.desde(ruta, contextoRecuperacion);
             repositorio.actualizarEstadoVehiculo(plan.idVehiculo, "EN_RUTA");
             planes.put(plan.idVehiculo, plan);
+            registrarAsignaciones(plan);
             registrarEventoRecorrido(plan, "RECUPERACION_PEDIDO_VENCIDO");
         }
         registrarDiagnosticosRecuperacion(actuales.getPedidos().stream()
@@ -1173,7 +1199,7 @@ public class MotorSimulacion {
                 planes.remove(plan.idVehiculo);
                 liberarReservaDeRescate(plan);
                 if (plan.stockTomado) {
-                    repositorio.reencolarPedidos(plan.idsNoEntregados(), reloj);
+                    reencolarPedidos(plan);
                 }
                 continue;
             }
@@ -1188,7 +1214,7 @@ public class MotorSimulacion {
                 liberarReservaDeRescate(plan);
                 if (!plan.stockTomado) {
                     planes.remove(plan.idVehiculo);
-                    if (plan.origenRescate == null) repositorio.reencolarPedidos(plan.idsNoEntregados(), reloj);
+                    if (plan.origenRescate == null) reencolarPedidos(plan);
                 } else {
                     if (plan.fase == FaseUnidad.ATENDIENDO) {
                         for (Pedido entrega : plan.entregasEnParada)
@@ -1219,7 +1245,7 @@ public class MotorSimulacion {
         if (!plan.stockTomado) {
             liberarReservaDeRescate(plan);
             if (plan.origenRescate == null) {
-                repositorio.reencolarPedidos(plan.idsNoEntregados(), reloj);
+                reencolarPedidos(plan);
             }
             programarPlanificacionInmediata();
             return;
@@ -1243,6 +1269,7 @@ public class MotorSimulacion {
         CargaAveriada carga = new CargaAveriada(averia, plan,
                 new Nodo(plan.posicion.getX(), plan.posicion.getY()));
         cargasAveriadas.put(plan.idVehiculo, carga);
+        envios.registrarDetencion(plan.idVehiculo, plan.idsNoEntregados(), List.copyOf(plan.recorrido));
         programarPlanificacionInmediata();
     }
 
@@ -1252,6 +1279,7 @@ public class MotorSimulacion {
         for (Pedido pedido : plan.pedidosPendientes) {
             carga.reservados.remove(pedido.getIdPedido(), plan.idVehiculo);
         }
+        envios.registrarReasignacion(plan.idVehiculo, plan.idsNoEntregados(), List.of());
     }
 
     private void actualizarCargasAveriadas(Map<String, VehiculoPersistido> estados) {
@@ -1313,7 +1341,7 @@ public class MotorSimulacion {
         for (EntregaEnCliente entrega : new ArrayList<>(entregasEnCliente)) {
             entrega.horasRestantes -= horasEfectivas;
             if (entrega.horasRestantes <= 1e-9) {
-                repositorio.entregarPedido(entrega.idPedido, reloj);
+                entregarPedido(entrega.idPedido, reloj);
                 entregasEnCliente.remove(entrega);
             }
         }
@@ -1335,6 +1363,8 @@ public class MotorSimulacion {
                 Pedido pedido=carga.pendientes.get(i);
                 if (pedido.getCantidadQq()<=capacidad || carga.reservados.containsKey(pedido.getIdPedido())) continue;
                 List<Pedido> partes=repositorio.dividirPedidoEnRuta(pedido,capacidad);
+                envios.dividir(pedido.getIdPedido(), partes.stream()
+                        .map(p -> new RegistroEnvios.Parte(p.getIdPedido(), p.getCantidadQq())).toList());
                 carga.pendientes.remove(i); carga.pendientes.addAll(i,partes); i+=partes.size()-1;
             }
             List<Pedido> candidatos=carga.pendientes.stream()
@@ -1375,6 +1405,7 @@ public class MotorSimulacion {
                 PlanUnidad rescate=PlanUnidad.desdeRescate(v,carga,asignados,contexto);
                 for(Pedido pedido:asignados) carga.reservados.put(pedido.getIdPedido(),rescate.idVehiculo);
                 planes.put(rescate.idVehiculo,rescate);
+                registrarAsignaciones(rescate);
                 repositorio.actualizarEstadoVehiculo(rescate.idVehiculo,"EN_RUTA");
                 creados++;
             }
@@ -1442,7 +1473,7 @@ public class MotorSimulacion {
                     plan.creditoHoras -= plan.servicioRestanteHoras;
                     plan.servicioRestanteHoras = 0;
                     for (Pedido entregado : plan.entregasEnParada) {
-                        repositorio.entregarPedido(entregado.getIdPedido(), instanteEvento(plan));
+                        entregarPedido(entregado.getIdPedido(), instanteEvento(plan));
                     }
                     plan.entregasEnParada.clear();
                     plan.pedidoObjetivo = null;
@@ -1514,6 +1545,7 @@ public class MotorSimulacion {
                 if(!plan.salidasCamino.isEmpty()) plan.salidasCamino.removeFirst();
                 plan.posicionAnterior = plan.posicion;
                 plan.posicion = siguiente;
+                registrarAvanceDesdeSalida(plan);
                 if (plan.reoptimizarEnSiguienteNodo) {
                     plan.reoptimizarEnSiguienteNodo = false; programarPlanificacionInmediata();
                 }
@@ -1590,7 +1622,7 @@ public class MotorSimulacion {
                             plan.almacenOrigen.getIdAlmacen(),
                             plan.cargaInicial);
                     if (!ok) {
-                        repositorio.reencolarPedidos(plan.idsNoEntregados(), reloj);
+                        reencolarPedidos(plan);
                         repositorio.actualizarEstadoVehiculo(plan.idVehiculo, "DISPONIBLE");
                         finalizados.add(plan.idVehiculo);
                         mensajeEstado = "Ruta cancelada por stock insuficiente en "
@@ -1601,6 +1633,7 @@ public class MotorSimulacion {
                     plan.stockTomado = true;
                 }
                 plan.fase = FaseUnidad.IR_PEDIDO;
+                marcarSalida(plan, instanteEvento(plan));
             }
             case IR_RECOGER -> {
                 CargaAveriada carga = plan.origenRescate;
@@ -1612,13 +1645,18 @@ public class MotorSimulacion {
                     }
                     carga.reservados.remove(pedido.getIdPedido());
                 }
-                List<Pedido> recogidos = repositorio.registrarTrasvase(
-                        new ArrayList<>(plan.pedidosPendientes), plan.idVehiculo);
+                List<Pedido> trasladados = new ArrayList<>(plan.pedidosPendientes);
+                List<Pedido> recogidos = repositorio.registrarTrasvase(trasladados, plan.idVehiculo);
+                for (int i = 0; i < recogidos.size(); i++) {
+                    envios.registrarTrasvase(plan.idVehiculo,
+                            trasladados.get(i).getIdPedido(), recogidos.get(i).getIdPedido());
+                }
                 plan.pedidosPendientes.clear();
                 plan.pedidosPendientes.addAll(recogidos);
-                plan.trasvaseRestanteHoras = 0.5;
+                plan.trasvaseRestanteHoras = HORAS_TRASVASE;
                 plan.stockTomado = true;
                 plan.fase = FaseUnidad.IR_PEDIDO;
+                marcarSalida(plan, JornadaOperativa.avanzar(instanteEvento(plan), HORAS_TRASVASE));
             }
             case IR_PEDIDO -> {
                 // Varias fracciones del mismo cliente se descargan en una sola parada.
@@ -1632,14 +1670,17 @@ public class MotorSimulacion {
                                     plan.pedidoObjetivo.getIdCliente())) break;
                     plan.entregasEnParada.add(plan.pedidosPendientes.removeFirst());
                 }
+                plan.arriboParada = instanteEvento(plan);
                 for (Pedido entrega : plan.entregasEnParada) {
-                    repositorio.registrarArribo(entrega.getIdPedido(), instanteEvento(plan));
+                    repositorio.registrarArribo(entrega.getIdPedido(), plan.arriboParada);
+                    envios.registrarLlegada(plan.idVehiculo, entrega.getIdPedido(),
+                            plan.arriboParada, List.copyOf(plan.recorrido));
                 }
                 plan.fase = FaseUnidad.ATENDIENDO;
                 plan.servicioRestanteHoras = plan.servicioHoras;
                 if (plan.servicioRestanteHoras <= 0) {
                     for (Pedido entrega : plan.entregasEnParada) {
-                        repositorio.entregarPedido(entrega.getIdPedido(), instanteEvento(plan));
+                        entregarPedido(entrega.getIdPedido(), instanteEvento(plan));
                     }
                     plan.entregasEnParada.clear();
                     plan.pedidoObjetivo = null;
@@ -1694,7 +1735,7 @@ public class MotorSimulacion {
             PlanUnidad plan,
             List<String> finalizados) {
         if (plan.retornoMantenimiento) {
-            repositorio.reencolarPedidos(plan.idsNoEntregados(), reloj);
+            reencolarPedidos(plan);
             if (plan.stockTomado) repositorio.devolverStock(plan.almacenRetorno.getIdAlmacen(), plan.cantidadNoEntregada());
         } else repositorio.actualizarEstadoVehiculo(plan.idVehiculo, "DISPONIBLE");
         finalizados.add(plan.idVehiculo);
@@ -1745,6 +1786,7 @@ public class MotorSimulacion {
         // solamente ocurre si hubo una operación logística real de reasignación.
         // La siguiente corrida regenerará su flota y limpiará datos operativos
         // después de archivar la ejecución actual.
+        cerrarVistaEnvios();
         planes.clear();
         cargasAveriadas.clear();
         entregasEnCliente.clear();
@@ -1783,6 +1825,7 @@ public class MotorSimulacion {
         } catch (Exception ignored) {
             // El registro de error no debe ocultar el error original.
         }
+        cerrarVistaEnvios();
         estado = EstadoSimulacion.ERROR;
         mensajeEstado = "Error de simulación: " + mensaje(error);
 
@@ -1955,16 +1998,18 @@ public class MotorSimulacion {
             int capacidad = persistido == null ? 0 : persistido.capacidadPaquetes();
             // El crédito solo expresa avance sobre el próximo tramo ya calculado.
             double xVisual = plan.posicion.getX(), yVisual = plan.posicion.getY();
+            double fraccion = 0;
             Nodo siguiente = plan.camino.peekFirst();
             if (siguiente != null && plan.fase != FaseUnidad.ATENDIENDO
                     && plan.trasvaseRestanteHoras <= 0 && plan.creditoHoras > 0
                     && ArcoReticula.transitableComoExtremo(plan.posicion.getX(), plan.posicion.getY(),
                             siguiente.getX(), siguiente.getY(), bloqueados, true,
                             plan.destinoActual != null && mismaPosicion(siguiente, plan.destinoActual))) {
-                double fraccion = Math.min(1, plan.creditoHoras * plan.velocidadKmh / plan.distanciaNodoKm);
+                fraccion = Math.min(1, plan.creditoHoras * plan.velocidadKmh / plan.distanciaNodoKm);
                 xVisual += (siguiente.getX() - plan.posicion.getX()) * fraccion;
                 yVisual += (siguiente.getY() - plan.posicion.getY()) * fraccion;
             }
+            AvanceRuta avance = medirAvance(plan, fraccion);
             porId.put(
                     plan.idVehiculo,
                     new VehiculoSnapshot(
@@ -1982,7 +2027,9 @@ public class MotorSimulacion {
                             porRecoger,
                             plan.idsNoEntregados().size(), xVisual, yVisual,
                             secuenciasVisuales.getOrDefault(plan.idVehiculo, 0L),
-                            List.copyOf(pasosVisuales.getOrDefault(plan.idVehiculo, new ArrayDeque<>()))));
+                            List.copyOf(pasosVisuales.getOrDefault(plan.idVehiculo, new ArrayDeque<>())),
+                            plan.horaSalida, avance.horaLlegada(),
+                            avance.recorridaKm(), avance.porRecorrerKm()));
         }
 
         for (CargaAveriada carga : cargasAveriadas.values()) {
@@ -2026,6 +2073,175 @@ public class MotorSimulacion {
 
         sse.publicar(snapshotActual);
         nanoUltimaPublicacion = ahora;
+        renovarVistaEnvios(ahora);
+    }
+
+    /** Sin consultas recientes no se gasta tiempo del motor: la vista se construye al pedirla. */
+    private void renovarVistaEnvios(long ahora) {
+        if (estado != EstadoSimulacion.EJECUTANDO && estado != EstadoSimulacion.PAUSADA) return;
+        if (ahora - nanoUltimaConsultaEnvios >= CONSULTA_ENVIOS_RECIENTE_NS) {
+            vistaEnvios = null;
+        } else if (ahora - nanoUltimaVistaEnvios >= NANO_SEGUNDO) {
+            nanoUltimaVistaEnvios = ahora;
+            try {
+                vistaEnvios = construirVistaEnvios();
+            } catch (RuntimeException e) {
+                // La lista es auxiliar: un fallo al armarla no debe detener la corrida.
+                LOG.error("Corrida {}: no se pudo renovar la vista de envíos", idSimulacion, e);
+                vistaEnvios = null;
+            }
+        }
+    }
+
+    /** Conserva las horas y rutas previstas antes de vaciar los planes al terminar. */
+    private void cerrarVistaEnvios() {
+        try {
+            refrescarEstimaciones();
+        } catch (RuntimeException e) {
+            LOG.error("Corrida {}: no se pudieron conservar las estimaciones de envíos", idSimulacion, e);
+        }
+        vistaEnvios = null;
+    }
+
+    private VistaEnvios construirVistaEnvios() {
+        refrescarEstimaciones();
+        return new VistaEnvios(idSimulacion, reloj, envios.construir(repositorio.listarPedidosCorrida()));
+    }
+
+    private void registrarAsignaciones(PlanUnidad plan) {
+        for (Pedido pedido : plan.pedidosPendientes) {
+            envios.asignar(plan.idVehiculo, pedido.getIdPedido(),
+                    repositorio.idPedidoVisible(pedido.getIdPedido()), pedido.getCantidadQq());
+        }
+    }
+
+    private void reencolarPedidos(PlanUnidad plan) {
+        List<Long> ids = plan.idsNoEntregados();
+        repositorio.reencolarPedidos(ids, reloj);
+        envios.registrarReasignacion(plan.idVehiculo, ids, List.copyOf(plan.recorrido));
+    }
+
+    private void entregarPedido(long idPedido, LocalDateTime instante) {
+        repositorio.entregarPedido(idPedido, instante);
+        envios.registrarEntrega(idPedido, instante);
+    }
+
+    /** Actualiza la hora y la ruta prevista de lo que cada unidad aún no entrega. */
+    private void refrescarEstimaciones() {
+        for (PlanUnidad plan : planes.values()) {
+            List<PuntoSimulacion> recorrido = List.copyOf(plan.recorrido);
+            // Una unidad que retorna con carga va a mantenimiento: esos pedidos se reencolarán.
+            if (plan.fase == FaseUnidad.RETORNANDO) {
+                for (long id : plan.idsNoEntregados()) {
+                    envios.estimar(plan.idVehiculo, id, null, recorrido, List.of(), List.of());
+                }
+                continue;
+            }
+            Nodo base = destinoPrevisto(plan);
+            if (base == null) continue;
+
+            boolean atendiendo = plan.fase == FaseUnidad.ATENDIENDO;
+            double horasNodo = plan.distanciaNodoKm / plan.velocidadKmh;
+            double km = atendiendo ? 0 : plan.camino.isEmpty()
+                    ? EstimadorRuta.kmManhattan(plan.posicion, base, plan.distanciaNodoKm)
+                    : plan.camino.size() * plan.distanciaNodoKm;
+            LocalDateTime llegada = atendiendo ? reloj : EstimadorRuta.llegadaAlDestino(
+                    reloj, plan.salidasCamino.peekLast(), horasNodo,
+                    plan.trasvaseRestanteHoras, km, plan.velocidadKmh);
+
+            List<PuntoSimulacion> pendiente = caminoPendiente(plan);
+            List<PuntoSimulacion> tramoEstimado = new ArrayList<>();
+            if (!atendiendo && plan.camino.isEmpty() && km > 0) {
+                tramoEstimado.add(EstimadorRuta.punto(plan.posicion));
+                EstimadorRuta.agregarOrtogonal(tramoEstimado, EstimadorRuta.punto(base));
+            }
+
+            EstimadorRuta.Parada objetivo = plan.pedidoObjetivo == null ? null : parada(plan.pedidoObjetivo);
+            if (objetivo != null && !atendiendo) {
+                envios.estimar(plan.idVehiculo, objetivo.idPlanificado(), llegada,
+                        recorrido, pendiente, List.copyOf(tramoEstimado));
+            }
+            double horasEnBase = atendiendo ? plan.servicioRestanteHoras
+                    : plan.fase == FaseUnidad.IR_RECOGER ? HORAS_TRASVASE
+                    : objetivo != null ? plan.servicioHoras : 0;
+            var estimadas = EstimadorRuta.estimarParadas(llegada, base, objetivo, horasEnBase,
+                    tramoEstimado, plan.pedidosPendientes.stream().map(MotorSimulacion::parada).toList(),
+                    plan.servicioHoras, plan.distanciaNodoKm, plan.velocidadKmh);
+            for (var estimada : estimadas) {
+                envios.estimar(plan.idVehiculo, estimada.idPlanificado(), estimada.llegada(),
+                        recorrido, pendiente, estimada.ruta());
+            }
+        }
+    }
+
+    private static EstimadorRuta.Parada parada(Pedido pedido) {
+        return new EstimadorRuta.Parada(pedido.getIdPedido(), pedido.getUbicacion(), pedido.getIdCliente());
+    }
+
+    /** Tramo en curso desde la posición de la unidad, solo con sus esquinas. */
+    private static List<PuntoSimulacion> caminoPendiente(PlanUnidad plan) {
+        if (plan.camino.isEmpty()) return List.of();
+        List<PuntoSimulacion> ruta = new ArrayList<>();
+        ruta.add(EstimadorRuta.punto(plan.posicion));
+        for (Nodo nodo : plan.camino) EstimadorRuta.agregarNodo(ruta, EstimadorRuta.punto(nodo));
+        return List.copyOf(ruta);
+    }
+
+    /** Lo que se publica de la ruta de una unidad: siempre hacia su destino inmediato. */
+    private record AvanceRuta(LocalDateTime horaLlegada, Double recorridaKm, Double porRecorrerKm) { }
+
+    /**
+     * Mide la ruta con el reloj simulado y la velocidad de la unidad. Mientras
+     * descarga, la unidad ya llegó: se informa su arribo real.
+     *
+     * @param fraccion avance sobre el tramo en curso, entre 0 y 1
+     */
+    private AvanceRuta medirAvance(PlanUnidad plan, double fraccion) {
+        Double recorrida = plan.horaSalida == null ? null
+                : EstimadorRuta.redondearKm(plan.kmDesdeSalida + fraccion * plan.distanciaNodoKm);
+        if (plan.fase == FaseUnidad.ATENDIENDO) {
+            return new AvanceRuta(plan.arriboParada, recorrida, 0.0);
+        }
+        Nodo destino = destinoPrevisto(plan);
+        if (destino == null) return new AvanceRuta(null, recorrida, null);
+
+        double pendiente = plan.camino.isEmpty()
+                ? EstimadorRuta.kmManhattan(plan.posicion, destino, plan.distanciaNodoKm)
+                : (plan.camino.size() - fraccion) * plan.distanciaNodoKm;
+        LocalDateTime llegada = EstimadorRuta.llegadaAlDestino(
+                reloj, plan.salidasCamino.peekLast(), plan.distanciaNodoKm / plan.velocidadKmh,
+                plan.trasvaseRestanteHoras, pendiente, plan.velocidadKmh);
+        return new AvanceRuta(llegada, recorrida, EstimadorRuta.redondearKm(pendiente));
+    }
+
+    /** Destino inmediato, también en el instante en que aún no se calculó el tramo. */
+    private Nodo destinoPrevisto(PlanUnidad plan) {
+        if (plan.destinoActual != null) return plan.destinoActual;
+        return switch (plan.fase) {
+            case IR_ALMACEN -> plan.almacenOrigen.getUbicacion();
+            case IR_RECOGER -> plan.origenRescate == null ? null : plan.origenRescate.ubicacionCarga;
+            case RETORNANDO -> plan.almacenRetorno.getUbicacion();
+            case ATENDIENDO -> plan.posicion;
+            case IR_PEDIDO -> {
+                Pedido siguiente = plan.pedidoObjetivo != null
+                        ? plan.pedidoObjetivo : plan.pedidosPendientes.peekFirst();
+                yield siguiente == null ? null : siguiente.getUbicacion();
+            }
+        };
+    }
+
+    private void marcarSalida(PlanUnidad plan, LocalDateTime instante) {
+        plan.horaSalida = instante;
+        plan.kmDesdeSalida = 0;
+        plan.recorrido.clear();
+        plan.recorrido.add(EstimadorRuta.punto(plan.posicion));
+        envios.registrarSalida(plan.idVehiculo, plan.idsNoEntregados(), instante);
+    }
+
+    private void registrarAvanceDesdeSalida(PlanUnidad plan) {
+        if (plan.horaSalida == null) return;
+        plan.kmDesdeSalida += plan.distanciaNodoKm;
+        EstimadorRuta.agregarNodo(plan.recorrido, EstimadorRuta.punto(plan.posicion));
     }
 
     private void exigirEstado(EstadoSimulacion requerido, String mensaje) {
@@ -2111,6 +2327,10 @@ public class MotorSimulacion {
         private boolean reoptimizarEnSiguienteNodo;
         private double servicioRestanteHoras;
         private boolean stockTomado;
+        private LocalDateTime horaSalida;
+        private double kmDesdeSalida;
+        private LocalDateTime arriboParada;
+        private final List<PuntoSimulacion> recorrido = new ArrayList<>();
 
         private PlanUnidad(
                 String idVehiculo,

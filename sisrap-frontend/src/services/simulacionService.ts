@@ -1,4 +1,4 @@
-import type { IniciarSimulacionRequest, ResultadoPersistido, SnapshotSimulacion, ResumenRecorridoVehiculo, DetalleRecorridoVehiculo } from '../types/api';
+import type { IniciarSimulacionRequest, PaginaEnvios, ResultadoPersistido, SnapshotSimulacion, ResumenRecorridoVehiculo, DetalleRecorridoVehiculo, VentanaEnvios } from '../types/api';
 import { apiFetch } from './apiClient';
 
 /**
@@ -18,6 +18,25 @@ export const simulacionService = {
       `/api/simulacion/${idSimulacion}/recorridos/${encodeURIComponent(idVehiculo)}`,
       { autenticar: false, senal }
     );
+  },
+
+  envios(
+    filtros: { ventana: VentanaEnvios; horas: number; buscar?: string; pagina: number; tamanio: number },
+    senal?: AbortSignal
+  ): Promise<PaginaEnvios> {
+    const q = new URLSearchParams({
+      ventana: filtros.ventana,
+      horas: String(filtros.horas),
+      pagina: String(filtros.pagina),
+      tamanio: String(filtros.tamanio),
+    });
+    if (filtros.buscar) q.set('buscar', filtros.buscar);
+    return apiFetch<PaginaEnvios>(`/api/simulacion/envios?${q.toString()}`, { autenticar: false, senal });
+  },
+
+  /** Un envío completo, con todas sus unidades, sin importar los filtros de la lista. */
+  envio(idPedido: number, senal?: AbortSignal): Promise<PaginaEnvios> {
+    return apiFetch<PaginaEnvios>(`/api/simulacion/envios?idPedido=${idPedido}`, { autenticar: false, senal });
   },
 
   estado(): Promise<SnapshotSimulacion> {

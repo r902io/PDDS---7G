@@ -21,6 +21,9 @@ public interface RepositorioPedidos {
             EstadoPedido estado
     );
 
+    /** Pedidos aún sin entregar y los entregados desde el instante indicado. */
+    List<PedidoOperativo> listarVigentes(LocalDateTime entregadosDesde);
+
     Optional<PedidoOperativo> buscar(
             long idPedido
     );

@@ -79,6 +79,17 @@ public class PedidoController {
         }
     }
 
+    @GetMapping("/vigentes")
+    public List<PedidoOperativo> vigentes(
+            @RequestParam(defaultValue = "24") int entregadosUltimasHoras
+    ) {
+        try {
+            return servicio.listarVigentes(entregadosUltimasHoras);
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
+        }
+    }
+
     @GetMapping("/{idPedido}")
     public PedidoOperativo buscar(
             @PathVariable long idPedido

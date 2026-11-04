@@ -6,6 +6,7 @@ import {
   formatoCoordenada,
   formatoDecimal,
   formatoEntero,
+  formatoFechaHora,
   formatoKm,
   formatoSoles,
   longitudCaminoKm,
@@ -214,7 +215,9 @@ function DetalleVehiculo({
           <Dato k="Pedido objetivo" v={v.pedidoObjetivo != null ? String(v.pedidoObjetivo) : 'Sin pedido asignado'} mono={v.pedidoObjetivo != null} />
           <Dato k="Coordenadas" v={formatoCoordenada(v.x, v.y)} mono />
           <Dato k="Camino pendiente" v={formatoKm(km)} mono />
-          <Dato k="Tramo ya recorrido" v={NO_DISPONIBLE} />
+          <Dato k="Tramo ya recorrido" v={v.distanciaRecorridaKm == null ? NO_DISPONIBLE : `${formatoDecimal(v.distanciaRecorridaKm)} km`} mono={v.distanciaRecorridaKm != null} />
+          <Dato k="Salida del almacén" v={v.horaSalida ? formatoFechaHora(v.horaSalida) : NO_DISPONIBLE} mono={!!v.horaSalida} />
+          <Dato k="Llegada a su destino" v={v.horaLlegadaEstimada ? formatoFechaHora(v.horaLlegadaEstimada) : NO_DISPONIBLE} mono={!!v.horaLlegadaEstimada} />
           <Dato k="Carga actual" v={`${formatoEntero(v.cargaActualPaquetes ?? 0)} / ${formatoEntero(v.capacidadPaquetes || catalogo?.capacidadPaquetes || 0)} paquetes`} mono />
 
           <div className="mt-1 mb-2 h-2 bg-bg border border-borde rounded-full overflow-hidden" aria-label="Porcentaje de ocupación del vehículo">

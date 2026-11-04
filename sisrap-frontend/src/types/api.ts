@@ -53,6 +53,74 @@ export interface VehiculoSnapshot {
   yVisual?: number;
   secuenciaMovimiento?: number;
   movimientosRecientes?: Array<{ secuencia: number; x: number; y: number }>;
+  /** Salida del último almacén; null si la unidad no tiene plan o aún no sale. */
+  horaSalida?: FechaHoraLocal | null;
+  /** Llegada a su destino inmediato, cliente o almacén. */
+  horaLlegadaEstimada?: FechaHoraLocal | null;
+  /** Kilómetros desde la salida. */
+  distanciaRecorridaKm?: number | null;
+  /** Kilómetros hasta el destino inmediato. */
+  distanciaPorRecorrerKm?: number | null;
+}
+
+/** VentanaEnvios: filtro por tiempo, medido con el reloj simulado. */
+export type VentanaEnvios = 'TODOS' | 'ENTREGADOS' | 'POR_ENTREGAR';
+
+/** EnvioSimulacion.EstadoAsignacion */
+export type EstadoAsignacion =
+  | 'SIN_ASIGNAR'
+  | 'PROGRAMADA'
+  | 'EN_RUTA'
+  | 'EN_ATENCION'
+  | 'ENTREGADA'
+  | 'REASIGNADA'
+  | 'TRASVASADA';
+
+/**
+ * EnvioSimulacion.Asignacion. La ruta solo trae esquinas y tiene tres partes:
+ * lo recorrido, el tramo en curso y las paradas estimadas por distancia Manhattan.
+ */
+export interface AsignacionEnvio {
+  idVehiculo: string | null;
+  estado: EstadoAsignacion;
+  cantidad: number;
+  productos: string[];
+  rutaRecorrida: PuntoSimulacion[];
+  rutaPendiente: PuntoSimulacion[];
+  rutaEstimada: PuntoSimulacion[];
+  horaSalida: FechaHoraLocal | null;
+  horaLlegada: FechaHoraLocal | null;
+  /** true si horaLlegada ya ocurrió; false si es una estimación. */
+  llegadaReal: boolean;
+  horaEntrega: FechaHoraLocal | null;
+}
+
+/** EnvioSimulacion */
+export interface EnvioSimulacion {
+  idPedido: number;
+  idCliente: string;
+  destino: PuntoSimulacion;
+  horasLimite: number;
+  fechaRegistro: FechaHoraLocal;
+  fechaLimite: FechaHoraLocal;
+  estado: EstadoPedido;
+  cantidad: number;
+  cantidadEntregada: number;
+  entregaParcial: boolean;
+  asignaciones: AsignacionEnvio[];
+}
+
+/** PaginaEnvios: los totales cubren todas las páginas. */
+export interface PaginaEnvios {
+  idSimulacion: number | null;
+  relojSimulado: FechaHoraLocal | null;
+  ventana: VentanaEnvios;
+  horas: number;
+  totalPedidos: number;
+  totalProductos: number;
+  pagina: number;
+  tamanio: number;
+  envios: EnvioSimulacion[];
 }
 
 /** ResumenPedidosSimulacion */

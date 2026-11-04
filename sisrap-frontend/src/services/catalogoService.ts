@@ -7,6 +7,7 @@ import type {
   MantenimientoVehiculo,
   MapaCiudad,
   PaginaPedidos,
+  PedidoOperativo,
   VehiculoOperativo,
 } from '../types/api';
 import { apiFetch } from './apiClient';
@@ -50,6 +51,14 @@ export const catalogoService = {
     q.set('pagina', String(filtros.pagina));
     q.set('tamanio', String(filtros.tamanio));
     return apiFetch<PaginaPedidos>(`/api/pedidos?${q.toString()}`, { autenticar: false, senal });
+  },
+
+  /** Pedidos sin entregar y entregados en las últimas horas del reloj simulado. */
+  pedidosVigentes(horasEntregados: number, senal?: AbortSignal): Promise<PedidoOperativo[]> {
+    return apiFetch<PedidoOperativo[]>(`/api/pedidos/vigentes?entregadosUltimasHoras=${horasEntregados}`, {
+      autenticar: false,
+      senal,
+    });
   },
 
   /**
