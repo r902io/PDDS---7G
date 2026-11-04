@@ -63,9 +63,7 @@ type Criticidad = { idSimulacion: number | null; relojSimulado: string | null; p
 const CIUDAD_ENUNCIADO = { anchoKm: 70, altoKm: 50 };
 const ANCHO_PANEL_INICIAL = { izq: 314, der: 338 };
 const ANCHO_PANEL_MINIMO = 300;
-/** Cada panel llega hasta este porcentaje de la ventana: el mapa siempre conserva espacio. */
 const ANCHO_PANEL_MAXIMO_VW = 40;
-/** La mayor ventana que ofrece ListaAlmacenes para los pedidos entregados. */
 const HORAS_ENTREGADOS_ALMACENES = 24;
 
 interface FiltrosOperacion {
@@ -754,10 +752,11 @@ function PanelParametros({
           )}
 
         {snapshot.vehiculos.length > 0 && (
-            <Bloque titulo="Unidades de transporte" aclaracion="Clic en una columna para ordenar; clic en una fila para ubicarla en el mapa.">
+            <Bloque titulo="Lista de UT" aclaracion="Busca por tiempo o distancia, filtra las unidades y ordena por ocupación, horas o distancia. Clic en una fila para ubicarla en el mapa.">
               <ListaVehiculos
                   vehiculos={vehiculosVisibles}
                   fechaReloj={fechaReloj}
+                  {...{ reloj: snapshot.relojSimulado }}
                   idSeleccionado={seleccion?.tipo === 'vehiculo' ? seleccion.id : null}
                   alSeleccionar={seleccionarVehiculo}
               />
