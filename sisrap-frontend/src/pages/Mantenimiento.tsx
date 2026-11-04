@@ -27,7 +27,7 @@ import {
   formatoSoles,
   NO_DISPONIBLE,
 } from '../utilitarios/formato';
-import { COLOR_TIPO, ETIQUETA_TIPO, etiquetaEstadoVehiculo, obtenerFormaAveria, tipoDesdeCodigo } from '../utilitarios/vehiculos';
+import { COLOR_TIPO, ETIQUETA_TIPO, etiquetaEstadoVehiculo, tipoDesdeCodigo } from '../utilitarios/vehiculos';
 
 const PESTANAS: Array<{ id: PestanaMantenimiento; titulo: string }> = [
   { id: 'vehiculos', titulo: 'Vehículos' },

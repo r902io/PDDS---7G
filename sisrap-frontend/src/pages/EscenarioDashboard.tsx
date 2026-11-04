@@ -57,6 +57,7 @@ import {
 import { esAlmacenVisible } from '../utilitarios/almacenes';
 
 import { ListaAlmacenes } from '../components/panel/ListaAlmacenes';
+import { ListaVehiculos } from '../components/panel/ListaVehiculos';
 import { useFiltrosOperacion } from '../estado/filtros';
 
 /** Dimensiones del enunciado; se reemplazan por las de /api/mapa cuando responde. */
@@ -67,10 +68,6 @@ type Criticidad = { idSimulacion: number | null; relojSimulado: string | null; p
 const CIUDAD_ENUNCIADO = { anchoKm: 70, altoKm: 50 };
 const ANCHO_PANEL_INICIAL = { izq: 314, der: 338 };
 const ANCHO_PANEL_MINIMO = 300;
-/** Cada panel llega hasta este porcentaje de la ventana: el mapa siempre conserva espacio. */
-const ANCHO_PANEL_MAXIMO_VW = 40;
-/** La mayor ventana que ofrece ListaAlmacenes para los pedidos entregados. */
-const HORAS_ENTREGADOS_ALMACENES = 24;
 
 export function EscenarioDashboard() {
   const sim = useSimulacion();
@@ -217,6 +214,7 @@ export function EscenarioDashboard() {
                 corridaId={snapshot.idSimulacion}
                 pedidos={pedidosMap.datos?.contenido ?? SIN_PEDIDOS}
                 bloqueos={bloqueosActivos}
+                rutasDestacadas={rutasDestacadas}
                 seleccion={seleccion}
                 alSeleccionar={setSeleccion}
                 atenuado={corrida && !datosVigentes}
@@ -291,7 +289,7 @@ function PanelLateral({
   children: ReactNode;
 }) {
   const borde = lado === 'izq' ? 'border-r' : 'border-l';
-  const [ancho, setAncho] = usePreferencia(`sisrap.panel-${lado}.ancho`, ANCHO_PANEL_INICIAL[lado], anchoPanelValido);
+  const [ancho] = usePreferencia(`sisrap.panel-${lado}.ancho`, ANCHO_PANEL_INICIAL[lado], anchoPanelValido);
   const Flecha = (lado === 'izq') !== colapsado ? IconoChevronIzq : IconoChevronDer;
   return (
       <aside
@@ -317,43 +315,6 @@ function PanelLateral({
 
 function anchoPanelValido(valor: unknown): boolean {
   return typeof valor === 'number' && valor >= ANCHO_PANEL_MINIMO;
-}
-
-/** Borde interior del panel: arrastrarlo cambia su ancho y el mapa ocupa lo que queda. */
-function BordePanel({ lado, titulo, ancho, alCambiar }: {
-  lado: 'izq' | 'der';
-  titulo: string;
-  ancho: number;
-  alCambiar: (ancho: number) => void;
-}) {
-  const arrastre = useRef<{ x: number; ancho: number } | null>(null);
-
-  const alMover = (e: PointerEvent<HTMLDivElement>) => {
-    if (!arrastre.current) return;
-    const delta = e.clientX - arrastre.current.x;
-    const deseado = arrastre.current.ancho + (lado === 'izq' ? delta : -delta);
-    const maximo = Math.max(ANCHO_PANEL_MINIMO, (window.innerWidth * ANCHO_PANEL_MAXIMO_VW) / 100);
-    alCambiar(Math.round(Math.min(maximo, Math.max(ANCHO_PANEL_MINIMO, deseado))));
-  };
-
-  return (
-    <div
-      role="separator"
-      aria-orientation="vertical"
-      aria-label={`Cambiar el ancho de ${titulo.toLowerCase()}`}
-      title="Arrastrar para cambiar el ancho"
-      onPointerDown={(e) => {
-        e.preventDefault();
-        e.currentTarget.setPointerCapture(e.pointerId);
-        arrastre.current = { x: e.clientX, ancho };
-      }}
-      onPointerMove={alMover}
-      onLostPointerCapture={() => { arrastre.current = null; }}
-      className={`absolute top-0 bottom-0 z-30 w-2 cursor-col-resize touch-none hover:bg-mint/40 active:bg-mint/60 ${
-        lado === 'izq' ? '-right-1' : '-left-1'
-      }`}
-    />
-  );
 }
 
 function Bloque({ titulo, children, aclaracion }: { titulo: string; children: ReactNode; aclaracion?: string }) {
@@ -704,29 +665,22 @@ function PanelParametros({
                 </div>
               </div>
           )}
-
-          {snapshot.vehiculos.length > 0 && (
-              <details className="mt-3 border-t border-borde pt-2">
-                <summary className="cursor-pointer text-xs font-semibold text-azul">
-                  Ver carga actual por vehículo ({snapshot.vehiculos.length})
-                </summary>
-                <div className="max-h-64 overflow-y-auto mt-2 space-y-1">
-                  {snapshot.vehiculos.map((v) => (
-                      <button
-                          key={v.idVehiculo}
-                          type="button"
-                          onClick={() => seleccionarVehiculo(v.idVehiculo)}
-                          className="w-full flex items-center justify-between gap-2 rounded border border-borde px-2 py-1.5 hover:border-mint text-xs text-left"
-                          title="Ver unidad en el mapa y detalle de carga"
-                      >
-                        <span className="font-mono text-texto">{v.idVehiculo}</span>
-                        <span className="text-texto2 font-mono">{formatoEntero(v.cargaActualPaquetes ?? 0)} / {formatoEntero(v.capacidadPaquetes ?? 0)} paq.</span>
-                      </button>
-                  ))}
-                </div>
-              </details>
-          )}
         </Bloque>
+
+        {snapshot.vehiculos.length > 0 && (
+            <Bloque
+                titulo="Lista de UT"
+                aclaracion="Busca por distancia (E06–E09), filtra de forma permanente (E10–E12) y ordena por ocupación, horas o distancia (E13–E17). Clic en una fila para ubicarla en el mapa."
+            >
+              <ListaVehiculos
+                  vehiculos={snapshot.vehiculos}
+                  fechaReloj={fechaReloj}
+                  reloj={snapshot.relojSimulado}
+                  idSeleccionado={seleccion?.tipo === 'vehiculo' ? seleccion.id : null}
+                  alSeleccionar={seleccionarVehiculo}
+              />
+            </Bloque>
+        )}
 
         {/* BLOQUE DE ALMACENES */}
         <Bloque titulo="Almacenes">
