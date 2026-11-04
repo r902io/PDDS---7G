@@ -2,7 +2,7 @@
  * Tipo de vehículo deducido del código TTNN.
  *   TA = auto, TM = moto, TB = bicicleta.  Ej.: TA01, TM03, TB10.
  */
-import type { TipoAveria } from '../types/api';
+import type { TipoAveria, VehiculoSnapshot, TipoFlota, SemaforoFiltro, VehiculoOperativo } from '../types/api';
 import type { NombreForma } from '../components/iconos/formas';
 
 export type TipoVehiculo = 'AUTO' | 'MOTO' | 'BICICLETA';
@@ -64,6 +64,36 @@ export function etiquetaEstadoVehiculo(estado: string | null | undefined): strin
   return ETIQUETA_ESTADO[estado] ?? estado;
 }
 
+export const CAMPOS_ORDEN_UNIDADES = [
+  'horaSalida',
+  'horaLlegadaEstimada',
+  'distanciaPorRecorrerKm',
+  'distanciaRecorridaKm',
+] as const;
+
+export type CampoOrdenUnidad = (typeof CAMPOS_ORDEN_UNIDADES)[number];
+export type SentidoOrden = 'asc' | 'desc';
+
+/**
+ * Las unidades sin dato van al final en ambos sentidos. El código desempata
+ * para que el orden no salte entre un snapshot y el siguiente.
+ */
+export function ordenarUnidades(
+  vehiculos: VehiculoSnapshot[],
+  campo: CampoOrdenUnidad,
+  sentido: SentidoOrden
+): VehiculoSnapshot[] {
+  const factor = sentido === 'asc' ? 1 : -1;
+  return [...vehiculos].sort((a, b) => {
+    const va = a[campo] ?? null;
+    const vb = b[campo] ?? null;
+    if (va == null && vb != null) return 1;
+    if (vb == null && va != null) return -1;
+    if (va != null && vb != null && va !== vb) return (va < vb ? -1 : 1) * factor;
+    return a.idVehiculo.localeCompare(b.idVehiculo);
+  });
+}
+
 export function estaAveriado(estado: string | null | undefined): boolean {
   return estado === 'EN_AVERIA';
 }
@@ -108,3 +138,49 @@ export function obtenerColorAveriaHex(tipoAveria?: string | null): string {  con
   return '#f59e0b';               // Ámbar
 }
 
+
+/**
+ * Calcula el estado de semáforo/ocupación de un vehículo según su carga actual y capacidad.
+ * D06: Clasificación por semáforo (Vacío, Verde <50%, Amarillo 50-79%, Rojo >=80%).
+ */
+export function obtenerEstadoSemaforoVehiculo(
+    cargaActual: number,
+    capacidadMax: number
+): SemaforoFiltro {
+  if (cargaActual === 0) return 'VACIO';
+  if (capacidadMax <= 0) return 'VERDE';
+
+  const porcentaje = (cargaActual / capacidadMax) * 100;
+  if (porcentaje >= 80) return 'ROJO';
+  if (porcentaje >= 50) return 'AMARILLO';
+  return 'VERDE';
+}
+
+/**
+ * D05 & D06: Determina si un VehiculoSnapshot o VehiculoOperativo debe renderizarse en el mapa.
+ */
+export function esVehiculoVisible(
+    vehiculo: VehiculoSnapshot | VehiculoOperativo,
+    tiposSeleccionados: TipoFlota[],
+    semaforosSeleccionados: SemaforoFiltro[]
+): boolean {
+  // Normalizar el tipo de vehículo a TipoFlota ('AUTO' | 'MOTO' | 'BICICLETA')
+  const tipoStr = ('tipo' in vehiculo ? vehiculo.tipo : tipoDesdeCodigo(vehiculo.idVehiculo) ?? '').toUpperCase();
+
+  let tipoFlota: TipoFlota = 'AUTO';
+  if (tipoStr.includes('MOTO')) tipoFlota = 'MOTO';
+  else if (tipoStr.includes('BICI')) tipoFlota = 'BICICLETA';
+
+  // 1. Filtro D05: Tipo de transporte
+  if (!tiposSeleccionados.includes(tipoFlota)) {
+    return false;
+  }
+
+  // Obtenemos la carga y capacidad según la interfaz recibida
+  const carga = 'cargaActualPaquetes' in vehiculo ? vehiculo.cargaActualPaquetes : 0;
+  const capacidad = vehiculo.capacidadPaquetes || 0;
+
+  // 2. Filtro D06: Semáforo + Vacío
+  const estadoSemaforo = obtenerEstadoSemaforoVehiculo(carga, capacidad);
+  return semaforosSeleccionados.includes(estadoSemaforo);
+}

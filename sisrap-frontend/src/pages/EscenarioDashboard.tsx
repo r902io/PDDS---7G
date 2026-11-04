@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import type { AlmacenOperativo, PaginaPedidos, PedidoOperativo, SnapshotSimulacion, VehiculoOperativo, VehiculoSnapshot } from '../types/api';
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from 'react';
+import type { AlmacenOperativo, PedidoOperativo, SnapshotSimulacion, VehiculoOperativo, VehiculoSnapshot } from '../types/api';
 import { useSimulacion } from '../estado/SimulacionContext';
 import { navegar } from '../estado/navegacion';
 import { catalogoService } from '../services/catalogoService';
 import { apiFetch } from '../services/apiClient';
 import { useConsulta } from '../hooks/useConsulta';
+import { usePreferencia } from '../hooks/usePreferencia';
+import { useRutasEnvio } from '../hooks/useRutasEnvio';
 import type { Seleccion } from '../hooks/useMapCanvas';
 import { MapaCiudad } from '../components/mapa/MapaCiudad';
 import { PanelDetalle } from '../components/mapa/PanelDetalle';
@@ -49,7 +51,9 @@ import {
   type TipoVehiculo,
 } from '../utilitarios/vehiculos';
 
-import { ListaAlmacenes } from '../components/panel/ListaAlmacenes';
+import { ListaAlmacenes, esAlmacenVisible, type SemaforoFiltro } from '../components/panel/ListaAlmacenes';
+import { ListaEnvios } from '../components/panel/ListaEnvios';
+import { ListaVehiculos } from '../components/panel/ListaVehiculos';
 
 /** Dimensiones del enunciado; se reemplazan por las de /api/mapa cuando responde. */
 const SIN_VEHICULOS: VehiculoSnapshot[] = [];
@@ -57,6 +61,30 @@ const SIN_ALMACENES: AlmacenOperativo[] = [];
 const SIN_PEDIDOS: PedidoOperativo[] = [];
 type Criticidad = { idSimulacion: number | null; relojSimulado: string | null; pedido: PedidoOperativo | null };
 const CIUDAD_ENUNCIADO = { anchoKm: 70, altoKm: 50 };
+const ANCHO_PANEL_INICIAL = { izq: 314, der: 338 };
+const ANCHO_PANEL_MINIMO = 300;
+/** Cada panel llega hasta este porcentaje de la ventana: el mapa siempre conserva espacio. */
+const ANCHO_PANEL_MAXIMO_VW = 40;
+/** La mayor ventana que ofrece ListaAlmacenes para los pedidos entregados. */
+const HORAS_ENTREGADOS_ALMACENES = 24;
+
+interface FiltrosOperacion {
+  tiposVehiculo: TipoVehiculo[];
+  semaforoVehiculos: SemaforoFiltro[];
+  semaforoAlmacenes: SemaforoFiltro[];
+}
+
+function esVehiculoVisible(v: VehiculoSnapshot, filtros: FiltrosOperacion): boolean {
+  const tipo = tipoDesdeCodigo(v.idVehiculo);
+  if (tipo && !filtros.tiposVehiculo.includes(tipo)) return false;
+  const carga = v.cargaActualPaquetes ?? 0;
+  const capacidad = v.capacidadPaquetes > 0 ? v.capacidadPaquetes
+    : tipo === 'AUTO' ? 24 : tipo === 'MOTO' ? 8 : tipo === 'BICICLETA' ? 4 : 0;
+  const porcentaje = capacidad > 0 ? carga / capacidad : 0;
+  const semaforo: SemaforoFiltro = carga === 0 ? 'VACIO'
+    : porcentaje >= 0.8 ? 'ROJO' : porcentaje >= 0.5 ? 'AMARILLO' : 'VERDE';
+  return filtros.semaforoVehiculos.includes(semaforo);
+}
 
 export function EscenarioDashboard() {
   const sim = useSimulacion();
@@ -68,7 +96,23 @@ export function EscenarioDashboard() {
   const [izqColapsado, setIzqColapsado] = useState(angosta);
   const [derColapsado, setDerColapsado] = useState(angosta);
   const [seleccion, setSeleccion] = useState<Seleccion>(null);
+  const [pedidoResaltado, setPedidoResaltado] = useState<number | null>(null);
+  const rutasDestacadas = useRutasEnvio(pedidoResaltado, snapshot?.idSimulacion ?? null, activa);
   const [confirmarDetener, setConfirmarDetener] = useState(false);
+
+  const [filtros, setFiltros] = useState<FiltrosOperacion>({
+    tiposVehiculo: [...ORDEN_TIPOS],
+    semaforoVehiculos: ['VERDE', 'AMARILLO', 'ROJO', 'VACIO'],
+    semaforoAlmacenes: ['VERDE', 'AMARILLO', 'ROJO', 'VACIO'],
+  });
+  const toggleTipoVehiculo = (tipo: TipoVehiculo) => setFiltros(prev => ({
+    ...prev, tiposVehiculo: prev.tiposVehiculo.includes(tipo)
+      ? prev.tiposVehiculo.filter(t => t !== tipo) : [...prev.tiposVehiculo, tipo],
+  }));
+  const toggleSemaforo = (campo: 'semaforoVehiculos' | 'semaforoAlmacenes', valor: SemaforoFiltro) =>
+    setFiltros(prev => ({ ...prev, [campo]: prev[campo].includes(valor)
+      ? prev[campo].filter(s => s !== valor) : [...prev[campo], valor] }));
+  const vehiculoVisible = useCallback((v: VehiculoSnapshot) => esVehiculoVisible(v, filtros), [filtros]);
 
   // Datos complementarios del backend.
   const mapa = useConsulta((s) => catalogoService.mapa(s), `mapa-${snapshot?.idSimulacion}`);
@@ -82,8 +126,7 @@ export function EscenarioDashboard() {
     activa ? 2_000 : null
   );
   const pedidosMap = useConsulta(
-    (s) => corrida ? catalogoService.pedidos({ pagina: 0, tamanio: 500 }, s)
-      : Promise.resolve({ contenido: [], total: 0, pagina: 0, tamanio: 500 } as PaginaPedidos),
+    (s) => corrida ? catalogoService.pedidosVigentes(HORAS_ENTREGADOS_ALMACENES, s) : Promise.resolve(SIN_PEDIDOS),
     `mapa-pedidos-${snapshot?.idSimulacion}-${snapshot?.estado}`,
     activa ? 8_000 : null
   );
@@ -99,15 +142,25 @@ export function EscenarioDashboard() {
     );
   }, [bloqueos.datos, corrida, snapshot?.relojSimulado]);
 
-  // Esc cancela la selección.
+  // Esc cancela la selección y el resaltado del envío.
   useEffect(() => {
-    const alTeclear = (e: KeyboardEvent) => e.key === 'Escape' && setSeleccion(null);
+    const alTeclear = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      setSeleccion(null);
+      setPedidoResaltado(null);
+    };
     window.addEventListener('keydown', alTeclear);
     return () => window.removeEventListener('keydown', alTeclear);
   }, []);
 
+  useEffect(() => setPedidoResaltado(null), [snapshot?.idSimulacion]);
+
   // Si la unidad seleccionada desaparece del snapshot, se mantiene: el panel lo explica.
   const vehiculos: VehiculoSnapshot[] = snapshot?.vehiculos ?? SIN_VEHICULOS;
+
+  const vehiculosVisibles = useMemo(() => vehiculos.filter(vehiculoVisible), [vehiculos, vehiculoVisible]);
+  const almacenesVisibles = useMemo(() => (almacenes.datos ?? SIN_ALMACENES)
+    .filter(a => esAlmacenVisible(a, filtros.semaforoAlmacenes)), [almacenes.datos, filtros.semaforoAlmacenes]);
 
   if (!snapshot) {
     return (
@@ -135,9 +188,6 @@ export function EscenarioDashboard() {
   return (
     <div className="flex-1 flex min-h-0 relative">
       {/* Panel izquierdo: parámetros */}
-
-
-      {/* Panel izquierdo: parámetros */}
       <PanelLateral
           lado="izq"
           titulo="Parámetros de la corrida"
@@ -154,10 +204,16 @@ export function EscenarioDashboard() {
             recargarAlmacenes={almacenes.recargar}
             pedirDetener={() => setConfirmarDetener(true)}
             seleccionarVehiculo={(id) => setSeleccion({ tipo: 'vehiculo', id })}
-            /* AGREGAR ESTAS TRES LÍNEAS */
-            pedidos={pedidosMap.datos?.contenido ?? SIN_PEDIDOS}
+            pedidos={pedidosMap.datos ?? SIN_PEDIDOS}
             seleccion={seleccion}
             alSeleccionar={setSeleccion}
+            pedidoResaltado={pedidoResaltado}
+            alResaltarPedido={setPedidoResaltado}
+            filtros={filtros}
+            vehiculosVisibles={vehiculosVisibles}
+            onToggleTipoVehiculo={toggleTipoVehiculo}
+            onToggleSemaforoVehiculo={(s) => toggleSemaforo('semaforoVehiculos', s)}
+            onToggleSemaforoAlmacen={(s) => toggleSemaforo('semaforoAlmacenes', s)}
         />
       </PanelLateral>
 
@@ -176,21 +232,33 @@ export function EscenarioDashboard() {
         <div className="relative flex-1 min-h-0">
           <MapaCiudad
             dimensiones={dimensiones}
-            almacenes={almacenes.datos ?? SIN_ALMACENES}
-            vehiculos={vehiculos}
+            almacenes={almacenesVisibles}
+            vehiculos={vehiculosVisibles}
+            vehiculoVisible={vehiculoVisible}
             corridaId={snapshot.idSimulacion}
-            pedidos={pedidosMap.datos?.contenido ?? SIN_PEDIDOS}
+            pedidos={pedidosMap.datos ?? SIN_PEDIDOS}
             bloqueos={bloqueosActivos}
             seleccion={seleccion}
             alSeleccionar={setSeleccion}
             atenuado={corrida && !datosVigentes}
             animar={snapshot.estado === 'EJECUTANDO' && datosVigentes}
+            rutasDestacadas={rutasDestacadas}
           />
+          {pedidoResaltado != null && (
+            <button
+              onClick={() => setPedidoResaltado(null)}
+              className="absolute left-1/2 -translate-x-1/2 bottom-2.5 z-10 bg-panel/95 border border-mint rounded px-2.5 py-1 text-xs text-texto"
+            >
+              {rutasDestacadas.length > 0
+                ? `Envío #${pedidoResaltado} resaltado. Clic para quitar`
+                : `Envío #${pedidoResaltado} sin ruta todavía. Clic para quitar`}
+            </button>
+          )}
           {seleccion && (
             <PanelDetalle
               seleccion={seleccion}
               vehiculos={vehiculos}
-              pedidos={pedidosMap.datos?.contenido ?? SIN_PEDIDOS}
+              pedidos={pedidosMap.datos ?? SIN_PEDIDOS}
               catalogo={flota.datos}
               almacenes={almacenes.datos ?? SIN_ALMACENES}
               alSeleccionar={setSeleccion}
@@ -255,13 +323,15 @@ function PanelLateral({
   children: ReactNode;
 }) {
   const borde = lado === 'izq' ? 'border-r' : 'border-l';
-  const ancho = lado === 'izq' ? 'w-[314px]' : 'w-[338px]';
+  const [ancho, setAncho] = usePreferencia(`sisrap.panel-${lado}.ancho`, ANCHO_PANEL_INICIAL[lado], anchoPanelValido);
   const Flecha = (lado === 'izq') !== colapsado ? IconoChevronIzq : IconoChevronDer;
   return (
     <aside
-      className={`bg-panel border-borde ${borde} flex flex-col min-h-0 shrink-0 ${colapsado ? 'w-[34px]' : `${ancho} max-w-[85vw]`}`}
+      className={`relative bg-panel border-borde ${borde} flex flex-col min-h-0 shrink-0 ${colapsado ? 'w-[34px]' : ''}`}
+      style={colapsado ? undefined : { width: ancho, maxWidth: `max(${ANCHO_PANEL_MINIMO}px, ${ANCHO_PANEL_MAXIMO_VW}vw)` }}
       aria-label={titulo}
     >
+      {!colapsado && <BordePanel lado={lado} titulo={titulo} ancho={ancho} alCambiar={setAncho} />}
       <div className={`flex items-center px-2 py-2 border-b border-borde ${colapsado ? 'justify-center border-b-0' : 'justify-between'}`}>
         {!colapsado && <h2 className="text-xs uppercase tracking-wider text-texto2 font-semibold pl-1">{titulo}</h2>}
         <button
@@ -276,6 +346,47 @@ function PanelLateral({
       </div>
       {!colapsado && <div className="flex-1 overflow-y-auto p-3 space-y-3 text-xs">{children}</div>}
     </aside>
+  );
+}
+
+function anchoPanelValido(valor: unknown): boolean {
+  return typeof valor === 'number' && valor >= ANCHO_PANEL_MINIMO;
+}
+
+/** Borde interior del panel: arrastrarlo cambia su ancho y el mapa ocupa lo que queda. */
+function BordePanel({ lado, titulo, ancho, alCambiar }: {
+  lado: 'izq' | 'der';
+  titulo: string;
+  ancho: number;
+  alCambiar: (ancho: number) => void;
+}) {
+  const arrastre = useRef<{ x: number; ancho: number } | null>(null);
+
+  const alMover = (e: PointerEvent<HTMLDivElement>) => {
+    if (!arrastre.current) return;
+    const delta = e.clientX - arrastre.current.x;
+    const deseado = arrastre.current.ancho + (lado === 'izq' ? delta : -delta);
+    const maximo = Math.max(ANCHO_PANEL_MINIMO, (window.innerWidth * ANCHO_PANEL_MAXIMO_VW) / 100);
+    alCambiar(Math.round(Math.min(maximo, Math.max(ANCHO_PANEL_MINIMO, deseado))));
+  };
+
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={`Cambiar el ancho de ${titulo.toLowerCase()}`}
+      title="Arrastrar para cambiar el ancho"
+      onPointerDown={(e) => {
+        e.preventDefault();
+        e.currentTarget.setPointerCapture(e.pointerId);
+        arrastre.current = { x: e.clientX, ancho };
+      }}
+      onPointerMove={alMover}
+      onLostPointerCapture={() => { arrastre.current = null; }}
+      className={`absolute top-0 bottom-0 z-30 w-2 cursor-col-resize touch-none hover:bg-mint/40 active:bg-mint/60 ${
+        lado === 'izq' ? '-right-1' : '-left-1'
+      }`}
+    />
   );
 }
 
@@ -451,6 +562,13 @@ function PanelParametros({
                            pedidos = [],
                            seleccion = null,
                            alSeleccionar,
+                           pedidoResaltado,
+                           alResaltarPedido,
+                           filtros,
+                           vehiculosVisibles,
+                           onToggleTipoVehiculo,
+                           onToggleSemaforoVehiculo,
+                           onToggleSemaforoAlmacen,
                          }: {
   snapshot: SnapshotSimulacion;
   flota: VehiculoOperativo[] | null;
@@ -464,8 +582,16 @@ function PanelParametros({
   pedidos?: PedidoOperativo[];
   seleccion?: Seleccion;
   alSeleccionar?: (s: Seleccion) => void;
+  pedidoResaltado: number | null;
+  alResaltarPedido: (idPedido: number | null) => void;
+  filtros: FiltrosOperacion;
+  vehiculosVisibles: VehiculoSnapshot[];
+  onToggleTipoVehiculo: (tipo: TipoVehiculo) => void;
+  onToggleSemaforoVehiculo: (estado: SemaforoFiltro) => void;
+  onToggleSemaforoAlmacen: (estado: SemaforoFiltro) => void;
 }) {
   const { rol, accionEnCurso } = useSimulacion();
+  const fechaReloj = snapshot.relojSimulado?.slice(0, 10) ?? null;
   const activa = corridaActiva(snapshot);
   const esc = snapshot.escenario ? ESCENARIOS[snapshot.escenario] : null;
 
@@ -568,30 +694,87 @@ function PanelParametros({
                 </tbody>
               </table>
           )}
-          {snapshot.vehiculos.length > 0 && (
-              <details className="mt-3 border-t border-borde pt-2">
-                <summary className="cursor-pointer text-xs font-semibold text-azul">
-                  Ver carga actual por vehículo ({snapshot.vehiculos.length})
-                </summary>
-                <div className="max-h-64 overflow-y-auto mt-2 space-y-1">
-                  {snapshot.vehiculos.map((v) => (
-                      <button
-                          key={v.idVehiculo}
-                          type="button"
-                          onClick={() => seleccionarVehiculo(v.idVehiculo)}
-                          className="w-full flex items-center justify-between gap-2 rounded border border-borde px-2 py-1.5 hover:border-mint text-xs text-left"
-                          title="Ver unidad en el mapa y detalle de carga"
-                      >
-                        <span className="font-mono text-texto">{v.idVehiculo}</span>
-                        <span className="text-texto2 font-mono">{formatoEntero(v.cargaActualPaquetes ?? 0)} / {formatoEntero(v.capacidadPaquetes ?? 0)} paq.</span>
-                      </button>
-                  ))}
-                </div>
-              </details>
-          )}
         </Bloque>
 
-        {/* BLOQUE DE ALMACENES ACTUALIZADO QUE CONSUME pedidos, seleccion Y alSeleccionar */}
+          {/* BOTONERAS DE FILTRADO D05 Y D06 */}
+          {filtros && (
+              <div className="mt-3 bg-panel2/80 border border-borde p-2 rounded-md space-y-2 text-xs">
+                {/* D05: Tipo de vehículo */}
+                <div>
+                  <span className="text-[10px] font-bold text-texto2 block mb-1">Filtrar por tipo:</span>
+                  <div className="flex gap-1">
+                    {(['AUTO', 'MOTO', 'BICICLETA'] as TipoVehiculo[]).map((tipo) => {
+                      const activo = filtros.tiposVehiculo.includes(tipo);
+                      return (
+                          <button
+                              key={tipo}
+                              aria-pressed={activo}
+                              type="button"
+                              onClick={() => onToggleTipoVehiculo(tipo)}
+                              className={`flex-1 py-1 rounded text-[10px] font-semibold border transition-colors ${
+                                  activo ? 'bg-azul border-azul text-white' : 'bg-panel border-borde text-texto2 hover:bg-panel2'
+                              }`}
+                          >
+                            {tipo === 'AUTO' ? '🚗 Auto' : tipo === 'MOTO' ? '🏍️ Moto' : '🚲 Bici'}
+                          </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* D06: Estado de Carga */}
+                <div>
+                  <span className="text-[10px] font-bold text-texto2 block mb-1">Estado de carga:</span>
+                  <div className="flex gap-1">
+                    {[
+                      { id: 'VERDE', label: 'Baja', color: 'bg-mint' },
+                      { id: 'AMARILLO', label: 'Media', color: 'bg-ambar' },
+                      { id: 'ROJO', label: 'Alta', color: 'bg-rojo' },
+                      { id: 'VACIO', label: 'Vacío', color: 'bg-texto2' },
+                    ].map((item) => {
+                      const activo = filtros.semaforoVehiculos.includes(item.id as SemaforoFiltro);
+                      return (
+                          <button
+                              key={item.id}
+                              aria-pressed={activo}
+                              type="button"
+                              onClick={() => onToggleSemaforoVehiculo(item.id as SemaforoFiltro)}
+                              className={`flex-1 flex items-center justify-center gap-1 py-1 rounded text-[10px] font-semibold border transition-colors ${
+                                  activo ? 'bg-panel border-texto text-texto shadow-sm' : 'bg-panel border-borde text-texto2 opacity-50'
+                              }`}
+                          >
+                            <span className={`w-1.5 h-1.5 rounded-full ${item.color}`} />
+                            {item.label}
+                          </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+          )}
+
+        {snapshot.vehiculos.length > 0 && (
+            <Bloque titulo="Unidades de transporte" aclaracion="Clic en una columna para ordenar; clic en una fila para ubicarla en el mapa.">
+              <ListaVehiculos
+                  vehiculos={vehiculosVisibles}
+                  fechaReloj={fechaReloj}
+                  idSeleccionado={seleccion?.tipo === 'vehiculo' ? seleccion.id : null}
+                  alSeleccionar={seleccionarVehiculo}
+              />
+            </Bloque>
+        )}
+
+        <Bloque titulo="Envíos" aclaracion="Clic en un envío para resaltar en el mapa la ruta de cada unidad.">
+          <ListaEnvios
+              idSimulacion={snapshot.idSimulacion}
+              estadoCorrida={snapshot.estado}
+              activa={activa}
+              fechaReloj={fechaReloj}
+              pedidoResaltado={pedidoResaltado}
+              alResaltar={alResaltarPedido}
+          />
+        </Bloque>
+
         <Bloque titulo="Almacenes">
           {errorAlmacenes && !almacenes ? (
               <ErrorCarga titulo="No se pudieron leer los almacenes" error={errorAlmacenes} reintentar={recargarAlmacenes} />
@@ -604,6 +787,8 @@ function PanelParametros({
                   relojSimulado={snapshot.relojSimulado}
                   seleccion={seleccion}
                   alSeleccionar={(s) => alSeleccionar?.(s)}
+                  semaforoAlmacenes={filtros.semaforoAlmacenes}
+                  onToggleSemaforoAlmacen={onToggleSemaforoAlmacen}
               />
           )}
         </Bloque>

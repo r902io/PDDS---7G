@@ -6,7 +6,9 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import pe.edu.pucp.sisrap.control.aplicacion.GestionarControlSimulacion;
 import pe.edu.pucp.sisrap.control.aplicacion.GestionarControlSimulacion.AdquisicionControl;
 import pe.edu.pucp.sisrap.simulacion.dominio.ConfiguracionSimulacion;
+import pe.edu.pucp.sisrap.simulacion.dominio.PaginaEnvios;
 import pe.edu.pucp.sisrap.simulacion.dominio.SnapshotSimulacion;
+import pe.edu.pucp.sisrap.simulacion.dominio.VentanaEnvios;
 import pe.edu.pucp.sisrap.simulacion.dominio.ResultadoCorrida;
 import pe.edu.pucp.sisrap.simulacion.dominio.RecorridoVehiculo;
 import java.util.List;
@@ -43,6 +45,14 @@ public class GestionarSimulacion {
 
     public RecorridoVehiculo.Detalle recorrido(long idSimulacion, String idVehiculo) {
         return repositorio.consultarRecorrido(idSimulacion, idVehiculo);
+    }
+
+    public PaginaEnvios envios(VentanaEnvios ventana, int horas, String busqueda, int pagina, int tamanio) {
+        return ConsultaEnvios.consultar(motor.consultarEnvios(), ventana, horas, busqueda, pagina, tamanio);
+    }
+
+    public PaginaEnvios envio(long idPedido) {
+        return ConsultaEnvios.consultarPedido(motor.consultarEnvios(), idPedido);
     }
 
     public SnapshotSimulacion estado() {

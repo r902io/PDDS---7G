@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -21,7 +22,9 @@ import pe.edu.pucp.sisrap.simulacion.aplicacion.GestionarSimulacion;
 import pe.edu.pucp.sisrap.simulacion.aplicacion.MotorSimulacion.ConflictoSimulacionException;
 import pe.edu.pucp.sisrap.simulacion.dominio.ConfiguracionSimulacion;
 import pe.edu.pucp.sisrap.simulacion.dominio.EscenarioSimulacion;
+import pe.edu.pucp.sisrap.simulacion.dominio.PaginaEnvios;
 import pe.edu.pucp.sisrap.simulacion.dominio.SnapshotSimulacion;
+import pe.edu.pucp.sisrap.simulacion.dominio.VentanaEnvios;
 import pe.edu.pucp.sisrap.simulacion.dominio.ResultadoCorrida;
 import pe.edu.pucp.sisrap.simulacion.dominio.RecorridoVehiculo;
 import java.util.List;
@@ -67,6 +70,26 @@ public class SimulacionController {
             return servicio.recorrido(idSimulacion, idVehiculo);
         } catch (java.util.NoSuchElementException e) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, e.getMessage());
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
+        }
+    }
+
+    /**
+     * Envíos de la corrida actual o de la última terminada, con una asignación
+     * por unidad. Vive en memoria: no sobrevive a un reinicio del backend.
+     */
+    @GetMapping("/envios")
+    public PaginaEnvios envios(
+            @RequestParam(defaultValue = "TODOS") VentanaEnvios ventana,
+            @RequestParam(defaultValue = "4") int horas,
+            @RequestParam(required = false) String buscar,
+            @RequestParam(required = false) Long idPedido,
+            @RequestParam(defaultValue = "0") int pagina,
+            @RequestParam(defaultValue = "100") int tamanio) {
+        try {
+            if (idPedido != null) return servicio.envio(idPedido);
+            return servicio.envios(ventana, horas, buscar, pagina, tamanio);
         } catch (IllegalArgumentException e) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
         }

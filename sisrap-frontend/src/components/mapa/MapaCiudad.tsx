@@ -1,6 +1,7 @@
 import { useState } from 'react';
+import { FiltroFlujoVisual } from '../../estado/SimulacionContext';
 import type { AlmacenOperativo, BloqueoRespuesta, PedidoOperativo, VehiculoSnapshot } from '../../types/api';
-import { useMapCanvas, type Dimensiones, type Objetivo, type Seleccion } from '../../hooks/useMapCanvas';
+import { useMapCanvas, ZOOM_MAXIMO, type Dimensiones, type Objetivo, type Seleccion } from '../../hooks/useMapCanvas';
 import { IconoEncuadrar, IconoMapaSvg } from '../iconos';
 import {
     formatoCoordenada,
@@ -15,6 +16,7 @@ import {
     etiquetaEstadoVehiculo,
     tipoDesdeCodigo,
 } from '../../utilitarios/vehiculos';
+import type { RutaDestacada } from '../../utilitarios/envios';
 
 interface Props {
     dimensiones: Dimensiones;
@@ -27,6 +29,8 @@ interface Props {
     alSeleccionar: (s: Seleccion) => void;
     atenuado: boolean;
     animar: boolean;
+    rutasDestacadas?: RutaDestacada[];
+    vehiculoVisible?: (vehiculo: VehiculoSnapshot) => boolean;
 }
 
 /** Longitudes "redondas" para la escala gráfica. */
@@ -34,8 +38,16 @@ const LARGOS_ESCALA = [1, 2, 5, 10, 20];
 
 let preferenciaLeyendaAbierta = true;
 
+const SIN_RUTAS: RutaDestacada[] = [];
+
 export function MapaCiudad(props: Props) {
-    const { canvasRef, relojVisualRef, vehiculosCanvasRef, hover, cursorKm, escalaPx, zoom, encuadrar, manejadores } = useMapCanvas(props);
+    return <FiltroFlujoVisual visible={props.vehiculoVisible}>
+        <MapaCiudadCanvas {...props} />
+    </FiltroFlujoVisual>;
+}
+
+function MapaCiudadCanvas(props: Props) {
+    const { canvasRef, relojVisualRef, vehiculosCanvasRef, hover, cursorKm, escalaPx, zoom, encuadrar, acercar, alejar, manejadores } = useMapCanvas({ ...props, rutasDestacadas: props.rutasDestacadas ?? SIN_RUTAS });
     const [leyendaAbierta, setLeyendaAbierta] = useState(preferenciaLeyendaAbierta);
 
     // Escala gráfica: el mayor largo redondo que quepa en ~120 px.
@@ -78,9 +90,11 @@ export function MapaCiudad(props: Props) {
                             <ItemLeyenda forma="destinoCliente" color={COLOR_TIPO.AUTO} texto="Destino de ruta" />
                             <span className="text-ambar">● Pedido pendiente</span>
                             <span className="text-azul">● Pedido en ruta</span>
-                            <ItemLeyenda forma="averia" texto="Unidad averiada" />
+                            <ItemLeyenda forma="averiaTipo1" texto="Unidad averiada" />
                             <ItemLeyenda forma="bloqueo" texto="Tramo bloqueado" />
                             <ItemLeyenda forma="mantenimiento" texto="En mantenimiento" />
+                            <LineaLeyenda texto="Ruta real del envío" />
+                            <LineaLeyenda texto="Ruta estimada" discontinua />
                             <div className="flex items-center gap-1.5 text-texto2 whitespace-nowrap">
                 <span className="w-6 h-5 flex items-center justify-center">
                   <span className="w-[18px] h-[18px] rounded-full border border-texto bg-panel2 text-[10px] font-mono text-texto flex items-center justify-center">
@@ -100,7 +114,8 @@ export function MapaCiudad(props: Props) {
 
             {/* Escala gráfica y encuadre */}
             <div className="absolute left-2.5 bottom-2.5 z-10 flex items-end gap-2">
-                <div className="bg-panel/95 border border-borde rounded px-2 py-1">
+                {/* Ancho fijo: la barra cambia con el zoom y no debe mover los botones. */}
+                <div className="min-w-[148px] bg-panel/95 border border-borde rounded px-2 py-1">
                     <div className="h-2 border-x-2 border-b-2 border-texto2" style={{ width: kmEscala * escalaPx }} />
                     <div className="font-mono text-[11px] text-texto mt-0.5">{kmEscala} km</div>
                 </div>
@@ -112,6 +127,20 @@ export function MapaCiudad(props: Props) {
                 >
                     <IconoEncuadrar tamano={14} /> Ciudad completa
                 </button>
+                <div className="flex gap-1">
+                    <BotonZoom
+                        etiqueta="Acercar"
+                        simbolo="+"
+                        alPulsar={acercar}
+                        motivoBloqueo={zoom >= ZOOM_MAXIMO ? 'El mapa ya está en el zoom máximo' : null}
+                    />
+                    <BotonZoom
+                        etiqueta="Alejar"
+                        simbolo="−"
+                        alPulsar={alejar}
+                        motivoBloqueo={zoom === 1 ? 'El mapa ya muestra la ciudad completa' : null}
+                    />
+                </div>
             </div>
 
             {/* Coordenadas del cursor */}
@@ -129,6 +158,36 @@ export function MapaCiudad(props: Props) {
                     pedidos={props.pedidos}
                 />
             )}
+        </div>
+    );
+}
+
+function BotonZoom({ etiqueta, simbolo, alPulsar, motivoBloqueo }: {
+    etiqueta: string;
+    simbolo: string;
+    alPulsar: () => void;
+    motivoBloqueo: string | null;
+}) {
+    return (
+        <button
+            onClick={alPulsar}
+            disabled={motivoBloqueo != null}
+            aria-label={etiqueta}
+            title={motivoBloqueo ?? etiqueta}
+            className="w-7 bg-panel/95 border border-borde rounded py-1.5 text-xs font-bold text-texto disabled:text-texto2 disabled:cursor-not-allowed"
+        >
+            {simbolo}
+        </button>
+    );
+}
+
+function LineaLeyenda({ texto, discontinua = false }: { texto: string; discontinua?: boolean }) {
+    return (
+        <div className="flex items-center gap-1.5 text-texto2 whitespace-nowrap">
+            <svg width={22} height={10} aria-hidden="true">
+                <line x1={1} y1={5} x2={21} y2={5} stroke="currentColor" strokeWidth={2.4} strokeDasharray={discontinua ? '5 4' : undefined} />
+            </svg>
+            {texto}
         </div>
     );
 }
