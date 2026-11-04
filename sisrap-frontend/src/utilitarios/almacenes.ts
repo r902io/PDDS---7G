@@ -1,4 +1,4 @@
-import type { AlmacenOperativo } from '../types/api';
+import { type SemaforoFiltro, type AlmacenOperativo } from '../types/api';
 
 export type EstadoSemaforoAlmacen = 'VERDE' | 'AMBAR' | 'ROJO' | 'VACIO';
 
@@ -22,4 +22,34 @@ export function obtenerColorHexAlmacen(semaforo: EstadoSemaforoAlmacen): string 
     case 'VACIO': return '#9ca3af';
     case 'VERDE': default: return '#22c55e';
   }
+}
+
+
+/**
+ * Calcula el estado de semáforo de un almacén según su capacidad y stock actual.
+ * D07: Clasificación por semáforo de almacenes.
+ */
+export function obtenerEstadoSemaforoAlmacen(almacen: AlmacenOperativo): SemaforoFiltro {
+  // Almacén central o ilimitado
+  if (almacen.tipo === 'CENTRAL' || almacen.capacidadMaxima === null || almacen.stockActual === null) {
+    return 'VERDE';
+  }
+
+  if (almacen.stockActual === 0) return 'VACIO';
+
+  const porcentaje = (almacen.stockActual / almacen.capacidadMaxima) * 100;
+  if (porcentaje > 70) return 'ROJO';
+  if (porcentaje > 30) return 'AMARILLO';
+  return 'VERDE';
+}
+
+/**
+ * D07: Determina si un almacén debe visibilizarse según el semáforo seleccionado.
+ */
+export function esAlmacenVisible(
+    almacen: AlmacenOperativo,
+    semaforosSeleccionados: SemaforoFiltro[]
+): boolean {
+  const estado = obtenerEstadoSemaforoAlmacen(almacen);
+  return semaforosSeleccionados.includes(estado);
 }

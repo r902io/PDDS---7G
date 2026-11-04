@@ -478,3 +478,19 @@ export interface DetalleRecorridoVehiculo {
   distanciaRecorridaKm: number;
   puntos: PuntoRecorridoVehiculo[];
 }
+
+/**
+ * SemaforoFiltro: Define los estados visuales para la ocupación de
+ * Unidades de Transporte (D06) y la capacidad de Almacenes (D07).
+ */
+export type SemaforoFiltro = 'VERDE' | 'AMARILLO' | 'ROJO' | 'VACIO';
+
+/**
+ * FiltrosOperacion: Estructura global para mantener el estado de
+ * los filtros seleccionados en los paneles laterales.
+ */
+export interface FiltrosOperacion {
+  tiposVehiculo: TipoFlota[];
+  semaforoVehiculos: SemaforoFiltro[];
+  semaforoAlmacenes: SemaforoFiltro[];
+}

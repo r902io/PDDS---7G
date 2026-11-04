@@ -80,7 +80,7 @@ export function MapaCiudad(props: Props) {
                             <ItemLeyenda forma="destinoCliente" color={COLOR_TIPO.AUTO} texto="Destino de ruta" />
                             <span className="text-ambar">● Pedido pendiente</span>
                             <span className="text-azul">● Pedido en ruta</span>
-                            <ItemLeyenda forma="averiaTipo1" texto="Unidad averiada" />
+                            <ItemLeyenda forma="mantenimiento" texto="Unidad averiada" />
                             <ItemLeyenda forma="bloqueo" texto="Tramo bloqueado" />
                             <ItemLeyenda forma="mantenimiento" texto="En mantenimiento" />
                             <LineaLeyenda texto="Ruta real del envío" />
