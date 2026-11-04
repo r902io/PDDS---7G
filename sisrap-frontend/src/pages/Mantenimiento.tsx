@@ -448,7 +448,7 @@ function FichaVehiculo({ id, cerrar, alCambiar }: { id: string; cerrar: () => vo
                 {averias.datos.map((a) => (
                   <li key={a.idIncidencia} className="bg-bg border border-borde rounded-md px-3 py-2 text-xs">
                     <div className="flex items-center gap-2">
-                      <IconoMapaSvg forma="mantenimiento" tamano={18} />
+                      <IconoMapaSvg forma={obtenerFormaAveria(a.tipoAveria)} tamano={18} />
                       <span className="text-texto font-semibold">{ETIQUETA_AVERIA[a.tipoAveria] ?? a.tipoAveria}</span>
                       <span className="ml-auto"><Insignia texto={a.activa ? 'Activa' : 'Resuelta'} tono={a.activa ? 'aviso' : 'ok'} /></span>
                     </div>
