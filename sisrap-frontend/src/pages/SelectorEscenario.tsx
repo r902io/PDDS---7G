@@ -1,7 +1,8 @@
+import { RANGOS_INICIALES, rangosValidos, type RangosSemaforo } from '../estado/SemaforoVehiculos';
 import { useEffect, useState, type ReactElement } from 'react';
 import type { ConfiguracionOperativa, EscenarioSimulacion, CargaHistorica, TipoFlota } from '../types/api';
 import { useSimulacion } from '../estado/SimulacionContext';
-import { navegar } from '../estado/navegacion';
+import { navegar } from '../estado/NavegacionApp';
 import { apiFetch, textoError } from '../services/apiClient';
 import { useConsulta } from '../hooks/useConsulta';
 import { Boton } from '../components/ui/Boton';
@@ -34,6 +35,7 @@ const NOMBRES_FLOTA: Record<TipoFlota, string> = {
 };
 
 type PlantillaEscenario = ConfiguracionOperativa & {
+  semaforoVehiculos?: RangosSemaforo;
   escenario: EscenarioSimulacion;
   anchoKm: number;
   altoKm: number;
@@ -102,7 +104,7 @@ function EntradaNumero({ etiqueta, valor, cambiar, disabled, ancho = 'w-12', min
   );
 }
 
-export function SelectorEscenario() {
+export function SelectorEscenario({ datosDelCaso = false }: { datosDelCaso?: boolean }) {
   const { snapshot, sesion, iniciar, accionEnCurso, reintentarSesion } = useSimulacion();
   const [escenario, setEscenario] = useState<EscenarioSimulacion>('OPERACION_DIARIA');
   const [fechaInicio, setFechaInicio] = useState(hoyLocal());
@@ -160,8 +162,12 @@ export function SelectorEscenario() {
   const altoKm = numero(leer('mapa.alto', configuracionBackend?.altoKm ?? 50));
   const dimensionesValidas = Number.isInteger(anchoKm) && Number.isInteger(altoKm)
     && anchoKm >= 1 && anchoKm <= 150 && altoKm >= 1 && altoKm <= 150;
+  const rangos = {
+    amarilloDesdePct: numero(leer('semaforo.amarillo', base?.semaforoVehiculos?.amarilloDesdePct ?? RANGOS_INICIALES.amarilloDesdePct)),
+    rojoDesdePct: numero(leer('semaforo.rojo', base?.semaforoVehiculos?.rojoDesdePct ?? RANGOS_INICIALES.rojoDesdePct)),
+  };
   const borrador: PlantillaEscenario | null = configuracionBackend ? {
-    escenario, anchoKm, altoKm,
+    escenario, anchoKm, altoKm, semaforoVehiculos: rangos,
     almacenes: configuracionBackend.almacenes.map(a => ({
       ...a,
       ubicacionX: numero(leer(`a.${a.idAlmacen}.x`, a.ubicacionX)),
@@ -177,6 +183,7 @@ export function SelectorEscenario() {
     })),
   } : null;
   const errorValidacion = !dimensionesValidas ? 'El ancho y alto deben ser enteros entre 1 y 150 km.'
+    : !rangosValidos(rangos) ? 'Semáforo: introduce porcentajes enteros con 1 ≤ amarillo < rojo ≤ 100.'
     : borrador ? validar(borrador, anchoKm, altoKm) : null;
 
   async function guardar() {
@@ -204,19 +211,19 @@ export function SelectorEscenario() {
     sesion.fase === 'ERROR' ? 'No hay una sesión disponible para iniciar.' :
     accionEnCurso === 'INICIAR' ? 'Solicitud de inicio en curso.' :
     activa ? 'Existe otra corrida en curso.' :
-    guardando || calendarioOcupado || historicosOcupados ? 'Guardando los datos del caso.' :
+    guardando || calendarioOcupado || historicosOcupados ? 'Guardando los parámetros del escenario.' :
     !configuracionBackend || consulta.cargando ? 'Cargando la configuración del escenario.' :
     consulta.error ? 'No se pudo verificar la configuración del escenario.' :
     pendientes ? 'Guarda los cambios del mapa, almacenes y flota antes de iniciar.' :
     errorValidacion ??
     (historicos.error ? 'No se pudo verificar la carga histórica del escenario.' :
     historicos.cargando || !historicos.datos ? 'Consultando los históricos del escenario.' :
-    historicos.datos.length === 0 ? 'Carga al menos un mes histórico en Datos del caso.' :
+    !historicos.datos.some(carga => carga.filas > 0) ? 'Este escenario no tiene pedidos cargados. Carga al menos un archivo de pedidos en Parámetros del escenario antes de iniciar.' :
     !fechaValida ? 'Indica una fecha de inicio válida.' :
     !horaValida ? 'Indica una hora de inicio válida.' : undefined);
 
   async function alIniciar() {
-    if (motivoBloqueo) return;
+    if (motivoBloqueo) { setErrorInicio(motivoBloqueo); return; }
     setErrorInicio(null);
     const semilla = crypto.getRandomValues(new Uint32Array(1))[0] & 0x7fffffff;
     const resultado = await iniciar(escenario, fechaInicio, semilla, horaInicio);
@@ -228,10 +235,11 @@ export function SelectorEscenario() {
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-6xl mx-auto w-full px-4 sm:px-8 py-6 space-y-6">
         <div>
-          <h1 className="text-2xl font-semibold text-texto">Seleccione el escenario de operación</h1>
+          <h1 className="text-2xl font-semibold text-texto">{datosDelCaso ? 'Parámetros del escenario' : 'Seleccione el escenario de operación'}</h1>
           <p className="text-sm text-texto2 mt-1 max-w-3xl leading-relaxed">
-            Solo puede ejecutarse una corrida a la vez. Quien la inicia puede detenerla; los demás usuarios pueden
-            seguir su avance en tiempo real como observadores.
+            {datosDelCaso
+              ? 'Configura cada escenario y carga sus pedidos antes de iniciar una simulación.'
+              : 'Elige un escenario y la fecha de inicio de la simulación.'}
           </p>
         </div>
 
@@ -255,7 +263,7 @@ export function SelectorEscenario() {
         {configuracionIncompleta && <ErrorCarga titulo="Configuración operativa incompleta" error="El backend no devolvió las listas de almacenes y flota requeridas. Comprueba la configuración del escenario." reintentar={consulta.recargar} />}
 
         <section>
-          <h2 className="text-xs uppercase tracking-wider text-texto2 font-semibold border-b border-borde pb-1.5 mb-3">1 · Escenario</h2>
+          <h2 className="text-xs uppercase tracking-wider text-texto2 font-semibold border-b border-borde pb-1.5 mb-3">Escenario</h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4" role="radiogroup" aria-label="Escenario">
             {ORDEN_ESCENARIOS.map(id => {
               const e = ESCENARIOS[id];
@@ -271,8 +279,8 @@ export function SelectorEscenario() {
                     {elegido && <span className="text-mint flex items-center gap-1 text-xs"><IconoCorrecto tamano={18} /> Elegido</span>}
                   </div>
                   <h3 className="text-base font-semibold text-texto">{e.titulo}</h3>
-                  <p className="text-[13px] text-texto2 leading-relaxed flex-1">{e.resumen}</p>
-                  <div className="border-t border-borde pt-2 text-xs text-texto2">
+                  <p className="text-sm text-texto2 leading-relaxed flex-1">{e.resumen}</p>
+                  <div className="border-t border-borde pt-2 text-sm text-texto2">
                     <span className="text-texto font-semibold">Condición de término: </span>{e.condicionTermino}
                   </div>
                 </button>
@@ -281,26 +289,51 @@ export function SelectorEscenario() {
           </div>
         </section>
 
-        <section className="grid grid-cols-1 lg:grid-cols-[minmax(280px,0.8fr)_minmax(0,1.2fr)] items-start gap-4">
-          <Panel className="h-[320px] sm:h-[300px] overflow-y-auto lg:sticky lg:top-4" titulo="2 · Inicio de la corrida" subtitulo="Indica la fecha y hora desde las que comenzará la simulación.">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <Campo label="Fecha de inicio" type="date" value={fechaInicio}
-                onChange={e => setFechaInicio(e.target.value)} disabled={activa || !!accionEnCurso} required />
-              <Campo label="Hora de inicio" type="time" value={horaInicio} step={60}
-                onChange={e => setHoraInicio(e.target.value)} disabled={activa || !!accionEnCurso} required />
-            </div>
-            <div className="mt-4 flex flex-col items-start gap-2">
-              <Boton variant="primario" icono={<IconoIniciar tamano={16} />} onClick={alIniciar}
-                disabled={motivoBloqueo != null} disabledReason={motivoBloqueo}
-                motivoVisible className="px-6 py-2.5 text-base">
-                {accionEnCurso === 'INICIAR' ? 'Iniciando…' : 'Iniciar corrida'}
+        <section className="space-y-4">
+          {!datosDelCaso && <Panel className="w-full [&_label]:text-sm [&_h3]:text-base [&_h3]:normal-case [&_h3]:tracking-normal [&_p]:text-sm" titulo="Inicio de la simulación" subtitulo="Fecha y hora desde las que se simulará la operación.">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-[1fr_1fr_auto] items-end gap-4">
+              <Campo label="Fecha de inicio" type="date" value={fechaInicio} className="min-h-11 text-base"
+                onChange={e => { setFechaInicio(e.target.value); setErrorInicio(null); }} disabled={activa || !!accionEnCurso} required />
+              <Campo label="Hora de inicio" type="time" value={horaInicio} step={60} className="min-h-11 text-base"
+                onChange={e => { setHoraInicio(e.target.value); setErrorInicio(null); }} disabled={activa || !!accionEnCurso} required />
+              <Boton variant="primario" icono={<IconoIniciar tamano={18} />} onClick={alIniciar}
+                disabled={activa || !!accionEnCurso || guardando || calendarioOcupado || historicosOcupados}
+                disabledReason={activa ? 'Hay una simulación en curso.' : 'Espera a que termine la operación actual.'}
+                className="min-h-11 px-6 py-2.5 text-base w-full sm:col-span-2 lg:col-span-1">
+                {accionEnCurso === 'INICIAR' ? 'Iniciando…' : 'Iniciar simulación'}
               </Boton>
-              {errorInicio && <ErrorCarga titulo="No se pudo iniciar la corrida" error={errorInicio} className="w-full" />}
             </div>
-          </Panel>
+            {errorInicio && <div role="alert" className="mt-4 rounded-md border border-ambar/50 bg-ambar/10 p-4 text-sm">
+              <p className="font-semibold text-texto">No se puede iniciar la simulación</p>
+              <p className="mt-1 text-texto">{errorInicio}</p>
+              <button className="mt-3 min-h-11 rounded-md border border-borde bg-panel px-4 py-2 font-medium text-texto hover:border-mint focus-visible:outline-2 focus-visible:outline-mint"
+                onClick={() => { setErrorInicio(null); navegar({ nombre: 'datos' }); }}>
+                Revisar parámetros del escenario
+              </button>
+            </div>}
+          </Panel>}
 
-          <Panel key={escenario} titulo="Datos del caso" subtitulo={`Configuración de ${ESCENARIOS[escenario].titulo.toLowerCase()}.`}>
+          <div hidden={!datosDelCaso}>
+          <Panel key={escenario} titulo="Parámetros del escenario" subtitulo={`Configuración de ${ESCENARIOS[escenario].titulo.toLowerCase()}.`}>
             <div className="space-y-4 text-xs">
+              <section className="rounded-lg border border-borde bg-panel p-4 space-y-3 text-sm">
+                <h4 className="font-semibold text-texto">Semáforo de carga de vehículos</h4>
+                <p className="text-texto2">Porcentaje de la capacidad ocupada. Estos rangos se guardan solo para el escenario seleccionado.</p>
+                <div className="flex flex-wrap gap-5">
+                  <label className="flex items-center gap-2">Amarillo desde (%)
+                    <EntradaNumero etiqueta="Porcentaje de inicio del amarillo" valor={leer('semaforo.amarillo', base?.semaforoVehiculos?.amarilloDesdePct ?? 50)} cambiar={v => cambiar('semaforo.amarillo', v)} disabled={!editables} minimo={1} maximo={99} ancho="w-20" />
+                  </label>
+                  <label className="flex items-center gap-2">Rojo desde (%)
+                    <EntradaNumero etiqueta="Porcentaje de inicio del rojo" valor={leer('semaforo.rojo', base?.semaforoVehiculos?.rojoDesdePct ?? 80)} cambiar={v => cambiar('semaforo.rojo', v)} disabled={!editables} minimo={2} maximo={100} ancho="w-20" />
+                  </label>
+                </div>
+                {rangosValidos(rangos) && <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+                  <p className="rounded bg-bg p-2 text-texto2">Vacío: 0 paquetes</p>
+                  <p className="rounded bg-bg p-2 text-mint">Verde: más de 0 y menos de {rangos.amarilloDesdePct}%</p>
+                  <p className="rounded bg-bg p-2 text-ambar">Amarillo: desde {rangos.amarilloDesdePct}% hasta menos de {rangos.rojoDesdePct}%</p>
+                  <p className="rounded bg-bg p-2 text-rojo">Rojo: {rangos.rojoDesdePct}% o más</p>
+                </div>}
+              </section>
               <div className="rounded-lg border border-borde bg-panel p-3 space-y-3">
                 <h4 className="text-sm font-semibold text-texto">Mapa de la ciudad</h4>
                 <div className="flex flex-wrap items-center gap-4">
@@ -404,12 +437,13 @@ export function SelectorEscenario() {
                 <ErrorCarga titulo="No se pudo consultar la configuración" error={consulta.error} reintentar={consulta.recargar} />}
               <CalendariosCaso bloqueado={activa || guardando || historicosOcupados || pendientes || !configuracionBackend || !!accionEnCurso}
                 alOcupado={setCalendarioOcupado} fechaInicio={fechaInicio} horaInicio={horaInicio} escenario={escenario} />
-              <p className="text-xs text-texto2">Cada escenario conserva sus propios datos del caso. Los cambios sin guardar se conservan al cambiar de escenario.</p>
+              <p className="text-xs text-texto2">Cada escenario conserva sus propios parámetros del escenario. Los cambios sin guardar se conservan al cambiar de escenario.</p>
               <HistorialPedidos escenario={escenario} consulta={historicos} alOcupado={setHistoricosOcupados}
                 bloqueado={activa || guardando || calendarioOcupado || pendientes || !configuracionBackend || consulta.cargando || !!consulta.error || !!accionEnCurso} />
               <p className="text-xs text-texto2">La carga y eliminación de históricos se aplica únicamente al escenario seleccionado.</p>
             </div>
           </Panel>
+          </div>
         </section>
       </div>
     </div>

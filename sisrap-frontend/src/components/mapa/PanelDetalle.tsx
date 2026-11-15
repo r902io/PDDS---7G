@@ -1,3 +1,4 @@
+import { useRangosSemaforo, clasificarCarga, COLOR_SEMAFORO } from '../../estado/SemaforoVehiculos';
 import type { ReactNode } from 'react';
 import type { AlmacenOperativo, PedidoOperativo, VehiculoOperativo, VehiculoSnapshot } from '../../types/api';
 import type { Seleccion } from '../../hooks/useMapCanvas';
@@ -41,7 +42,7 @@ export function PanelDetalle({ seleccion, vehiculos, pedidos, catalogo, almacene
 
   return (
       <aside
-          className="absolute top-0 right-0 bottom-0 z-20 w-[380px] max-w-[92%] bg-panel border-l border-mint shadow-2xl flex flex-col"
+          className="absolute top-12 right-3 z-20 w-[320px] max-w-[calc(100%-24px)] max-h-[calc(100%-72px)] overflow-y-auto rounded-xl bg-panel border border-mint/60 shadow-2xl flex flex-col"
           aria-label="Detalle de la selección"
       >
         {seleccion.tipo === 'pedido' ? (
@@ -128,8 +129,8 @@ function Cabecera({ titulo, sub, icono, cerrar }: { titulo: string; sub?: string
 function Dato({ k, v, mono = false }: { k: string; v: ReactNode; mono?: boolean }) {
   return (
       <div className="flex gap-3 py-1 text-[13px] items-center">
-        <span className="w-40 shrink-0 text-texto2">{k}</span>
-        <span className={`text-texto ${mono ? 'font-mono' : ''} ${v === NO_DISPONIBLE ? 'text-texto2 italic' : ''}`}>{v}</span>
+        <span className="w-28 shrink-0 text-texto2">{k}</span>
+        <span className={`min-w-0 break-words text-texto ${mono ? 'font-mono' : ''} ${v === NO_DISPONIBLE ? 'text-texto2 italic' : ''}`}>{v}</span>
       </div>
   );
 }
@@ -147,6 +148,7 @@ function DetalleVehiculo({
   catalogoCargado: boolean;
   cerrar: () => void;
 }) {
+  const rangos = useRangosSemaforo();
   const tipo = tipoDesdeCodigo(id);
   const forma = v && estaAveriado(v.estado)
       ? obtenerFormaAveria(v.tipoAveria)
@@ -224,19 +226,13 @@ function DetalleVehiculo({
             {(() => {
               const stock = v.cargaActualPaquetes ?? 0;
               const max = v.capacidadPaquetes || catalogo?.capacidadPaquetes || 1;
-              const pct = stock / max;
 
-              let colorBg = 'bg-gray-400';
-              if (stock > 0) {
-                if (pct >= 0.8) colorBg = 'bg-red-500';
-                else if (pct >= 0.5) colorBg = 'bg-amber-500';
-                else colorBg = 'bg-green-500';
-              }
+              const colorBg = COLOR_SEMAFORO[clasificarCarga(stock, max, rangos)];
 
               return (
                   <div
-                      className={`h-full rounded-full ${colorBg}`}
-                      style={{ width: `${Math.min(100, (100 * stock) / max)}%` }}
+                      className="h-full rounded-full"
+                      style={{ backgroundColor: colorBg, width: `${Math.min(100, (100 * stock) / max)}%` }}
                   />
               );
             })()}
@@ -295,6 +291,7 @@ function DetalleNodo({
   alSeleccionar: (s: Seleccion) => void;
   cerrar: () => void;
 }) {
+  const rangos = useRangosSemaforo();
   const ordenados = [...vehiculos].sort((a, b) => {
     const stockA = a.cargaActualPaquetes ?? 0;
     const maxA = a.capacidadPaquetes || (a.idVehiculo.startsWith('TA') ? 24 : a.idVehiculo.startsWith('TM') ? 8 : 4);
@@ -354,20 +351,12 @@ function DetalleNodo({
                       {(() => {
                         const stock = v.cargaActualPaquetes ?? 0;
                         const max = v.capacidadPaquetes || (tipo === 'AUTO' ? 24 : tipo === 'MOTO' ? 8 : tipo === 'BICICLETA' ? 4 : 1);
-                        const pct = stock / max;
-
-                        let colorTexto = 'text-gray-400';
-                        let textoStock = 'VACÍO';
-                        if (stock > 0) {
-                          textoStock = `${stock} paq.`;
-                          if (pct >= 0.8) colorTexto = 'text-red-500';
-                          else if (pct >= 0.5) colorTexto = 'text-amber-500';
-                          else colorTexto = 'text-green-500';
-                        }
+          
+                        const colorTexto = COLOR_SEMAFORO[clasificarCarga(stock, max, rangos)];
 
                         return (
-                            <span className={`text-[11px] font-bold ${colorTexto} whitespace-nowrap`}>
-                        {textoStock}
+                            <span className="text-[11px] font-bold whitespace-nowrap" style={{ color: colorTexto }}>
+                        {`${stock} / ${max}`}
                       </span>
                         );
                       })()}

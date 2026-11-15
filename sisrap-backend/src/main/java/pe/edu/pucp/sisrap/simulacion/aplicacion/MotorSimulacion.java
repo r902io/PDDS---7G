@@ -42,7 +42,6 @@ import pe.edu.pucp.sisrap.planificador.dominio.construccion.ConstructorVoraz;
 import pe.edu.pucp.sisrap.planificador.dominio.modelo.ContextoPlanificacion;
 import pe.edu.pucp.sisrap.planificador.dominio.modelo.Ruta;
 import pe.edu.pucp.sisrap.planificador.dominio.modelo.JornadaOperativa;
-import pe.edu.pucp.sisrap.planificador.dominio.modelo.ArcoReticula;
 import pe.edu.pucp.sisrap.planificador.dominio.modelo.Solucion;
 import pe.edu.pucp.sisrap.planificador.dominio.objetivo.FuncionObjetivo;
 import pe.edu.pucp.sisrap.simulacion.dominio.ConfiguracionSimulacion;
@@ -1440,7 +1439,7 @@ public class MotorSimulacion {
             }
             plan.camino.clear();
             plan.salidasCamino.clear();
-
+            plan.sinRutaDisponible = false;
             registrarEventoRecorrido(plan, "DESVIO_BLOQUEO");
         }
     }
@@ -1506,7 +1505,15 @@ public class MotorSimulacion {
                             plan.posicion,plan.destinoActual,plan.posicionAnterior,instanteEvento(plan),
                             plan.velocidadKmh,plan.distanciaNodoKm,bloqueados,calendarioBloqueos,plan.ancho,plan.alto);
                     plan.salidasCamino.clear();
-                    if(tramo.isEmpty()) { plan.creditoHoras=0; break; }
+                    if (tramo.isEmpty()) {
+                        plan.creditoHoras = 0;
+                        if (!plan.sinRutaDisponible) {
+                            plan.sinRutaDisponible = true;
+                            programarPlanificacionInmediata();
+                        }
+                        break;
+                    }
+                    plan.sinRutaDisponible = false;
                     plan.camino.addAll(tramo.get().nodos());
                     plan.salidasCamino.addAll(tramo.get().salidas());
                 }
@@ -1526,18 +1533,14 @@ public class MotorSimulacion {
                 }
 
                 Nodo siguiente = plan.camino.peekFirst();
-                if (siguiente == null || !ArcoReticula.transitableComoExtremo(
-                        plan.posicion.getX(), plan.posicion.getY(),
-                        siguiente.getX(), siguiente.getY(), bloqueados,
-                        true, mismaPosicion(siguiente, plan.destinoActual))
-                        || (bloqueados.contains(CaminoReticula.clave(
-                                plan.posicion.getX(), plan.posicion.getY()))
-                        && plan.posicionAnterior != null
-                        && !mismaPosicion(siguiente, plan.posicionAnterior))) {
+                if (siguiente == null || !pe.edu.pucp.sisrap.planificador.dominio.modelo.DistanciaReticula.pasoTemporalPermitido(
+                        plan.posicion, siguiente, plan.posicionAnterior,
+                        mismaPosicion(siguiente, plan.destinoActual), instanteEvento(plan), horasPorNodo,
+                        bloqueados, calendarioBloqueos)) {
                     plan.camino.clear();
-            plan.salidasCamino.clear();
-                    plan.creditoHoras = 0;
-                    break;
+                    plan.salidasCamino.clear();
+                    programarPlanificacionInmediata();
+                    continue;
                 }
 
                 plan.creditoHoras -= horasPorNodo;
@@ -2002,9 +2005,11 @@ public class MotorSimulacion {
             Nodo siguiente = plan.camino.peekFirst();
             if (siguiente != null && plan.fase != FaseUnidad.ATENDIENDO
                     && plan.trasvaseRestanteHoras <= 0 && plan.creditoHoras > 0
-                    && ArcoReticula.transitableComoExtremo(plan.posicion.getX(), plan.posicion.getY(),
-                            siguiente.getX(), siguiente.getY(), bloqueados, true,
-                            plan.destinoActual != null && mismaPosicion(siguiente, plan.destinoActual))) {
+                    && pe.edu.pucp.sisrap.planificador.dominio.modelo.DistanciaReticula.pasoTemporalPermitido(
+                            plan.posicion, siguiente, plan.posicionAnterior,
+                            plan.destinoActual != null && mismaPosicion(siguiente, plan.destinoActual),
+                            instanteEvento(plan), plan.distanciaNodoKm / plan.velocidadKmh,
+                            bloqueados, calendarioBloqueos)) {
                 fraccion = Math.min(1, plan.creditoHoras * plan.velocidadKmh / plan.distanciaNodoKm);
                 xVisual += (siguiente.getX() - plan.posicion.getX()) * fraccion;
                 yVisual += (siguiente.getY() - plan.posicion.getY()) * fraccion;
@@ -2320,6 +2325,7 @@ public class MotorSimulacion {
         private Pedido pedidoObjetivo;
         private final List<Pedido> entregasEnParada = new ArrayList<>();
         private final Deque<Nodo> camino = new ArrayDeque<>();
+        private boolean sinRutaDisponible;
         private final Deque<LocalDateTime> salidasCamino = new ArrayDeque<>();
         private double creditoHoras;
         private double trasvaseRestanteHoras;

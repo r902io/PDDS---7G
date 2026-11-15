@@ -1,5 +1,5 @@
 import { SimulacionProvider, useSimulacion } from './estado/SimulacionContext';
-import { useVista } from './estado/navegacion';
+import { useVista } from './estado/NavegacionApp';
 import { Cabecera } from './components/Cabecera';
 import { SelectorEscenario } from './pages/SelectorEscenario';
 import { EscenarioDashboard } from './pages/EscenarioDashboard';
@@ -22,7 +22,7 @@ function Aplicacion() {
         </div>
       )}
 
-      {vista.nombre === 'selector' && <SelectorEscenario />}
+      {(vista.nombre === 'selector' || vista.nombre === 'datos') && <SelectorEscenario datosDelCaso={vista.nombre === 'datos'} />}
       {vista.nombre === 'operacion' && <EscenarioDashboard />}
       {vista.nombre === 'resultado' && <ResultadoCorrida />}
       {vista.nombre === 'mantenimiento' && <Mantenimiento pestana={vista.pestana} />}

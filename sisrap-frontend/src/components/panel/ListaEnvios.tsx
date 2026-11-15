@@ -45,7 +45,7 @@ function filtrosValidos(valor: unknown): boolean {
     && horasValidas(f.horasEntregados) && horasValidas(f.horasPorEntregar);
 }
 
-/** E31 a E33: una línea por asignación, con filtros por ventana de tiempo. */
+
 export const ListaEnvios = memo(function ListaEnvios({
   idSimulacion,
   estadoCorrida,

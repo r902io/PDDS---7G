@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { FiltroFlujoVisual } from '../../estado/SimulacionContext';
 import type { AlmacenOperativo, BloqueoRespuesta, PedidoOperativo, VehiculoSnapshot } from '../../types/api';
-import { useMapCanvas, ZOOM_MAXIMO, type Dimensiones, type Objetivo, type Seleccion } from '../../hooks/useMapCanvas';
+import { useMapCanvas, ZOOM_MAXIMO, type Dimensiones, type Objetivo, type Seleccion } from '../../hooks/useMapaOperacion';
 import { IconoEncuadrar, IconoMapaSvg } from '../iconos';
 import {
     formatoCoordenada,
@@ -33,8 +33,6 @@ interface Props {
     vehiculoVisible?: (vehiculo: VehiculoSnapshot) => boolean;
 }
 
-/** Longitudes "redondas" para la escala gráfica. */
-const LARGOS_ESCALA = [1, 2, 5, 10, 20];
 
 let preferenciaLeyendaAbierta = true;
 
@@ -47,11 +45,9 @@ export function MapaCiudad(props: Props) {
 }
 
 function MapaCiudadCanvas(props: Props) {
-    const { canvasRef, relojVisualRef, vehiculosCanvasRef, hover, cursorKm, escalaPx, zoom, encuadrar, acercar, alejar, manejadores } = useMapCanvas({ ...props, rutasDestacadas: props.rutasDestacadas ?? SIN_RUTAS });
+    const { canvasRef, vehiculosCanvasRef, hover, cursorKm, zoom, encuadrar, acercar, alejar, manejadores } = useMapCanvas({ ...props, rutasDestacadas: props.rutasDestacadas ?? SIN_RUTAS });
     const [leyendaAbierta, setLeyendaAbierta] = useState(preferenciaLeyendaAbierta);
 
-    // Escala gráfica: el mayor largo redondo que quepa en ~120 px.
-    const kmEscala = [...LARGOS_ESCALA].reverse().find((k) => k * escalaPx <= 130) ?? 1;
 
     return (
         <div className="relative w-full h-full overflow-hidden bg-bg">
@@ -65,7 +61,6 @@ function MapaCiudadCanvas(props: Props) {
 
             <canvas ref={vehiculosCanvasRef} className="absolute left-0 top-0 pointer-events-none" aria-hidden="true" />
 
-            <span ref={relojVisualRef} className="absolute right-2.5 top-2.5 z-10 bg-panel/95 border border-borde rounded px-2 py-1 font-mono text-xs text-texto2" />
 
             {/* Leyenda */}
             <div className="absolute left-2.5 top-2.5 z-10 bg-panel/95 border border-borde rounded-lg px-3 py-2 text-xs max-w-[340px]">
@@ -95,6 +90,7 @@ function MapaCiudadCanvas(props: Props) {
                             <ItemLeyenda forma="mantenimiento" texto="En mantenimiento" />
                             <LineaLeyenda texto="Ruta real del envío" />
                             <LineaLeyenda texto="Ruta estimada" discontinua />
+                            <span className="col-span-2 text-texto2">Punteado sobre bloqueo: tramo previsto, aún no transitable.</span>
                             <div className="flex items-center gap-1.5 text-texto2 whitespace-nowrap">
                 <span className="w-6 h-5 flex items-center justify-center">
                   <span className="w-[18px] h-[18px] rounded-full border border-texto bg-panel2 text-[10px] font-mono text-texto flex items-center justify-center">
@@ -106,19 +102,14 @@ function MapaCiudadCanvas(props: Props) {
                         </div>
                         <p className="mt-1.5 pt-1.5 border-t border-borde text-[11px] text-texto2 leading-snug">
                             La cifra sobre un almacén indica cuántas unidades están <b className="text-texto">dentro</b> de él.
-                            Pase el cursor sobre una unidad o su ruta para resaltarla; haga clic para fijarla.
+                            Pase el cursor sobre una unidad o su ruta para resaltarla; haga clic para abrir su detalle y vuelva a pulsar para cerrarlo.
                         </p>
                     </>
                 )}
             </div>
 
-            {/* Escala gráfica y encuadre */}
+            {/* Controles del mapa */}
             <div className="absolute left-2.5 bottom-2.5 z-10 flex items-end gap-2">
-                {/* Ancho fijo: la barra cambia con el zoom y no debe mover los botones. */}
-                <div className="min-w-[148px] bg-panel/95 border border-borde rounded px-2 py-1">
-                    <div className="h-2 border-x-2 border-b-2 border-texto2" style={{ width: kmEscala * escalaPx }} />
-                    <div className="font-mono text-[11px] text-texto mt-0.5">{kmEscala} km</div>
-                </div>
                 <button
                     onClick={encuadrar}
                     disabled={zoom === 1}
