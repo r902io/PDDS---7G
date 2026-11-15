@@ -12,6 +12,7 @@ import type { EscenarioSimulacion, SnapshotSimulacion, VehiculoSnapshot } from '
 import { ApiError, textoError } from '../services/apiClient';
 import { asegurarSesion } from '../services/sessionService';
 import { simulacionService, suscribirEventos, type EstadoConexion } from '../services/simulacionService';
+import { registrarInicioReal, registrarFinReal } from '../components/TiemposOperacion';
 import { corridaActiva } from '../utilitarios/escenarios';
 
 // ---------------------------------------------------------------------------
@@ -217,6 +218,7 @@ export function SimulacionProvider({ children }: { children: React.ReactNode }) 
     if (!esMasReciente(s, snapshotActual.current)) return;
     const anterior = snapshotActual.current;
     snapshotActual.current = s;
+    registrarFinReal(s);
     flujoVisual.current.actual = s;
     for (const oyente of flujoVisual.current.oyentes) oyente(s);
     pendiente.current = s;
@@ -311,9 +313,13 @@ export function SimulacionProvider({ children }: { children: React.ReactNode }) 
         return { ok: false, corridaEnCurso: false, mensaje: 'No hay una sesión válida con el backend.' };
       }
       despachar({ tipo: 'ACCION', accion: 'INICIAR' });
+      const inicioReal = Date.now();
       try {
         const s = await simulacionService.iniciar({ escenario, fechaInicio, horaInicio, semilla });
-        if (s.idSimulacion != null) fijarControl({ sesionId, idSimulacion: s.idSimulacion });
+        if (s.idSimulacion != null) {
+          registrarInicioReal(s.idSimulacion, inicioReal);
+          fijarControl({ sesionId, idSimulacion: s.idSimulacion });
+        }
         recibir(s, 'HTTP');
         despachar({ tipo: 'AVISO', aviso: null });
         return { ok: true };

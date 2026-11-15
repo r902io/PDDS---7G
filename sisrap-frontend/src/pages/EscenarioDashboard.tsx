@@ -1,3 +1,4 @@
+import { SemaforoProvider, useRangosSemaforo, clasificarVehiculo, type RangosSemaforo } from '../estado/SemaforoVehiculos';
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from 'react';
 import type { AlmacenOperativo, PedidoOperativo, SnapshotSimulacion, VehiculoOperativo, VehiculoSnapshot } from '../types/api';
 import { useSimulacion } from '../estado/SimulacionContext';
@@ -32,11 +33,9 @@ import {
   tipoResultado,
 } from '../utilitarios/escenarios';
 import {
-  diaSimulado,
   formatoDecimal,
   formatoEntero,
   formatoFechaHora,
-  formatoHora,
   formatoSoles,
   horaNavegador,
   NO_DISPONIBLE
@@ -72,19 +71,19 @@ interface FiltrosOperacion {
   semaforoAlmacenes: SemaforoFiltro[];
 }
 
-function esVehiculoVisible(v: VehiculoSnapshot, filtros: FiltrosOperacion): boolean {
+function esVehiculoVisible(v: VehiculoSnapshot, filtros: FiltrosOperacion, rangos: RangosSemaforo): boolean {
   const tipo = tipoDesdeCodigo(v.idVehiculo);
   if (tipo && !filtros.tiposVehiculo.includes(tipo)) return false;
-  const carga = v.cargaActualPaquetes ?? 0;
-  const capacidad = v.capacidadPaquetes > 0 ? v.capacidadPaquetes
-    : tipo === 'AUTO' ? 24 : tipo === 'MOTO' ? 8 : tipo === 'BICICLETA' ? 4 : 0;
-  const porcentaje = capacidad > 0 ? carga / capacidad : 0;
-  const semaforo: SemaforoFiltro = carga === 0 ? 'VACIO'
-    : porcentaje >= 0.8 ? 'ROJO' : porcentaje >= 0.5 ? 'AMARILLO' : 'VERDE';
-  return filtros.semaforoVehiculos.includes(semaforo);
+  return filtros.semaforoVehiculos.includes(clasificarVehiculo(v, rangos));
 }
 
 export function EscenarioDashboard() {
+  const { snapshot } = useSimulacion();
+  return <SemaforoProvider key={`${snapshot?.idSimulacion}-${snapshot?.escenario}`} escenario={snapshot?.escenario ?? null}><OperacionConSemaforo /></SemaforoProvider>;
+}
+
+function OperacionConSemaforo() {
+  const rangos = useRangosSemaforo();
   const sim = useSimulacion();
   const { snapshot, datosVigentes, recibidoEn, errorEstado } = sim;
   const activa = corridaActiva(snapshot);
@@ -94,6 +93,16 @@ export function EscenarioDashboard() {
   const [izqColapsado, setIzqColapsado] = useState(angosta);
   const [derColapsado, setDerColapsado] = useState(angosta);
   const [seleccion, setSeleccion] = useState<Seleccion>(null);
+  const alternarSeleccion = useCallback((siguiente: Seleccion) => {
+    setSeleccion(actual => {
+      if (!actual || !siguiente || actual.tipo !== siguiente.tipo) return siguiente;
+      const igual = actual.tipo === 'nodo' && siguiente.tipo === 'nodo'
+        ? actual.x === siguiente.x && actual.y === siguiente.y
+        : 'id' in actual && 'id' in siguiente && actual.id === siguiente.id;
+      return igual ? null : siguiente;
+    });
+  }, []);
+  useEffect(() => setSeleccion(null), [snapshot?.idSimulacion]);
   const [pedidoResaltado, setPedidoResaltado] = useState<number | null>(null);
   const rutasDestacadas = useRutasEnvio(pedidoResaltado, snapshot?.idSimulacion ?? null, activa);
   const [confirmarDetener, setConfirmarDetener] = useState(false);
@@ -110,7 +119,7 @@ export function EscenarioDashboard() {
   const toggleSemaforo = (campo: 'semaforoVehiculos' | 'semaforoAlmacenes', valor: SemaforoFiltro) =>
     setFiltros(prev => ({ ...prev, [campo]: prev[campo].includes(valor)
       ? prev[campo].filter(s => s !== valor) : [...prev[campo], valor] }));
-  const vehiculoVisible = useCallback((v: VehiculoSnapshot) => esVehiculoVisible(v, filtros), [filtros]);
+  const vehiculoVisible = useCallback((v: VehiculoSnapshot) => esVehiculoVisible(v, filtros, rangos), [filtros, rangos]);
 
   // Datos complementarios del backend.
   const mapa = useConsulta((s) => catalogoService.mapa(s), `mapa-${snapshot?.idSimulacion}`);
@@ -188,30 +197,27 @@ export function EscenarioDashboard() {
       {/* Panel izquierdo: parámetros */}
       <PanelLateral
           lado="izq"
-          titulo="Parámetros de la corrida"
+          titulo="Control de la operación"
           colapsado={izqColapsado}
           alternar={() => setIzqColapsado((v) => !v)}
       >
         <PanelParametros
             snapshot={snapshot}
-            flota={flota.datos}
-            errorFlota={flota.error}
-            recargarFlota={flota.recargar}
             almacenes={almacenes.datos}
             errorAlmacenes={almacenes.error}
             recargarAlmacenes={almacenes.recargar}
             pedirDetener={() => setConfirmarDetener(true)}
-            seleccionarVehiculo={(id) => setSeleccion({ tipo: 'vehiculo', id })}
+            seleccionarVehiculo={(id) => alternarSeleccion({ tipo: 'vehiculo', id })}
             pedidos={pedidosMap.datos ?? SIN_PEDIDOS}
             seleccion={seleccion}
-            alSeleccionar={setSeleccion}
+            alSeleccionar={alternarSeleccion}
             pedidoResaltado={pedidoResaltado}
             alResaltarPedido={setPedidoResaltado}
             filtros={filtros}
             vehiculosVisibles={vehiculosVisibles}
-            onToggleTipoVehiculo={toggleTipoVehiculo}
-            onToggleSemaforoVehiculo={(s) => toggleSemaforo('semaforoVehiculos', s)}
-            onToggleSemaforoAlmacen={(s) => toggleSemaforo('semaforoAlmacenes', s)}
+            onToggleTipoVehiculo={(tipo) => { setSeleccion(null); toggleTipoVehiculo(tipo); }}
+            onToggleSemaforoVehiculo={(s) => { setSeleccion(null); toggleSemaforo('semaforoVehiculos', s); }}
+            onToggleSemaforoAlmacen={(s) => { setSeleccion(null); toggleSemaforo('semaforoAlmacenes', s); }}
         />
       </PanelLateral>
 
@@ -237,7 +243,7 @@ export function EscenarioDashboard() {
             pedidos={pedidosMap.datos ?? SIN_PEDIDOS}
             bloqueos={bloqueosActivos}
             seleccion={seleccion}
-            alSeleccionar={setSeleccion}
+            alSeleccionar={alternarSeleccion}
             atenuado={corrida && !datosVigentes}
             animar={snapshot.estado === 'EJECUTANDO' && datosVigentes}
             rutasDestacadas={rutasDestacadas}
@@ -259,7 +265,7 @@ export function EscenarioDashboard() {
               pedidos={pedidosMap.datos ?? SIN_PEDIDOS}
               catalogo={flota.datos}
               almacenes={almacenes.datos ?? SIN_ALMACENES}
-              alSeleccionar={setSeleccion}
+              alSeleccionar={alternarSeleccion}
             />
           )}
         </div>
@@ -272,7 +278,7 @@ export function EscenarioDashboard() {
         colapsado={derColapsado}
         alternar={() => setDerColapsado((v) => !v)}
       >
-        <PanelIndicadores snapshot={snapshot} bloqueosCargados={bloqueos.datos != null}
+        <PanelIndicadores flota={flota.datos} errorFlota={flota.error} recargarFlota={flota.recargar} snapshot={snapshot} bloqueosCargados={bloqueos.datos != null}
           criticidad={criticidad.datos?.idSimulacion === snapshot.idSimulacion ? criticidad.datos : null}
           errorCriticidad={criticidad.error} recargarCriticidad={criticidad.recargar} />
       </PanelLateral>
@@ -391,8 +397,8 @@ function BordePanel({ lado, titulo, ancho, alCambiar }: {
 function Bloque({ titulo, children, aclaracion }: { titulo: string; children: ReactNode; aclaracion?: string }) {
   return (
     <section className="bg-panel2 border border-borde rounded-lg p-3">
-      <h3 className="text-[11px] uppercase tracking-wider text-texto2 font-semibold mb-2">{titulo}</h3>
-      {aclaracion && <p className="text-[11px] text-texto2 -mt-1 mb-2 leading-snug">{aclaracion}</p>}
+      <h3 className="text-sm text-texto font-semibold mb-2">{titulo}</h3>
+      {aclaracion && <p className="text-sm text-texto2 -mt-1 mb-2 leading-relaxed">{aclaracion}</p>}
       {children}
     </section>
   );
@@ -549,9 +555,6 @@ function BannerResultado({ tipo, snapshot }: { tipo: NonNullable<ReturnType<type
 
 function PanelParametros({
                            snapshot,
-                           flota,
-                           errorFlota,
-                           recargarFlota,
                            almacenes,
                            errorAlmacenes,
                            recargarAlmacenes,
@@ -569,9 +572,6 @@ function PanelParametros({
                            onToggleSemaforoAlmacen,
                          }: {
   snapshot: SnapshotSimulacion;
-  flota: VehiculoOperativo[] | null;
-  errorFlota: string | null;
-  recargarFlota: () => void;
   almacenes: AlmacenOperativo[] | null;
   errorAlmacenes: string | null;
   recargarAlmacenes: () => void;
@@ -644,55 +644,10 @@ function PanelParametros({
               }
               mono={!!snapshot.escenario}
           />
-          {snapshot.mensaje && (
-              <p className="mt-2 pt-2 border-t border-borde text-[11px] text-texto2 leading-snug">
-                <span className="text-texto">Detalle:</span> {snapshot.mensaje}
-              </p>
-          )}
+
         </Bloque>
 
-        <Bloque
-            titulo="Composición de la flota"
-            aclaracion={activa ? 'Solo lectura durante la corrida.' : 'Estado actual de la flota.'}
-        >
-          {errorFlota && !flota ? (
-              <ErrorCarga titulo="No se pudo leer la flota" error={errorFlota} reintentar={recargarFlota} />
-          ) : !flota ? (
-              <Cargando />
-          ) : (
-              <table className="w-full text-xs">
-                <thead>
-                <tr className="text-texto2 text-right">
-                  <th className="text-left font-semibold pb-1">Tipo</th>
-                  <th className="font-semibold pb-1">Cant.</th>
-                  <th className="font-semibold pb-1">Paq.</th>
-                  <th className="font-semibold pb-1">km/h</th>
-                  <th className="font-semibold pb-1">S/ km</th>
-                </tr>
-                </thead>
-                <tbody>
-                {ORDEN_TIPOS.map((t) => {
-                  const lista = flota.filter((v) => tipoDesdeCodigo(v.idVehiculo) === t);
-                  const m = lista[0];
-                  return (
-                      <tr key={t} className="text-right">
-                        <td className="text-left py-0.5">
-                      <span className="inline-flex items-center gap-1 text-texto">
-                        <IconoMapaSvg forma={t === 'AUTO' ? 'auto' : t === 'MOTO' ? 'moto' : 'bicicleta'} color={COLOR_TIPO[t]} tamano={18} />
-                        {ETIQUETA_TIPO_PLURAL[t]}
-                      </span>
-                        </td>
-                        <td className="font-mono text-texto">{lista.length}</td>
-                        <td className="font-mono text-texto">{m ? m.capacidadPaquetes : '—'}</td>
-                        <td className="font-mono text-texto">{m ? m.velocidadKmh : '—'}</td>
-                        <td className="font-mono text-texto">{m ? formatoSoles(m.costoPorKm).replace('S/ ', '') : '—'}</td>
-                      </tr>
-                  );
-                })}
-                </tbody>
-              </table>
-          )}
-        </Bloque>
+
 
           {/* BOTONERAS DE FILTRADO D05 Y D06 */}
           {filtros && (
@@ -752,7 +707,7 @@ function PanelParametros({
           )}
 
         {snapshot.vehiculos.length > 0 && (
-            <Bloque titulo="Lista de UT" aclaracion="Busca por tiempo o distancia, filtra las unidades y ordena por ocupación, horas o distancia. Clic en una fila para ubicarla en el mapa.">
+            <Bloque titulo="Vehículos" aclaracion="Selecciona un vehículo para ver su ubicación y detalle.">
               <ListaVehiculos
                   vehiculos={vehiculosVisibles}
                   fechaReloj={fechaReloj}
@@ -803,7 +758,10 @@ function PanelParametros({
 // Panel derecho
 // ---------------------------------------------------------------------------
 
-function PanelIndicadores({ snapshot, bloqueosCargados, criticidad, errorCriticidad, recargarCriticidad }: {
+function PanelIndicadores({ flota, errorFlota, recargarFlota, snapshot, bloqueosCargados, criticidad, errorCriticidad, recargarCriticidad }: {
+  flota: VehiculoOperativo[] | null;
+  errorFlota: string | null;
+  recargarFlota: () => void;
   snapshot: SnapshotSimulacion;
   bloqueosCargados: boolean;
   criticidad: Criticidad | null;
@@ -817,7 +775,6 @@ function PanelIndicadores({ snapshot, bloqueosCargados, criticidad, errorCritici
     restante: (Date.parse(pedido.fechaLlegada) + pedido.horasLimite * 3_600_000 - relojMs) / 60_000 } : null;
   const colapso = enColapso(snapshot);
   const corrida = hayCorrida(snapshot);
-  const dia = diaSimulado(snapshot.fechaHoraInicio, snapshot.relojSimulado);
 
   const porTipo = ORDEN_TIPOS.map((t) => {
     const lista = snapshot.vehiculos.filter((v) => tipoDesdeCodigo(v.idVehiculo) === t);
@@ -832,14 +789,8 @@ function PanelIndicadores({ snapshot, bloqueosCargados, criticidad, errorCritici
 
   return (
     <>
-      <section
-        className={`rounded-lg border p-3 ${colapso ? 'border-rojo bg-rojo/10' : 'border-borde bg-panel2'}`}
-        aria-live="polite"
-      >
-        <h3 className="text-[11px] uppercase tracking-wider text-texto2 font-semibold mb-1">Situación</h3>
-        {!corrida ? (
-          <p className="text-texto2">Sin corrida.</p>
-        ) : colapso ? (
+      {colapso && <section className="rounded-lg border border-rojo bg-rojo/10 p-3" aria-live="polite">
+        <h3 className="text-sm font-semibold text-rojo mb-2">Situación</h3>
           <div className="flex items-start gap-2 text-rojo">
             <IconoColapso tamano={22} />
             <div>
@@ -850,18 +801,7 @@ function PanelIndicadores({ snapshot, bloqueosCargados, criticidad, errorCritici
               </p>
             </div>
           </div>
-        ) : (
-          <div className="flex items-start gap-2 text-mint">
-            <IconoCorrecto tamano={22} />
-            <div>
-              <p className="font-bold text-sm">Sin incumplimientos</p>
-              <p className="text-texto text-xs">
-                Ningún pedido ha vencido su plazo{dia != null ? <> hasta el día <span className="font-mono">{dia}</span>, <span className="font-mono">{formatoHora(snapshot.relojSimulado)}</span></> : null}.
-              </p>
-            </div>
-          </div>
-        )}
-      </section>
+      </section>}
 
       <Bloque titulo="Pedidos del periodo" aclaracion="Resumen actualizado de la corrida.">
         <div className="grid grid-cols-2 gap-2 mb-2">
@@ -871,7 +811,6 @@ function PanelIndicadores({ snapshot, bloqueosCargados, criticidad, errorCritici
         <Fila k="Pendientes" v={formatoEntero(p.pendientes)} />
         <Fila k="Reasignados" v={formatoEntero(p.reasignados)} />
         <Fila k="Ingresados hasta ahora" v={formatoEntero(Math.max(0, p.total - p.futuros))} />
-        <Fila k="Futuros estimados (aún no llegan)" v={formatoEntero(p.futuros)} />
         <div className="border-t border-borde mt-1.5 pt-1.5">
           <Fila k="Total previsto del periodo" v={formatoEntero(p.total)} />
         </div>
@@ -888,7 +827,7 @@ function PanelIndicadores({ snapshot, bloqueosCargados, criticidad, errorCritici
           </> : <p className="text-xs text-texto2">No hay pedidos activos con plazo pendiente.</p>}
       </Bloque>
 
-      <Bloque titulo="Flota" aclaracion="Estados informados en el snapshot.">
+      <Bloque titulo="Estado de la flota">
         <table className="w-full text-xs">
           <thead>
             <tr className="text-texto2 text-right">
@@ -917,12 +856,51 @@ function PanelIndicadores({ snapshot, bloqueosCargados, criticidad, errorCritici
         </div>
       </Bloque>
 
+        <Bloque
+            titulo="Composición de la flota"
+        >
+          {errorFlota && !flota ? (
+              <ErrorCarga titulo="No se pudo leer la flota" error={errorFlota} reintentar={recargarFlota} />
+          ) : !flota ? (
+              <Cargando />
+          ) : (
+              <table className="w-full text-xs">
+                <thead>
+                <tr className="text-texto2 text-right">
+                  <th className="text-left font-semibold pb-1">Tipo</th>
+                  <th className="font-semibold pb-1">Cant.</th>
+                  <th className="font-semibold pb-1">Paq.</th>
+                  <th className="font-semibold pb-1">km/h</th>
+                  <th className="font-semibold pb-1">S/ km</th>
+                </tr>
+                </thead>
+                <tbody>
+                {ORDEN_TIPOS.map((t) => {
+                  const lista = flota.filter((v) => tipoDesdeCodigo(v.idVehiculo) === t);
+                  const m = lista[0];
+                  return (
+                      <tr key={t} className="text-right">
+                        <td className="text-left py-0.5">
+                      <span className="inline-flex items-center gap-1 text-texto">
+                        <IconoMapaSvg forma={t === 'AUTO' ? 'auto' : t === 'MOTO' ? 'moto' : 'bicicleta'} color={COLOR_TIPO[t]} tamano={18} />
+                        {ETIQUETA_TIPO_PLURAL[t]}
+                      </span>
+                        </td>
+                        <td className="font-mono text-texto">{lista.length}</td>
+                        <td className="font-mono text-texto">{m ? m.capacidadPaquetes : '—'}</td>
+                        <td className="font-mono text-texto">{m ? m.velocidadKmh : '—'}</td>
+                        <td className="font-mono text-texto">{m ? formatoSoles(m.costoPorKm).replace('S/ ', '') : '—'}</td>
+                      </tr>
+                  );
+                })}
+                </tbody>
+              </table>
+          )}
+        </Bloque>
+
       <Bloque titulo="Incidencias">
         <Fila k="Bloqueos activos" v={formatoEntero(snapshot.bloqueosActivos)} />
         {!bloqueosCargados && corrida && <p className="text-[11px] text-texto2">Cargando el trazado de los bloqueos…</p>}
-        <Nota className="mt-1.5">
-          Los bloqueos y mantenimientos del calendario se activan en sus fechas programadas. También puedes registrar incidencias manualmente desde las secciones correspondientes.
-        </Nota>
         <div className="flex flex-wrap gap-2 mt-2">
           <button className="text-azul underline text-xs" onClick={() => navegar({ nombre: 'mantenimiento', pestana: 'bloqueos' })}>Gestionar bloqueos</button>
           <button className="text-azul underline text-xs" onClick={() => navegar({ nombre: 'mantenimiento', pestana: 'vehiculos' })}>Averías y mantenimientos</button>

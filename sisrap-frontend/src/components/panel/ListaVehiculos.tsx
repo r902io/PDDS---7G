@@ -1,3 +1,4 @@
+import { useRangosSemaforo, clasificarVehiculo, filtrarPorRangos } from '../../estado/SemaforoVehiculos';
 import { memo, useMemo, useState } from 'react';
 import type { VehiculoSnapshot } from '../../types/api';
 import type { SemaforoFiltro } from '../../types/api';
@@ -9,8 +10,6 @@ import {
   etiquetaEstadoVehiculo,
   ordenarUnidades,
   ocupacionVehiculo,
-  semaforoVehiculo,
-  filtrarUnidades,
   valorBusqueda,
   RANGOS_DISTANCIA_KM,
   FILTROS_LISTA_UT_INICIAL,
@@ -30,7 +29,7 @@ interface Props {
   vehiculos: VehiculoSnapshot[];
   /** Fecha del reloj simulado (AAAA-MM-DD), para mostrar la fecha solo cuando es otra. */
   fechaReloj: string | null;
-  /** Reloj simulado completo, necesario para la búsqueda por minutos (E06/E07). */
+  
   reloj: string | null;
   idSeleccionado: string | null;
   alSeleccionar: (id: string) => void;
@@ -77,29 +76,23 @@ function filtrosValidos(valor: unknown): boolean {
     && (f.referenciaKm === 'DESTINO' || f.referenciaKm === 'ORIGEN');
 }
 
-/**
- * Lista de UT del panel.
- * E06-E09: búsqueda por distancia (minutos o km) al destino o al origen; resalta coincidencias.
- * E10/E11/E12: filtros permanentes (tipo, rango de km, semáforo) que se combinan y operan sobre el resultado.
- * E13-E17: orden por ocupación, hora de salida/llegada y distancias, ascendente o descendente.
- */
+
 export const ListaVehiculos = memo(function ListaVehiculos({ vehiculos, fechaReloj, reloj, idSeleccionado, alSeleccionar }: Props) {
+  const rangos = useRangosSemaforo();
   const [orden, setOrden] = usePreferencia<Orden>('sisrap.lista-unidades.orden', ORDEN_INICIAL, ordenValido);
   const [filtros, setFiltros] = usePreferencia<FiltrosListaUT>('sisrap.lista-unidades.filtros', FILTROS_LISTA_UT_INICIAL, filtrosValidos);
   const [busqueda, setBusqueda] = useState<Busqueda>(BUSQUEDA_INICIAL);
   const [mostrarFiltros, setMostrarFiltros] = useState(false);
 
-  // E10/E11/E12 (filtro permanente) seguido de E13-E17 (orden). La búsqueda no reduce la lista, solo resalta.
   const filas = useMemo(
-    () => ordenarUnidades(filtrarUnidades(vehiculos, filtros), orden.campo, orden.sentido),
-    [vehiculos, filtros, orden.campo, orden.sentido]
+    () => ordenarUnidades(filtrarPorRangos(vehiculos, filtros, rangos), orden.campo, orden.sentido),
+    [vehiculos, filtros, orden.campo, orden.sentido, rangos]
   );
 
   const min = busqueda.min.trim() === '' ? null : Number(busqueda.min);
   const max = busqueda.max.trim() === '' ? null : Number(busqueda.max);
   const busquedaActiva = min != null || max != null;
 
-  // E06-E09: una UT coincide si su valor cae en [min, max] (cualquiera de los dos es opcional).
   const coincide = useMemo(() => {
     const set = new Set<string>();
     if (!busquedaActiva) return set;
@@ -119,18 +112,21 @@ export const ListaVehiculos = memo(function ListaVehiculos({ vehiculos, fechaRel
   };
 
   const alternarTipo = (tipo: TipoVehiculo) => {
+    if (idSeleccionado) alSeleccionar(idSeleccionado);
     setFiltros({
       ...filtros,
       tipos: filtros.tipos.includes(tipo) ? filtros.tipos.filter((t) => t !== tipo) : [...filtros.tipos, tipo],
     });
   };
   const alternarSemaforo = (s: SemaforoFiltro) => {
+    if (idSeleccionado) alSeleccionar(idSeleccionado);
     setFiltros({
       ...filtros,
       semaforos: filtros.semaforos.includes(s) ? filtros.semaforos.filter((x) => x !== s) : [...filtros.semaforos, s],
     });
   };
   const alternarRango = (id: RangoDistanciaId) => {
+    if (idSeleccionado) alSeleccionar(idSeleccionado);
     setFiltros({
       ...filtros,
       rangosKm: filtros.rangosKm.includes(id) ? filtros.rangosKm.filter((x) => x !== id) : [...filtros.rangosKm, id],
@@ -140,10 +136,10 @@ export const ListaVehiculos = memo(function ListaVehiculos({ vehiculos, fechaRel
   const unidadMin = busqueda.criterio === 'MINUTOS' ? 'min' : 'km';
 
   return (
-    <div className="space-y-2">
-      {/* E06-E09: BÚSQUEDA (momentánea, resalta coincidencias) */}
+    <div className="space-y-2" onChangeCapture={() => { if (idSeleccionado) alSeleccionar(idSeleccionado); }}> 
+      
       <div className="bg-panel2/70 border border-borde rounded-md p-2 space-y-1.5">
-        <span className="text-[10px] font-bold text-texto2 block">BUSCAR POR DISTANCIA (E06–E09)</span>
+        <span className="text-[10px] font-bold text-texto2 block">BUSCAR POR DISTANCIA</span>
         <div className="flex flex-wrap gap-1">
           <select
             aria-label="Criterio de búsqueda"
@@ -202,22 +198,22 @@ export const ListaVehiculos = memo(function ListaVehiculos({ vehiculos, fechaRel
         )}
       </div>
 
-      {/* E10/E11/E12: FILTROS PERMANENTES (operan sobre el resultado) */}
+      
       <div className="bg-panel2/70 border border-borde rounded-md">
         <button
           type="button"
-          onClick={() => setMostrarFiltros((v) => !v)}
+          onClick={() => { setMostrarFiltros((v) => !v); if (idSeleccionado) alSeleccionar(idSeleccionado); }}
           aria-expanded={mostrarFiltros}
           className="w-full flex items-center justify-between px-2 py-1.5 text-[10px] font-bold text-texto2"
         >
-          <span>FILTROS PERMANENTES (E10–E12) · {filas.length}/{vehiculos.length} UT</span>
+          <span>FILTROS PERMANENTES · {filas.length}/{vehiculos.length} UT</span>
           <span className="font-normal">{mostrarFiltros ? 'Ocultar ▲' : 'Mostrar ▼'}</span>
         </button>
         {mostrarFiltros && (
           <div className="px-2 pb-2 space-y-2">
-            {/* E10: tipo */}
+            
             <div>
-              <span className="text-[10px] text-texto2 block mb-1">Tipo de UT (E10)</span>
+              <span className="text-[10px] text-texto2 block mb-1">Tipo de UT</span>
               <div className="flex gap-1">
                 {ORDEN_TIPOS.map((tipo) => {
                   const activo = filtros.tipos.includes(tipo);
@@ -238,9 +234,9 @@ export const ListaVehiculos = memo(function ListaVehiculos({ vehiculos, fechaRel
                 })}
               </div>
             </div>
-            {/* E12: semáforo */}
+            
             <div>
-              <span className="text-[10px] text-texto2 block mb-1">Semáforo de capacidad (E12)</span>
+              <span className="text-[10px] text-texto2 block mb-1">Semáforo de capacidad</span>
               <div className="flex gap-1">
                 {SEMAFOROS.map((s) => {
                   const activo = filtros.semaforos.includes(s.id);
@@ -261,10 +257,10 @@ export const ListaVehiculos = memo(function ListaVehiculos({ vehiculos, fechaRel
                 })}
               </div>
             </div>
-            {/* E11: rango de distancia en km */}
+            
             <div>
               <div className="flex items-center justify-between mb-1">
-                <span className="text-[10px] text-texto2">Rango de distancia (E11)</span>
+                <span className="text-[10px] text-texto2">Rango de distancia</span>
                 <select
                   aria-label="Referencia del rango de distancia"
                   className="bg-panel border border-borde rounded px-1 py-0.5 text-[10px] text-texto"
@@ -299,7 +295,7 @@ export const ListaVehiculos = memo(function ListaVehiculos({ vehiculos, fechaRel
         )}
       </div>
 
-      {/* E13-E17: tabla ordenable */}
+      
       <div className="max-h-72 overflow-y-auto border border-borde rounded-md">
         <table className="w-full table-fixed text-[11px] border-collapse">
           <thead>
@@ -385,7 +381,7 @@ const SinDato = () => <span className="text-[10px] text-texto2 italic">Sin dato<
 
 function CeldaOcupacion({ v }: { v: VehiculoSnapshot }) {
   const pct = ocupacionVehiculo(v);
-  const sem = semaforoVehiculo(v);
+  const sem = clasificarVehiculo(v, useRangosSemaforo());
   const color = SEMAFOROS.find((s) => s.id === sem)?.color ?? '#9ca3af';
   return (
     <td className="px-0.5 py-1 text-right align-top whitespace-nowrap">

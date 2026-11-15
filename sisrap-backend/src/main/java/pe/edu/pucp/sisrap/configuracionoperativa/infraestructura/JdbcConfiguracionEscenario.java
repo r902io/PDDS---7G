@@ -21,7 +21,24 @@ import pe.edu.pucp.sisrap.pedido.infraestructura.EsquemaHistoricosEscenario;
 @Repository
 public class JdbcConfiguracionEscenario {
     public record Plantilla(EscenarioSimulacion escenario, int anchoKm, int altoKm,
-                            List<AlmacenConfigurado> almacenes, List<TipoFlotaConfigurado> flota) { }
+                            List<AlmacenConfigurado> almacenes, List<TipoFlotaConfigurado> flota,
+                            SemaforoVehiculos semaforoVehiculos) {
+        public Plantilla {
+            if (semaforoVehiculos == null) semaforoVehiculos = new SemaforoVehiculos(50, 80);
+        }
+        public Plantilla(EscenarioSimulacion escenario, int anchoKm, int altoKm,
+                         List<AlmacenConfigurado> almacenes, List<TipoFlotaConfigurado> flota) {
+            this(escenario, anchoKm, altoKm, almacenes, flota, new SemaforoVehiculos(50, 80));
+        }
+    }
+
+    public record SemaforoVehiculos(int amarilloDesdePct, int rojoDesdePct) {
+        public void validar() {
+            if (amarilloDesdePct < 1 || amarilloDesdePct >= rojoDesdePct || rojoDesdePct > 100)
+                throw new IllegalArgumentException(
+                    "Semáforo de vehículos: se requiere 1 ≤ amarillo < rojo ≤ 100. Vacío corresponde a 0 paquetes.");
+        }
+    }
 
     private final DataSource fuente;
     private final JsonMapper json;
@@ -135,6 +152,7 @@ public class JdbcConfiguracionEscenario {
     }
 
     private static void validar(Connection cn, Plantilla p) throws SQLException {
+        p.semaforoVehiculos().validar();
         if (p.anchoKm() < 1 || p.altoKm() < 1 || p.anchoKm() > 150 || p.altoKm() > 150)
             throw new IllegalArgumentException("El ancho y alto deben ser enteros entre 1 y 150 km");
         if (p.almacenes() == null || p.flota() == null || p.almacenes().size() != 3 || p.flota().size() != 3)
