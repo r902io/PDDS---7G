@@ -25,6 +25,7 @@ public final class ModeloDemandaColapso {
     private final double factorObjetivo;
     private final double limiteAumentoDiario;
     private final boolean objetivoAlcanzable;
+    private final int minimoPedidosDia;
 
     public ModeloDemandaColapso(Map<LocalDate, Integer> cantidades,
             Map<LocalDate, Long> paquetes, LocalDate inicio, long semilla,
@@ -47,13 +48,29 @@ public final class ModeloDemandaColapso {
         this.semilla = semilla;
         this.tasaRespaldo = tasaRespaldo;
         this.probabilidadRespaldo = probabilidadRespaldo;
+        List<Integer> diasActivos = this.cantidades.values().stream()
+                .filter(cantidad -> cantidad > 0)
+                .sorted()
+                .toList();
+        if (diasActivos.isEmpty()) {
+            throw new IllegalArgumentException("El histórico de colapso no contiene días con pedidos");
+        }
+        // Excluye semanas vacías o anormalmente escasas, sin eliminar días de
+        // demanda moderada. El umbral corresponde al cuartil inferior de días activos.
+        minimoPedidosDia = Math.max(1,
+                diasActivos.get((int) Math.floor((diasActivos.size() - 1) * 0.25)));
+
         List<LocalDate> bloques = new ArrayList<>();
         List<Double> cambios = new ArrayList<>();
         for (LocalDate fecha : fechas) {
             if (fecha.getDayOfWeek() == inicio.getDayOfWeek()) {
                 boolean completo = true;
                 for (int d = 0; d < 7; d++) {
-                    if (!this.cantidades.containsKey(fecha.plusDays(d))) completo = false;
+                    Integer cantidadDia = this.cantidades.get(fecha.plusDays(d));
+                    if (cantidadDia == null || cantidadDia < minimoPedidosDia) {
+                        completo = false;
+                        break;
+                    }
                 }
                 if (completo) bloques.add(fecha);
             }
@@ -126,9 +143,14 @@ public final class ModeloDemandaColapso {
         } else {
             // Sin bloques completos, solo se usan fechas realmente cargadas;
             // los periodos ausentes no se inventan como días con cero ventas.
-            var compatibles = fechas.stream().filter(f -> f.getDayOfWeek()
-                    == inicio.plusDays(indice).getDayOfWeek()).toList();
-            var candidatas = compatibles.isEmpty() ? fechas : compatibles;
+            var compatibles = fechas.stream()
+                    .filter(f -> f.getDayOfWeek() == inicio.plusDays(indice).getDayOfWeek())
+                    .filter(f -> cantidades.get(f) >= minimoPedidosDia)
+                    .toList();
+            var activas = fechas.stream()
+                    .filter(f -> cantidades.get(f) >= minimoPedidosDia)
+                    .toList();
+            var candidatas = compatibles.isEmpty() ? activas : compatibles;
             Random seleccion = new Random(mezclar(semilla ^ 0xB10C7L, indice));
             historica = candidatas.get(seleccion.nextInt(candidatas.size()));
         }

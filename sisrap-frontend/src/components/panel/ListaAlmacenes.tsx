@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { AlmacenOperativo, PedidoOperativo } from '../../types/api';
 import { obtenerColorSemaforoAlmacen, obtenerColorHexAlmacen } from '../../utilitarios/almacenes';
-import type { Seleccion } from '../../hooks/useMapCanvas';
+import type { Seleccion } from '../../hooks/useMapaOperacion';
 
 export type SemaforoFiltro = 'VERDE' | 'AMARILLO' | 'ROJO' | 'VACIO';
 
@@ -187,22 +187,20 @@ export function ListaAlmacenes({
                             }`}
                             onClick={() => alSeleccionar({ tipo: 'almacen', id: almacen.idAlmacen })}
                         >
-                            {/* Encabezado e indicador del Semáforo */}
-                            <div className="flex items-center justify-between">
+                            {/* El semáforo se representa únicamente en el valor del stock. */}
+                            <div className="flex items-center">
                                 <div>
                                     <div className="font-semibold text-sm text-white">{almacen.nombre}</div>
                                     <div className="text-xs text-slate-400">
-                                        Stock: <span className="text-slate-200 font-medium">{almacen.stockActual ?? 'Ilimitado'}</span>
+                                        Stock: <span
+                                            className="font-semibold"
+                                            style={almacen.stockActual == null ? undefined : { color: colorHex }}
+                                        >
+                                            {almacen.stockActual ?? 'Ilimitado'}
+                                        </span>
                                         {almacen.capacidadMaxima ? ` / ${almacen.capacidadMaxima}` : ''}
                                     </div>
                                 </div>
-
-                                <span
-                                    className="px-2.5 py-0.5 text-[10px] font-bold rounded-full text-slate-950 uppercase"
-                                    style={{ backgroundColor: colorHex }}
-                                >
-                  {almacen.tipo === 'CENTRAL' ? 'CENTRAL' : semaforo}
-                </span>
                             </div>
 
                             {/* Botones de acceso rápido a las métricas */}

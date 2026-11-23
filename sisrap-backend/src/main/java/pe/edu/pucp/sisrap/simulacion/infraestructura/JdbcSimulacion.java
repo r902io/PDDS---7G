@@ -21,6 +21,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
+import java.util.NavigableMap;
+import java.util.NavigableSet;
+import java.util.TreeMap;
+import java.util.TreeSet;
 
 import javax.sql.DataSource;
 
@@ -82,6 +86,10 @@ public class JdbcSimulacion implements RepositorioSimulacion {
 
     /** Pedidos de la ejecución activa. Nunca se persisten en la tabla histórica. */
     private final Map<Long, PedidoSimulado> pedidosSimulados = new LinkedHashMap<>();
+    /** Índice temporal: evita recorrer todos los pedidos en cada avance del reloj. */
+    private final NavigableMap<LocalDateTime, Set<Long>> pedidosPorLlegada = new TreeMap<>();
+    /** Índice temporal de vencimientos; las fechas vencidas se descartan con higher(). */
+    private final NavigableSet<LocalDateTime> vencimientosPedidos = new TreeSet<>();
     private final Map<Long, FraccionPedido> fracciones = new LinkedHashMap<>();
     private long siguienteFraccion = -1L;
     private List<PlantillaHistorica> plantillasHistoricas = List.of();
@@ -534,8 +542,10 @@ public class JdbcSimulacion implements RepositorioSimulacion {
                 try (ResultSet rs = ps.getGeneratedKeys()) {
                     if (!rs.next()) throw new SQLException("No se generó el identificador del pedido");
                     long id = rs.getLong(1);
-                    pedidosSimulados.put(id, new PedidoSimulado(id, cliente.trim(), cantidad,
-                            prioridad, plazo, fecha, x, y));
+                    PedidoSimulado pedido = new PedidoSimulado(id, cliente.trim(), cantidad,
+                            prioridad, plazo, fecha, x, y);
+                    pedidosSimulados.put(id, pedido);
+                    indexarPedido(pedido);
                     return new PedidoOperativo(id, cliente.trim(), cantidad, prioridad, plazo,
                             fecha, null, EstadoPedido.PENDIENTE, x, y);
                 }
@@ -573,16 +583,38 @@ public class JdbcSimulacion implements RepositorioSimulacion {
         }
     }
 
+    private void indexarPedido(PedidoSimulado pedido) {
+        pedidosPorLlegada.computeIfAbsent(pedido.fechaLlegada, k -> new java.util.LinkedHashSet<>())
+                .add(pedido.id);
+        vencimientosPedidos.add(pedido.fechaLimite());
+    }
+
+    private void cambiarIdIndexado(long anterior, PedidoSimulado pedido) {
+        Set<Long> ids = pedidosPorLlegada.get(pedido.fechaLlegada);
+        if (ids != null) {
+            ids.remove(anterior);
+            if (ids.isEmpty()) pedidosPorLlegada.remove(pedido.fechaLlegada);
+        }
+        pedidosPorLlegada.computeIfAbsent(pedido.fechaLlegada, k -> new java.util.LinkedHashSet<>())
+                .add(pedido.id);
+    }
+
     /** Registra únicamente pedidos cuyo instante de llegada ya ocurrió. */
     @Override
     public synchronized void publicarPedidosHasta(LocalDateTime reloj) {
         resumenCache = null;
         asegurarDemandaGeneradaHasta(reloj.toLocalDate());
-        List<PedidoSimulado> nuevos = pedidosSimulados.values().stream()
-                .filter(p -> p.id < 0 && !p.fechaLlegada.isAfter(reloj))
-                .sorted(Comparator.comparing((PedidoSimulado p) -> p.fechaLlegada)
-                        .thenComparingLong(p -> p.id))
-                .toList();
+        List<PedidoSimulado> nuevos = new ArrayList<>();
+        for (Set<Long> ids : pedidosPorLlegada.headMap(reloj, true).values()) {
+            for (Long id : ids) {
+                if (id < 0) {
+                    PedidoSimulado pedido = pedidosSimulados.get(id);
+                    if (pedido != null) nuevos.add(pedido);
+                }
+            }
+        }
+        nuevos.sort(Comparator.comparing((PedidoSimulado p) -> p.fechaLlegada)
+                .thenComparingLong(p -> p.id));
         if (nuevos.isEmpty()) return;
         try (Connection cn = fuente.getConnection()) {
             cn.setAutoCommit(false);
@@ -612,9 +644,11 @@ public class JdbcSimulacion implements RepositorioSimulacion {
                 cn.commit();
                 for (int i = 0; i < nuevos.size(); i++) {
                     PedidoSimulado pedido = nuevos.get(i);
-                    pedidosSimulados.remove(pedido.id);
+                    long idAnterior = pedido.id;
+                    pedidosSimulados.remove(idAnterior);
                     pedido.id = claves.get(i);
                     pedidosSimulados.put(pedido.id, pedido);
+                    cambiarIdIndexado(idAnterior, pedido);
                 }
             } catch (SQLException | RuntimeException e) {
                 cn.rollback();
@@ -1090,8 +1124,10 @@ public class JdbcSimulacion implements RepositorioSimulacion {
                 List<Vehiculo> vehiculos = leerVehiculos(cn, ancho, alto);
                 int capacidadMaxima = vehiculos.stream().mapToInt(Vehiculo::getCapacidadPaquetes)
                         .max().orElseThrow(() -> new IllegalArgumentException("No hay flota configurada"));
+                // Fraccionar solo cuando ningún vehículo disponible puede llevar el pedido completo.
+                // Se usa la mayor capacidad disponible, no la menor.
                 int capacidadDisponible = vehiculos.stream().filter(Vehiculo::isDisponible)
-                        .mapToInt(Vehiculo::getCapacidadPaquetes).min().orElse(0);
+                        .mapToInt(Vehiculo::getCapacidadPaquetes).max().orElse(0);
                 List<Pedido> pedidos = leerPedidosSimuladosPlanificables(
                         reloj, finVentana, ancho, alto, capacidadMaxima, capacidadDisponible);
                 Set<String> bloqueados = leerNodosBloqueados(cn, reloj);
@@ -1192,12 +1228,14 @@ public class JdbcSimulacion implements RepositorioSimulacion {
     public synchronized LocalDateTime proximoEvento(LocalDateTime desde,LocalDateTime hasta) {
         asegurarDemandaGeneradaHasta(hasta.toLocalDate());
         LocalDateTime siguiente=hasta;
-        for(PedidoSimulado p:pedidosSimulados.values()) {
-            if(p.fechaLlegada.isAfter(desde) && p.fechaLlegada.isBefore(siguiente)) siguiente=p.fechaLlegada;
-            if(p.id>0 && p.fechaArribo==null) {
-                LocalDateTime vence=p.fechaLimite().plusNanos(1);
-                if(vence.isAfter(desde) && vence.isBefore(siguiente)) siguiente=vence;
-            }
+        LocalDateTime llegadaSiguiente = pedidosPorLlegada.higherKey(desde);
+        if (llegadaSiguiente != null && llegadaSiguiente.isBefore(siguiente)) {
+            siguiente = llegadaSiguiente;
+        }
+        LocalDateTime vencimientoSiguiente = vencimientosPedidos.higher(desde);
+        if (vencimientoSiguiente != null) {
+            LocalDateTime instanteIncumplimiento = vencimientoSiguiente.plusNanos(1);
+            if (instanteIncumplimiento.isBefore(siguiente)) siguiente = instanteIncumplimiento;
         }
         for (var averia : cargarAveriasActivas(desde).values()) {
             LocalDateTime retorno=averia.horaRetornoEstimada();
@@ -2258,6 +2296,8 @@ public class JdbcSimulacion implements RepositorioSimulacion {
         );
 
         pedidosSimulados.clear();
+        pedidosPorLlegada.clear();
+        vencimientosPedidos.clear();
         fracciones.clear();
         siguienteFraccion = -1L;
         turnoAsignado = null;
@@ -2336,6 +2376,8 @@ public class JdbcSimulacion implements RepositorioSimulacion {
 
     private synchronized void limpiarDemandaSimulada() {
         pedidosSimulados.clear();
+        pedidosPorLlegada.clear();
+        vencimientosPedidos.clear();
         fracciones.clear();
         siguienteFraccion = -1L;
         plantillasHistoricas = List.of();
@@ -2463,6 +2505,7 @@ public class JdbcSimulacion implements RepositorioSimulacion {
                     muestra.prioridad(), muestra.horasLimite(),
                     llegada, muestra.x(), muestra.y());
             pedidosSimulados.put(idTemporal, nuevo);
+            indexarPedido(nuevo);
         }
     }
 

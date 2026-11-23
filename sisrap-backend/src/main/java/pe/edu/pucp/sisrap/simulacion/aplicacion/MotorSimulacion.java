@@ -134,6 +134,8 @@ public class MotorSimulacion {
     private Map<String, Integer> ordenAnticipado = Map.of();
     private Map<String, String> vehiculoAnticipado = Map.of();
     private String firmaUltimaPlanificacion;
+    private Map<String, VehiculoPersistido> estadosVehiculosCache = Map.of();
+    private LocalDateTime turnoUltimaSincronizacion;
 
     /**
      * Relación interna entre tiempo simulado y tiempo real.
@@ -241,6 +243,8 @@ public class MotorSimulacion {
         registrosRecorrido.clear();
         ultimosPuntos.clear();
         repositorio.publicarPedidosHasta(reloj);
+        estadosVehiculosCache = repositorio.sincronizarYCargarDisponibilidad(reloj);
+        turnoUltimaSincronizacion = JornadaOperativa.inicioTurno(reloj);
         intentarPlanificar();
         proximaPlanificacionVirtual = reloj.plusMinutes(INTERVALO_PLANIFICACION_MIN);
         nanoUltimoTick = System.nanoTime();
@@ -390,8 +394,8 @@ public class MotorSimulacion {
         deudaVirtualNanos=Math.min(disponibles,Math.addExact(deudaVirtualNanos,
                 Math.max(1,Math.round(delta*factorTemporalInterno))));
         if (debeIntentarPlanificar(ahora)) {
-            var estados = repositorio.sincronizarYCargarDisponibilidad(reloj);
-            cancelarPlanesInterrumpidos(estados); actualizarCargasAveriadas(estados);
+            cancelarPlanesInterrumpidos(estadosVehiculosCache);
+            actualizarCargasAveriadas(estadosVehiculosCache);
             intentarPlanificar(); nanoUltimaPlanificacion=ahora;
             LocalDateTime revision=reloj.plusMinutes(INTERVALO_PLANIFICACION_MIN);
             if(proximaPlanificacionVirtual==null || !proximaPlanificacionVirtual.isAfter(reloj)
@@ -399,11 +403,12 @@ public class MotorSimulacion {
         }
         int pasos=0;
         long inicioAvances = System.nanoTime();
-        // Ceder entre eventos; la deuda pendiente se conserva íntegra para el próximo tick.
-        while(deudaVirtualNanos>0 && estado==EstadoSimulacion.EJECUTANDO && pasos<64
-                && (pasos == 0 || System.nanoTime() - inicioAvances < 50_000_000L)) {
+        // Se procesa la deuda disponible hasta el presupuesto del tick.
+        // Los eventos operativos y de pedidos determinan el tamaño del avance.
+        while(deudaVirtualNanos>0 && estado==EstadoSimulacion.EJECUTANDO && pasos<4096
+                && (pasos == 0 || System.nanoTime() - inicioAvances < 200_000_000L)) {
             pasos++;
-            LocalDateTime hasta=reloj.plusNanos(Math.min(deudaVirtualNanos,60L*NANO_SEGUNDO));
+            LocalDateTime hasta=reloj.plusNanos(deudaVirtualNanos);
             LocalDateTime evento=repositorio.proximoEvento(reloj,hasta);
             if(evento.isBefore(hasta)) hasta=evento;
             LocalDateTime turno=JornadaOperativa.inicioTurno(reloj);
@@ -440,22 +445,25 @@ public class MotorSimulacion {
         indicadores.registrarOcupacion(new LinkedHashSet<>(planes.keySet()),deltaHoras);
         actualizarPlanes(deltaHoras);
         actualizarEntregasEnCliente(deltaHoras);
-        persistirPosiciones();
-
         repositorio.recargarAlmacenesSiCorresponde(
                 relojAnterior,
                 reloj
         );
 
         repositorio.publicarPedidosHasta(reloj);
-        if (repositorio.activarIncidenciasProgramadas(reloj)) {
+        boolean incidenciasActivadas = repositorio.activarIncidenciasProgramadas(reloj);
+        if (incidenciasActivadas) {
             calendarioBloqueos=repositorio.cargarCalendarioBloqueos(reloj,reloj.plusHours(48));
             programarPlanificacionInmediata();
         }
-        Map<String, VehiculoPersistido> estadosVehiculos =
-                repositorio.sincronizarYCargarDisponibilidad(reloj);
-        cancelarPlanesInterrumpidos(estadosVehiculos);
-        actualizarCargasAveriadas(estadosVehiculos);
+        LocalDateTime turnoActual = JornadaOperativa.inicioTurno(reloj);
+        if (incidenciasActivadas || !turnoActual.equals(turnoUltimaSincronizacion)) {
+            estadosVehiculosCache = repositorio.sincronizarYCargarDisponibilidad(reloj);
+            turnoUltimaSincronizacion = turnoActual;
+            cancelarPlanesInterrumpidos(estadosVehiculosCache);
+            actualizarCargasAveriadas(estadosVehiculosCache);
+        }
+        Map<String, VehiculoPersistido> estadosVehiculos = estadosVehiculosCache;
 
         actualizarBloqueosActivos();
 
@@ -492,12 +500,6 @@ public class MotorSimulacion {
             return;
         }
 
-        var resumenPublicados=repositorio.resumirPedidos(configuracion.fechaHoraInicio(),
-                configuracion.fechaHoraFin(),reloj);
-        int publicados=resumenPublicados.total()-resumenPublicados.futuros();
-        if(publicados!=publicadosUltimoCiclo) {
-            publicadosUltimoCiclo=publicados; programarPlanificacionInmediata();
-        }
         if (debeIntentarPlanificar(ahoraNano)) {
             intentarPlanificar();
             nanoUltimaPlanificacion = ahoraNano;
@@ -514,6 +516,7 @@ public class MotorSimulacion {
         }
 
         if (ahoraNano - nanoUltimaPersistencia >= NANO_SEGUNDO) {
+            persistirPosiciones();
             repositorio.actualizarEjecucion(
                 idSimulacion,
                 estado,
@@ -610,7 +613,7 @@ public class MotorSimulacion {
         int poblacion = Math.max(3, Math.min(base.entero("ga.poblacion"), poblacionMaxima));
         int elitismo = Math.max(1, Math.min(base.entero("ga.elitismo"), poblacion - 1));
         int torneo = Math.max(2, Math.min(base.entero("ga.torneo"), poblacion));
-        valores.putIfAbsent("planificador.maxTiempoMs", "200");
+        valores.put("planificador.maxTiempoMs", "200");
         valores.put("ga.poblacion", Integer.toString(poblacion));
         valores.put("ga.generaciones", Integer.toString(
                 Math.max(1, Math.min(base.entero("ga.generaciones"), generacionesMaximas))));
@@ -658,10 +661,6 @@ public class MotorSimulacion {
                     .append(almacen.getStockActual()).append(';');
         }
         firma.append('|').append(contexto.nodosBloqueados().hashCode());
-        // No congelar un rechazo durante toda una hora: la criticidad cambia
-        // aunque no lleguen pedidos, los vehículos no se muevan y no cambie el stock.
-        firma.append('|').append(reloj.getHour()).append(':')
-                .append(reloj.getMinute());
         return firma.toString();
     }
 
@@ -946,7 +945,7 @@ public class MotorSimulacion {
                 operativo.configuracion(),
                 contexto);
         AlgoritmoGenetico planificador = new AlgoritmoGenetico(parametros, objetivo,
-                Long.parseLong(operativo.configuracion().valores().getOrDefault("planificador.maxTiempoMs", "1000")));
+                200L);
 
         Solucion solucion = ordenAnticipado.isEmpty()
                 ? planificador.planificar(contexto)
@@ -1354,7 +1353,9 @@ public class MotorSimulacion {
         if (cargasAveriadas.isEmpty()) return 0;
         List<Vehiculo> disponibles = contexto.getVehiculos().stream()
                 .filter(v -> v.isDisponible() && !planes.containsKey(v.getIdVehiculo())).toList();
-        int capacidad = disponibles.stream().mapToInt(Vehiculo::getCapacidadPaquetes).min().orElse(0);
+        // En rescates, dividir según la mayor capacidad libre evita enviar varias unidades
+        // cuando una sola puede transportar todos los paquetes pendientes.
+        int capacidad = disponibles.stream().mapToInt(Vehiculo::getCapacidadPaquetes).max().orElse(0);
         if (capacidad == 0) return 0;
         int creados = 0;
         for (CargaAveriada carga : cargasAveriadas.values()) {

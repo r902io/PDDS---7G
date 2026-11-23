@@ -45,7 +45,7 @@ export function MapaCiudad(props: Props) {
 }
 
 function MapaCiudadCanvas(props: Props) {
-    const { canvasRef, vehiculosCanvasRef, hover, cursorKm, zoom, encuadrar, acercar, alejar, manejadores } = useMapCanvas({ ...props, rutasDestacadas: props.rutasDestacadas ?? SIN_RUTAS });
+    const { canvasRef, rutasCanvasRef, vehiculosCanvasRef, almacenesCanvasRef, hover, cursorKm, zoom, encuadrar, acercar, alejar, manejadores } = useMapCanvas({ ...props, rutasDestacadas: props.rutasDestacadas ?? SIN_RUTAS });
     const [leyendaAbierta, setLeyendaAbierta] = useState(preferenciaLeyendaAbierta);
 
 
@@ -53,13 +53,15 @@ function MapaCiudadCanvas(props: Props) {
         <div className="relative w-full h-full overflow-hidden bg-bg">
             <canvas
                 ref={canvasRef}
-                className="block touch-none cursor-crosshair"
+                className="absolute inset-0 z-0 block touch-none cursor-crosshair"
                 role="img"
                 aria-label={`Mapa de la ciudad de ${props.dimensiones.anchoKm} por ${props.dimensiones.altoKm} km con ${props.vehiculos.length} unidades`}
                 {...manejadores}
             />
 
-            <canvas ref={vehiculosCanvasRef} className="absolute left-0 top-0 pointer-events-none" aria-hidden="true" />
+            <canvas ref={rutasCanvasRef} className="absolute inset-0 z-[1] pointer-events-none" aria-hidden="true" />
+            <canvas ref={vehiculosCanvasRef} className="absolute inset-0 z-[2] pointer-events-none" aria-hidden="true" />
+            <canvas ref={almacenesCanvasRef} className="absolute inset-0 z-[3] pointer-events-none" aria-hidden="true" />
 
 
             {/* Leyenda */}

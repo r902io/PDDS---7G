@@ -1,7 +1,7 @@
 import { useRangosSemaforo, clasificarCarga, COLOR_SEMAFORO } from '../../estado/SemaforoVehiculos';
 import type { ReactNode } from 'react';
 import type { AlmacenOperativo, PedidoOperativo, VehiculoOperativo, VehiculoSnapshot } from '../../types/api';
-import type { Seleccion } from '../../hooks/useMapCanvas';
+import type { Seleccion } from '../../hooks/useMapaOperacion';
 import { IconoCerrar, IconoMapaSvg } from '../iconos';
 import {
   formatoCoordenada,
@@ -96,7 +96,12 @@ export function PanelDetalle({ seleccion, vehiculos, pedidos, catalogo, almacene
             <DetalleNodo
                 x={seleccion.x}
                 y={seleccion.y}
-                vehiculos={vehiculos.filter((v) => v.x === seleccion.x && v.y === seleccion.y)}
+                // Usar los IDs capturados al hacer clic en el grupo visual.
+                // Sus posiciones pueden ser decimales por la interpolación y
+                // no coincidir exactamente con las coordenadas del snapshot.
+                vehiculos={seleccion.ids != null
+                    ? vehiculos.filter((v) => seleccion.ids!.includes(v.idVehiculo))
+                    : vehiculos.filter((v) => v.x === seleccion.x && v.y === seleccion.y)}
                 almacen={almacenes.find((a) => a.ubicacionX === seleccion.x && a.ubicacionY === seleccion.y) ?? null}
                 alSeleccionar={alSeleccionar}
                 cerrar={cerrar}

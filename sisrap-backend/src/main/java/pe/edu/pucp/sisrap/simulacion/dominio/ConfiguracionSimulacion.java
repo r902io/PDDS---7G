@@ -25,6 +25,12 @@ public record ConfiguracionSimulacion(
             throw new IllegalArgumentException("La fecha de inicio es obligatoria");
         }
         horaInicio = horaInicio == null ? LocalTime.MIDNIGHT : horaInicio;
+        // Estos escenarios comparan jornadas completas: iniciar a otra hora
+        // recortaría el primer día y parte del último, alterando la demanda diaria.
+        if (escenario == EscenarioSimulacion.SIMULACION_CINCO_DIAS
+                || escenario == EscenarioSimulacion.COLAPSO_LOGISTICO) {
+            horaInicio = LocalTime.MIDNIGHT;
+        }
     }
 
     public LocalDateTime fechaHoraInicio() {

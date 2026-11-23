@@ -8,7 +8,7 @@ import { apiFetch } from '../services/apiClient';
 import { useConsulta } from '../hooks/useConsulta';
 import { usePreferencia } from '../hooks/usePreferencia';
 import { useRutasEnvio } from '../hooks/useRutasEnvio';
-import type { Seleccion } from '../hooks/useMapCanvas';
+import type { Seleccion } from '../hooks/useMapaOperacion';
 import { MapaCiudad } from '../components/mapa/MapaCiudad';
 import { PanelDetalle } from '../components/mapa/PanelDetalle';
 import { Boton } from '../components/ui/Boton';
@@ -137,6 +137,24 @@ function OperacionConSemaforo() {
     `mapa-pedidos-${snapshot?.idSimulacion}-${snapshot?.estado}`,
     activa ? 8_000 : null
   );
+  // El listado de pedidos se consulta periódicamente, pero la entrega se
+  // confirma antes en el snapshot SSE. Al aumentar el contador, refrescar
+  // inmediatamente para que el marcador del pedido no quede rezagado.
+  const ultimoConteoEntregados = useRef<{ idSimulacion: number | null; total: number } | null>(null);
+  useEffect(() => {
+    const idSimulacion = snapshot?.idSimulacion ?? null;
+    const total = snapshot?.pedidos?.entregados;
+    if (total == null) {
+      ultimoConteoEntregados.current = null;
+      return;
+    }
+
+    const anterior = ultimoConteoEntregados.current;
+    if (anterior && anterior.idSimulacion === idSimulacion && total > anterior.total) {
+      pedidosMap.recargar();
+    }
+    ultimoConteoEntregados.current = { idSimulacion, total };
+  }, [snapshot?.idSimulacion, snapshot?.pedidos?.entregados, pedidosMap.recargar]);
   const criticidad = useConsulta(s => corrida
     ? apiFetch<Criticidad>('/api/pedidos/criticidad', { autenticar: false, senal: s })
     : Promise.resolve({ idSimulacion: null, relojSimulado: null, pedido: null }),
@@ -245,7 +263,7 @@ function OperacionConSemaforo() {
             seleccion={seleccion}
             alSeleccionar={alternarSeleccion}
             atenuado={corrida && !datosVigentes}
-            animar={snapshot.estado === 'EJECUTANDO' && datosVigentes}
+            animar={snapshot.estado === 'EJECUTANDO'}
             rutasDestacadas={rutasDestacadas}
           />
           {pedidoResaltado != null && (
